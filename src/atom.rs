@@ -1,6 +1,7 @@
 pub mod chpl;
 pub mod dref;
 pub mod elst;
+pub mod free;
 pub mod ftyp;
 pub mod gmhd;
 pub mod hdlr;
@@ -18,13 +19,22 @@ pub mod tref;
 mod util;
 
 pub use self::{
-    chpl::ChapterListAtom, dref::DataReferenceAtom, elst::EditListAtom, ftyp::FileTypeAtom,
-    gmhd::GenericMediaHeaderAtom, hdlr::HandlerReferenceAtom, mdhd::MediaHeaderAtom,
-    meta::MetadataAtom, mvhd::MovieHeaderAtom, smhd::SoundMediaHeaderAtom,
+    chpl::ChapterListAtom, dref::DataReferenceAtom, elst::EditListAtom, free::FreeAtom,
+    ftyp::FileTypeAtom, gmhd::GenericMediaHeaderAtom, hdlr::HandlerReferenceAtom,
+    mdhd::MediaHeaderAtom, meta::MetadataAtom, mvhd::MovieHeaderAtom, smhd::SoundMediaHeaderAtom,
     stco_co64::ChunkOffsetAtom, stsc::SampleToChunkAtom, stsd::SampleDescriptionTableAtom,
     stsz::SampleSizeAtom, stts::TimeToSampleAtom, tkhd::TrackHeaderAtom, tref::TrackReferenceAtom,
     util::FourCC,
 };
+
+#[derive(Clone)]
+pub struct RawData(pub Vec<u8>);
+
+impl std::fmt::Debug for RawData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[u8; {}]", self.0.len())
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Atom {
@@ -55,6 +65,8 @@ pub enum AtomData {
     TimeToSample(TimeToSampleAtom),
     SampleToChunk(SampleToChunkAtom),
     ChapterList(ChapterListAtom),
+    Free(FreeAtom),
+    RawData(RawData),
 }
 
 // Implement From traits for all atom types
@@ -157,5 +169,17 @@ impl From<SampleToChunkAtom> for AtomData {
 impl From<ChapterListAtom> for AtomData {
     fn from(atom: ChapterListAtom) -> Self {
         AtomData::ChapterList(atom)
+    }
+}
+
+impl From<FreeAtom> for AtomData {
+    fn from(atom: FreeAtom) -> Self {
+        AtomData::Free(atom)
+    }
+}
+
+impl From<RawData> for AtomData {
+    fn from(data: RawData) -> Self {
+        AtomData::RawData(data)
     }
 }

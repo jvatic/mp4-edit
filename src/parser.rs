@@ -7,6 +7,7 @@ use crate::{
         chpl::{ChapterListAtom, CHPL},
         dref::{DataReferenceAtom, DREF},
         elst::{EditListAtom, ELST},
+        free::{FreeAtom, FREE, SKIP},
         ftyp::{FileTypeAtom, FTYP},
         gmhd::{GenericMediaHeaderAtom, GMHD},
         hdlr::{HandlerReferenceAtom, HDLR},
@@ -21,9 +22,9 @@ use crate::{
         stts::{TimeToSampleAtom, STTS},
         tkhd::{TrackHeaderAtom, TKHD},
         tref::{TrackReferenceAtom, TREF},
-        FourCC,
+        FourCC, RawData,
     },
-    Atom,
+    Atom, AtomData,
 };
 
 #[derive(Debug, Error)]
@@ -345,6 +346,15 @@ impl Parser {
                             })?
                             .into(),
                     ),
+                    FREE | SKIP => Some(
+                        FreeAtom::try_from(complete_atom_data.as_slice())
+                            .map_err(|e| ParseError {
+                                kind: ParseErrorKind::AtomParsing,
+                                location: Some((atom_offset as usize, complete_atom_data.len())),
+                                source: Some(e.context(atom_type_fourcc).into()),
+                            })?
+                            .into(),
+                    ),
                     _ => None,
                 }
             };
@@ -357,13 +367,31 @@ impl Parser {
                 data: atom_data,
             };
 
-            // Parse children for container atoms
-            if is_container_atom(&atom_type) {
+            if &atom_type == META {
+                // MetadataAtom is a special type of container atom
+                if let Some(AtomData::Metadata(MetadataAtom { child_data, .. })) = &atom.data {
+                    let mut cursor = std::io::Cursor::new(child_data);
+                    let saved_offset = self.current_offset;
+                    self.current_offset = self.current_offset - child_data.len();
+                    atom.children =
+                        self.parse_atoms_from_reader(&mut cursor, Some(child_data.len()))?;
+                    self.current_offset = saved_offset;
+                } else {
+                    return Err(ParseError {
+                        kind: ParseErrorKind::AtomParsing,
+                        location: Some((atom_offset as usize, content_size)),
+                        source: Some(anyhow::anyhow!("Invalid meta atom").into()),
+                    });
+                }
+            } else if is_container_atom(&atom_type) {
+                // Parse children for container atoms
                 let mut cursor = std::io::Cursor::new(&content_data);
                 let saved_offset = self.current_offset;
                 self.current_offset = atom_offset as usize + header_size as usize;
                 atom.children = self.parse_atoms_from_reader(&mut cursor, Some(content_size))?;
                 self.current_offset = saved_offset;
+            } else if atom.data.is_none() {
+                atom.data = Some(RawData(content_data).into());
             }
 
             atoms.push(atom);
