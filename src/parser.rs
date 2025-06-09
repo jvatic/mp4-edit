@@ -1,7 +1,7 @@
 use derive_more::Display;
 use futures_io::AsyncRead;
-use futures_util::io::AsyncReadExt;
-use futures_util::stream::{Stream, TryStreamExt};
+use futures_util::io::{AsyncReadExt, Cursor};
+use futures_util::stream::{Stream, StreamExt, TryStreamExt};
 use thiserror::Error;
 
 use crate::{
@@ -306,42 +306,39 @@ impl Parser {
 
                 // Skip container atoms in the stream, but process leaf atoms
                 if !is_container_atom(&parsed_atom.atom_type) && &parsed_atom.atom_type != META {
+                    // Yield non-container atoms
                     yield Ok((atom_type_fourcc, self.parse_atom_data(&parsed_atom)?));
                 } else if is_container_atom(&parsed_atom.atom_type) || &parsed_atom.atom_type == META {
-                    // For container atoms, recursively parse children and yield their content
-                    let mut cursor = parsed_atom.content_data.as_slice();
-                    let child_atoms: Vec<Atom> = Box::pin(
-                        self.parse_atoms_from_reader(&mut cursor, Some(parsed_atom.content_data.len()))
-                    ).try_collect().await?;
-
-                    for child_atom in child_atoms {
-                        if let Some(data) = child_atom.data {
-                            yield Ok((child_atom.atom_type, data));
+                    // For container atoms, recursively parse children and yield their content as they come
+                    let (mut cursor, size) = if &parsed_atom.atom_type == META {
+                        // Handle META atoms specially, ignoring the META-specific headers for now
+                        match self.parse_atom_data(&parsed_atom)? {
+                            AtomData::Metadata(meta_atom) => {
+                                let size = meta_atom.child_data.len();
+                                (Cursor::new(meta_atom.child_data), size)
+                            }
+                            _ => {
+                                unreachable!("META atoms should always contain [AtomData::Metadata]");
+                            }
                         }
-                    }
-                } else if parsed_atom.atom_type == *META {
-                    // Handle META atoms specially
-                    match self.parse_atom_data(&parsed_atom)? {
-                        AtomData::Metadata(meta_atom) => {
-                            // Parse and yield children (ignoreing the META-specific headers for now)
-                            let mut cursor = meta_atom.child_data.as_slice();
-                            let child_atoms: Vec<Atom> = Box::pin(
-                                self.parse_atoms_from_reader(&mut cursor, Some(meta_atom.child_data.len()))
-                            ).try_collect().await?;
+                    } else {
+                        let size = parsed_atom.content_data.len();
+                        (Cursor::new(parsed_atom.content_data), size)
+                    };
+                    let child_stream = self.parse_atoms_from_reader(&mut cursor, Some(size));
+                    futures_util::pin_mut!(child_stream);
 
-                            for child_atom in child_atoms {
+                    while let Some(child_result) = child_stream.next().await {
+                        match child_result {
+                            Ok(child_atom) => {
                                 if let Some(data) = child_atom.data {
                                     yield Ok((child_atom.atom_type, data));
                                 }
                             }
-                        }
-                        _ => {
-                            yield Err(ParseError {
-                                kind: ParseErrorKind::AtomParsing,
-                                location: Some((parsed_atom.offset as usize, parsed_atom.complete_atom_data.len())),
-                                source: Some(anyhow::anyhow!("Invalid meta atom").into()),
-                            });
-                            return;
+                            Err(e) => {
+                                yield Err(e);
+                                return;
+                            }
                         }
                     }
                 }
@@ -366,8 +363,6 @@ impl Parser {
         self.current_offset = saved_offset;
         result
     }
-
-
 
     /// Recursively parse atoms from a reader with an optional length limit.
     fn parse_atoms_from_reader<'a, R: AsyncRead + Unpin + 'a>(
