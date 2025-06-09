@@ -13,7 +13,9 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Padding, Paragraph, Wrap},
     Frame, Terminal,
 };
-use std::{env, fs::File, io};
+use std::{env, io};
+use tokio::fs;
+use tokio_util::compat::TokioAsyncReadCompatExt;
 
 #[derive(Debug, Clone)]
 struct TreeNode {
@@ -345,15 +347,16 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
     }
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         eprintln!("Usage: {} <mp4_filename>", args[0]);
         std::process::exit(1);
     }
 
-    let input = File::open(&args[1])?;
-    let atoms = parse_mp4(input).context("Failed to parse MP4 file")?;
+    let file = fs::File::open(&args[1]).await?;
+    let atoms = parse_mp4(file.compat()).await.context("Failed to parse MP4 file")?;
 
     // Setup terminal
     enable_raw_mode()?;
