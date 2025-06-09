@@ -11,6 +11,7 @@ use crate::{
         ftyp::{FileTypeAtom, FTYP},
         gmhd::{GenericMediaHeaderAtom, GMHD},
         hdlr::{HandlerReferenceAtom, HDLR},
+        ilst::{ItemListAtom, ILST},
         mdhd::{MediaHeaderAtom, MDHD},
         meta::{MetadataAtom, META},
         mvhd::{MovieHeaderAtom, MVHD},
@@ -258,6 +259,15 @@ impl Parser {
                     ),
                     META => Some(
                         MetadataAtom::try_from(complete_atom_data.as_slice())
+                            .map_err(|e| ParseError {
+                                kind: ParseErrorKind::AtomParsing,
+                                location: Some((atom_offset as usize, complete_atom_data.len())),
+                                source: Some(e.context(atom_type_fourcc).into()),
+                            })?
+                            .into(),
+                    ),
+                    ILST => Some(
+                        ItemListAtom::try_from(complete_atom_data.as_slice())
                             .map_err(|e| ParseError {
                                 kind: ParseErrorKind::AtomParsing,
                                 location: Some((atom_offset as usize, complete_atom_data.len())),
