@@ -35,11 +35,11 @@ fn print_atoms(atoms: &[Atom], indent: usize) {
         println!("\n\x1b[1;36m╭─ MP4 Atom Structure ──────────────────────────────────────────────────────────────\x1b[0m");
         println!("\x1b[1;36m│\x1b[0m");
         println!(
-            "\x1b[1;36m│\x1b[0m \x1b[1;33m{:<20} │ {:<12} │ {:<10} │ {:<30}\x1b[0m",
-            "Atom Type", "Offset", "Size", "Summary"
+            "\x1b[1;36m│\x1b[0m \x1b[1;33m{:<20} │ {:<23} │ {:<10} │ {:<30}\x1b[0m",
+            "Atom Type", "Offset Range", "Size", "Summary"
         );
         println!(
-            "\x1b[1;36m│\x1b[0m \x1b[2m{:─<20}─┼─{:─<12}─┼─{:─<10}─┼─{:─<30}\x1b[0m",
+            "\x1b[1;36m│\x1b[0m \x1b[2m{:─<20}─┼─{:─<23}─┼─{:─<10}─┼─{:─<30}\x1b[0m",
             "", "", "", ""
         );
     }
@@ -53,7 +53,7 @@ fn print_atoms(atoms: &[Atom], indent: usize) {
 
         let atom_display = format!("{}{}", indent_str, atom.atom_type);
         let size_display = format_size(atom.size);
-        let offset_display = format!("0x{:08x}", atom.offset);
+        let offset_display = format!("0x{:08x}..=0x{:08x}", atom.offset, atom.offset + atom.size - 1);
         let summary = get_atom_summary(&atom.data);
 
         // Color coding based on atom type
@@ -66,10 +66,10 @@ fn print_atoms(atoms: &[Atom], indent: usize) {
         };
 
         if indent == 0 {
-            println!("\x1b[1;36m│\x1b[0m {}{:<20}\x1b[0m │ \x1b[2m{:<12}\x1b[0m │ \x1b[1m{:<10}\x1b[0m │ \x1b[2m{:<30}\x1b[0m",
+            println!("\x1b[1;36m│\x1b[0m {}{:<20}\x1b[0m │ \x1b[2m{:<23}\x1b[0m │ \x1b[1m{:<10}\x1b[0m │ \x1b[2m{:<30}\x1b[0m",
                 atom_color, atom_display, offset_display, size_display, summary);
         } else {
-            println!("\x1b[1;36m│\x1b[0m {}{:<20}\x1b[0m │ \x1b[2m{:<12}\x1b[0m │ \x1b[1m{:<10}\x1b[0m │ \x1b[2m{:<30}\x1b[0m",
+            println!("\x1b[1;36m│\x1b[0m {}{:<20}\x1b[0m │ \x1b[2m{:<23}\x1b[0m │ \x1b[1m{:<10}\x1b[0m │ \x1b[2m{:<30}\x1b[0m",
                 atom_color, atom_display, offset_display, size_display, summary);
         }
 
