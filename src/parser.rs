@@ -309,24 +309,30 @@ impl Parser {
                     yield Ok((atom_type_fourcc, self.parse_atom_data(&parsed_atom)?));
                 } else if is_container_atom(&parsed_atom.atom_type) || &parsed_atom.atom_type == META {
                     // For container atoms, recursively parse children and yield their content
-                    let cursor = parsed_atom.content_data.as_slice();
-                    let child_atoms = self.parse_atoms_from_slice(cursor, Some(parsed_atom.content_data.len())).await?;
+                    let mut cursor = parsed_atom.content_data.as_slice();
+                    let child_atoms: Vec<Atom> = Box::pin(
+                        self.parse_atoms_from_reader(&mut cursor, Some(parsed_atom.content_data.len()))
+                    ).try_collect().await?;
 
                     for child_atom in child_atoms {
-                        let child_fourcc = FourCC::from(child_atom.atom_type);
-                        yield Ok((child_fourcc, self.parse_atom_data(&parsed_atom)?));
+                        if let Some(data) = child_atom.data {
+                            yield Ok((child_atom.atom_type, data));
+                        }
                     }
                 } else if parsed_atom.atom_type == *META {
                     // Handle META atoms specially
                     match self.parse_atom_data(&parsed_atom)? {
                         AtomData::Metadata(meta_atom) => {
                             // Parse and yield children (ignoreing the META-specific headers for now)
-                            let cursor = meta_atom.child_data.as_slice();
-                            let child_atoms = self.parse_atoms_from_slice(cursor, Some(meta_atom.child_data.len())).await?;
+                            let mut cursor = meta_atom.child_data.as_slice();
+                            let child_atoms: Vec<Atom> = Box::pin(
+                                self.parse_atoms_from_reader(&mut cursor, Some(meta_atom.child_data.len()))
+                            ).try_collect().await?;
 
                             for child_atom in child_atoms {
-                                let child_fourcc = FourCC::from(child_atom.atom_type);
-                                yield Ok((child_fourcc, self.parse_atom_data(&parsed_atom)?));
+                                if let Some(data) = child_atom.data {
+                                    yield Ok((child_atom.atom_type, data));
+                                }
                             }
                         }
                         _ => {
@@ -361,41 +367,7 @@ impl Parser {
         result
     }
 
-    async fn parse_atoms_from_slice(
-        &mut self,
-        data: &[u8],
-        length_limit: Option<usize>,
-    ) -> Result<Vec<ParsedAtom>, ParseError> {
-        let mut cursor = data;
-        let mut atoms = Vec::new();
-        let mut current_offset = 0;
 
-        while !cursor.is_empty() {
-            if let Some(limit) = length_limit {
-                if current_offset >= limit {
-                    break;
-                }
-            }
-
-            let saved_offset = self.current_offset;
-            self.current_offset = current_offset;
-
-            match self
-                .parse_next_atom(&mut cursor, length_limit, current_offset)
-                .await?
-            {
-                Some(atom) => {
-                    current_offset = atom.offset as usize + atom.complete_atom_data.len();
-                    atoms.push(atom);
-                }
-                None => break,
-            }
-
-            self.current_offset = saved_offset;
-        }
-
-        Ok(atoms)
-    }
 
     /// Recursively parse atoms from a reader with an optional length limit.
     fn parse_atoms_from_reader<'a, R: AsyncRead + Unpin + 'a>(
