@@ -15,6 +15,7 @@ use crate::{
         mdhd::{MediaHeaderAtom, MDHD},
         meta::{MetadataAtom, META},
         mvhd::{MovieHeaderAtom, MVHD},
+        sgpd::{SampleGroupDescriptionAtom, SGPD},
         smhd::{SoundMediaHeaderAtom, SMHD},
         stco_co64::{ChunkOffsetAtom, CO64, STCO},
         stsc::{SampleToChunkAtom, STSC},
@@ -349,6 +350,15 @@ impl Parser {
                     ),
                     CHPL => Some(
                         ChapterListAtom::try_from(complete_atom_data.as_slice())
+                            .map_err(|e| ParseError {
+                                kind: ParseErrorKind::AtomParsing,
+                                location: Some((atom_offset as usize, complete_atom_data.len())),
+                                source: Some(e.context(atom_type_fourcc).into()),
+                            })?
+                            .into(),
+                    ),
+                    SGPD => Some(
+                        SampleGroupDescriptionAtom::try_from(complete_atom_data.as_slice())
                             .map_err(|e| ParseError {
                                 kind: ParseErrorKind::AtomParsing,
                                 location: Some((atom_offset as usize, complete_atom_data.len())),
