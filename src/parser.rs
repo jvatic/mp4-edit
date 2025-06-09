@@ -209,7 +209,7 @@ impl Parser {
         };
 
         let content_size = if size > header_size {
-            (size as usize).saturating_sub(header_size as usize)
+            (size - header_size) as usize
         } else {
             0
         };
