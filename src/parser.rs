@@ -1,5 +1,7 @@
 use derive_more::Display;
-use std::io::Read;
+use futures_io::AsyncRead;
+use futures_util::io::AsyncReadExt;
+use std::pin::Pin;
 use thiserror::Error;
 
 use crate::{
@@ -71,9 +73,9 @@ impl Parser {
         Parser { current_offset: 0 }
     }
 
-    pub fn parse<R: Read>(&mut self, mut reader: R) -> Result<Vec<Atom>, ParseError> {
+    pub async fn parse<R: AsyncRead + Unpin>(&mut self, mut reader: R) -> Result<Vec<Atom>, ParseError> {
         self.current_offset = 0;
-        let atoms = self.parse_atoms_from_reader(&mut reader, None)?;
+        let atoms = self.parse_atoms_from_reader(&mut reader, None).await?;
 
         if atoms.is_empty() {
             return Err(ParseError {
@@ -86,8 +88,8 @@ impl Parser {
         Ok(atoms)
     }
 
-    fn read_exact<R: Read>(&mut self, reader: &mut R, buf: &mut [u8]) -> Result<(), ParseError> {
-        reader.read_exact(buf).map_err(|e| ParseError {
+    async fn read_exact<R: AsyncRead + Unpin>(&mut self, reader: &mut R, buf: &mut [u8]) -> Result<(), ParseError> {
+        reader.read_exact(buf).await.map_err(|e| ParseError {
             kind: ParseErrorKind::Io,
             location: Some((self.current_offset, buf.len())),
             source: Some(Box::new(e)),
@@ -96,25 +98,26 @@ impl Parser {
         Ok(())
     }
 
-    fn read_data<R: Read>(&mut self, reader: &mut R, size: usize) -> Result<Vec<u8>, ParseError> {
+    async fn read_data<R: AsyncRead + Unpin>(&mut self, reader: &mut R, size: usize) -> Result<Vec<u8>, ParseError> {
         let mut data = vec![0u8; size];
-        self.read_exact(reader, &mut data)?;
+        self.read_exact(reader, &mut data).await?;
         Ok(data)
     }
 
     /// Recursively parse atoms from a reader with an optional length limit.
-    fn parse_atoms_from_reader<R: Read>(
-        &mut self,
-        reader: &mut R,
+    fn parse_atoms_from_reader<'a, R: AsyncRead + Unpin>(
+        &'a mut self,
+        reader: &'a mut R,
         length_limit: Option<usize>,
-    ) -> Result<Vec<Atom>, ParseError> {
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<Vec<Atom>, ParseError>> + 'a>> {
+        Box::pin(async move {
         let mut atoms = Vec::new();
         let start_offset = self.current_offset;
 
         while length_limit.map_or(true, |limit| self.current_offset - start_offset < limit) {
             // Try to read the atom header (size and type)
             let mut header = [0u8; 8];
-            match reader.read_exact(&mut header) {
+            match reader.read_exact(&mut header).await {
                 Ok(()) => {
                     self.current_offset += 8;
                 }
@@ -138,7 +141,7 @@ impl Parser {
             let (size, header_size) = if size_32 == 1 {
                 // Extended size format - next 8 bytes contain the actual 64-bit size
                 let mut extended_size_bytes = [0u8; 8];
-                self.read_exact(reader, &mut extended_size_bytes)?;
+                self.read_exact(reader, &mut extended_size_bytes).await?;
                 let extended_size = u64::from_be_bytes(extended_size_bytes);
                 (extended_size, 16) // 8 bytes basic header + 8 bytes extended size
             } else if size_32 == 0 {
@@ -173,7 +176,7 @@ impl Parser {
             let atom_offset = (self.current_offset - header_size as usize) as u64; // Store the offset where this atom started
 
             // Read the atom content
-            let content_data = self.read_data(reader, content_size)?;
+            let content_data = self.read_data(reader, content_size).await?;
 
             // Create complete atom data (header + content) for atom parsers
             let mut complete_atom_data = Vec::new();
@@ -400,11 +403,11 @@ impl Parser {
             if &atom_type == META {
                 // MetadataAtom is a special type of container atom
                 if let Some(AtomData::Metadata(MetadataAtom { child_data, .. })) = &atom.data {
-                    let mut cursor = std::io::Cursor::new(child_data);
+                    let mut cursor = child_data.as_slice();
                     let saved_offset = self.current_offset;
                     self.current_offset = self.current_offset - child_data.len();
                     atom.children =
-                        self.parse_atoms_from_reader(&mut cursor, Some(child_data.len()))?;
+                        self.parse_atoms_from_reader(&mut cursor, Some(child_data.len())).await?;
                     self.current_offset = saved_offset;
                 } else {
                     return Err(ParseError {
@@ -415,10 +418,10 @@ impl Parser {
                 }
             } else if is_container_atom(&atom_type) {
                 // Parse children for container atoms
-                let mut cursor = std::io::Cursor::new(&content_data);
+                let mut cursor = content_data.as_slice();
                 let saved_offset = self.current_offset;
                 self.current_offset = atom_offset as usize + header_size as usize;
-                atom.children = self.parse_atoms_from_reader(&mut cursor, Some(content_size))?;
+                atom.children = self.parse_atoms_from_reader(&mut cursor, Some(content_size)).await?;
                 self.current_offset = saved_offset;
             } else if atom.data.is_none() {
                 atom.data = Some(RawData(content_data).into());
@@ -432,12 +435,13 @@ impl Parser {
             }
         }
         Ok(atoms)
+        })
     }
 }
 
-pub fn parse_mp4<R: Read>(reader: R) -> Result<Vec<Atom>, ParseError> {
+pub async fn parse_mp4<R: AsyncRead + Unpin>(reader: R) -> Result<Vec<Atom>, ParseError> {
     let mut parser = Parser::new();
-    parser.parse(reader)
+    parser.parse(reader).await
 }
 
 /// Determines whether a given atom type (fourcc) should be treated as a container for other atoms.
@@ -464,10 +468,9 @@ fn is_container_atom(atom_type: &[u8; 4]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
 
-    #[test]
-    fn test_32bit_size_parsing() {
+    #[tokio::test]
+    async fn test_32bit_size_parsing() {
         // Create a simple FTYP atom with 32-bit size
         let mut data = Vec::new();
         data.extend_from_slice(&20u32.to_be_bytes()); // Size: 20 bytes total
@@ -477,7 +480,7 @@ mod tests {
         data.extend_from_slice(b"mp41"); // Compatible brand
 
         let mut parser = Parser::new();
-        let result = parser.parse(Cursor::new(data));
+        let result = parser.parse(data.as_slice()).await;
 
         if let Err(ref e) = result {
             println!("Error: {:?}", e);
@@ -491,8 +494,8 @@ mod tests {
         assert_eq!(atoms[0].offset, 0);
     }
 
-    #[test]
-    fn test_64bit_extended_size_parsing() {
+    #[tokio::test]
+    async fn test_64bit_extended_size_parsing() {
         // Create an atom with extended 64-bit size
         let mut data = Vec::new();
         data.extend_from_slice(&1u32.to_be_bytes()); // Size: 1 (indicates extended size)
@@ -502,7 +505,7 @@ mod tests {
         data.extend_from_slice(&[0u8; 2]); // padding to make exact size
 
         let mut parser = Parser::new();
-        let result = parser.parse(Cursor::new(data));
+        let result = parser.parse(data.as_slice()).await;
 
         assert!(result.is_ok());
         let atoms = result.unwrap();
@@ -513,8 +516,8 @@ mod tests {
         assert_eq!(atoms[0].offset, 0);
     }
 
-    #[test]
-    fn test_multiple_atoms() {
+    #[tokio::test]
+    async fn test_multiple_atoms() {
         // Create two atoms back-to-back
         let mut data = Vec::new();
 
@@ -529,7 +532,7 @@ mod tests {
         data.extend_from_slice(b"data5678"); // 8 bytes content
 
         let mut parser = Parser::new();
-        let result = parser.parse(Cursor::new(data));
+        let result = parser.parse(data.as_slice()).await;
 
         assert!(result.is_ok());
         let atoms = result.unwrap();
@@ -546,8 +549,8 @@ mod tests {
         assert_eq!(atoms[1].offset, 16);
     }
 
-    #[test]
-    fn test_container_atom_parsing() {
+    #[tokio::test]
+    async fn test_container_atom_parsing() {
         // Create a simple container atom (moov) with one child
         let mut data = Vec::new();
         data.extend_from_slice(&24u32.to_be_bytes()); // Size: 24 bytes total
@@ -559,7 +562,7 @@ mod tests {
         data.extend_from_slice(b"content!"); // 8 bytes content
 
         let mut parser = Parser::new();
-        let result = parser.parse(Cursor::new(data));
+        let result = parser.parse(data.as_slice()).await;
 
         assert!(result.is_ok());
         let atoms = result.unwrap();
@@ -573,27 +576,27 @@ mod tests {
         assert_eq!(atoms[0].children[0].size, 16);
     }
 
-    #[test]
-    fn test_insufficient_data_error() {
+    #[tokio::test]
+    async fn test_insufficient_data_error() {
         // Create data that's too short for a complete atom header
         let data = vec![0u8; 4]; // Only 4 bytes, need at least 8
 
         let mut parser = Parser::new();
-        let result = parser.parse(Cursor::new(data));
+        let result = parser.parse(data.as_slice()).await;
 
         assert!(result.is_err());
         // Should not panic or crash
     }
 
-    #[test]
-    fn test_invalid_size_error() {
+    #[tokio::test]
+    async fn test_invalid_size_error() {
         // Create an atom with size smaller than header
         let mut data = Vec::new();
         data.extend_from_slice(&4u32.to_be_bytes()); // Size: 4 bytes (smaller than 8-byte header)
         data.extend_from_slice(b"test"); // Type: test
 
         let mut parser = Parser::new();
-        let result = parser.parse(Cursor::new(data));
+        let result = parser.parse(data.as_slice()).await;
 
         // Should handle gracefully - size of 4 means content_size = 0
         assert!(result.is_ok());

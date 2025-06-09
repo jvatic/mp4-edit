@@ -1,5 +1,7 @@
 use anyhow::Context;
-use std::{env, fs::File};
+use std::env;
+use tokio::fs;
+use tokio_util::compat::TokioAsyncReadCompatExt;
 
 use mp4_parser::{parse_mp4, Atom, AtomData};
 
@@ -53,7 +55,11 @@ fn print_atoms(atoms: &[Atom], indent: usize) {
 
         let atom_display = format!("{}{}", indent_str, atom.atom_type);
         let size_display = format_size(atom.size);
-        let offset_display = format!("0x{:08x}..=0x{:08x}", atom.offset, atom.offset + atom.size - 1);
+        let offset_display = format!(
+            "0x{:08x}..=0x{:08x}",
+            atom.offset,
+            atom.offset + atom.size - 1
+        );
         let summary = get_atom_summary(&atom.data);
 
         // Color coding based on atom type
@@ -84,22 +90,25 @@ fn print_atoms(atoms: &[Atom], indent: usize) {
     }
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         eprintln!("Usage: {} <mp4_filename>", args[0]);
         std::process::exit(1);
     }
-    let input = File::open(&args[1])?;
+    let file = fs::File::open(&args[1]).await?;
 
-    let atoms = parse_mp4(input).context("Failed to parse MP4 file")?;
+    let atoms = parse_mp4(file.compat())
+        .await
+        .context("Failed to parse MP4 file")?;
 
     println!("\x1b[1;32m🎬 Analyzing MP4 file: {}\x1b[0m", &args[1]);
     print_atoms(&atoms, 0);
 
     // Print summary statistics
     let total_atoms = count_atoms(&atoms);
-    let file_size = std::fs::metadata(&args[1])?.len();
+    let file_size = fs::metadata(&args[1]).await?.len();
     println!("\x1b[1;33m📊 Summary:\x1b[0m");
     println!("   Total atoms: \x1b[1m{}\x1b[0m", total_atoms);
     println!("   File size: \x1b[1m{}\x1b[0m", format_size(file_size));
