@@ -31,21 +31,6 @@ impl EditListAtom {
     pub fn parse<R: Read>(reader: R) -> Result<Self, anyhow::Error> {
         parse_elst_atom(reader)
     }
-
-    /// Check if the edit list is empty (no entries)
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    /// Get the total duration of all edit segments
-    pub fn total_duration(&self) -> u64 {
-        self.entries.iter().map(|e| e.segment_duration).sum()
-    }
-
-    /// Check if any edit entries are empty edits (media_time == -1)
-    pub fn has_empty_edits(&self) -> bool {
-        self.entries.iter().any(|e| e.media_time == -1)
-    }
 }
 
 impl EditEntry {

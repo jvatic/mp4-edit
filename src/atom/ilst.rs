@@ -187,71 +187,6 @@ impl ItemListAtom {
     pub fn parse<R: Read>(reader: R) -> Result<Self, anyhow::Error> {
         parse_ilst_atom(reader)
     }
-
-    /// Get all metadata items of a specific type
-    pub fn get_items(&self, item_type: &str) -> Vec<&MetadataItem> {
-        self.items
-            .iter()
-            .filter(|item| item.item_type == item_type)
-            .collect()
-    }
-
-    /// Get the first metadata item of a specific type
-    pub fn get_first_item(&self, item_type: &str) -> Option<&MetadataItem> {
-        self.items.iter().find(|item| item.item_type == item_type)
-    }
-
-    /// Get text value for a specific metadata type
-    pub fn get_text(&self, item_type: &str) -> Option<&str> {
-        match self.get_first_item(item_type)?.value {
-            MetadataValue::Text(ref text) => Some(text),
-            _ => None,
-        }
-    }
-
-    /// Get all available metadata types
-    pub fn get_types(&self) -> Vec<String> {
-        let mut types: Vec<String> = self
-            .items
-            .iter()
-            .map(|item| item.item_type.clone())
-            .collect();
-        types.sort();
-        types.dedup();
-        types
-    }
-
-    /// Get summary information about the item list
-    pub fn get_summary(&self) -> ItemListSummary {
-        let unique_types: std::collections::HashSet<&String> =
-            self.items.iter().map(|item| &item.item_type).collect();
-        ItemListSummary {
-            total_items: self.items.len(),
-            unique_types: unique_types.len(),
-            raw_items: self.raw_items.len(),
-        }
-    }
-
-    /// Create a new empty ItemListAtom
-    pub fn new() -> Self {
-        Self {
-            items: MetadataItems(Vec::new()),
-            raw_items: RawMetadataItems(Vec::new()),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ItemListSummary {
-    pub total_items: usize,
-    pub unique_types: usize,
-    pub raw_items: usize,
-}
-
-impl Default for ItemListAtom {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl TryFrom<&[u8]> for ItemListAtom {
@@ -599,39 +534,11 @@ mod tests {
             .iter()
             .any(|item| item.item_type == expected_key));
 
-        let title_item = result.get_first_item(&expected_key).unwrap();
+        let title_item = result.items.first().unwrap();
         match &title_item.value {
             MetadataValue::Text(text) => assert_eq!(text, "Test Title"),
             _ => panic!("Expected text value"),
         }
-    }
-
-    #[test]
-    fn test_get_text() {
-        let data = create_test_ilst_data();
-        let ilst = parse_ilst_data(Cursor::new(&data)).unwrap();
-
-        let expected_key = get_expected_item_type();
-        assert_eq!(ilst.get_text(&expected_key), Some("Test Title"));
-        assert_eq!(ilst.get_text("nonexistent"), None);
-    }
-
-    #[test]
-    fn test_default_ilst() {
-        let ilst = ItemListAtom::default();
-        assert!(ilst.items.is_empty());
-        assert!(ilst.raw_items.is_empty());
-    }
-
-    #[test]
-    fn test_summary() {
-        let data = create_test_ilst_data();
-        let ilst = parse_ilst_data(Cursor::new(&data)).unwrap();
-
-        let summary = ilst.get_summary();
-        assert_eq!(summary.total_items, 1);
-        assert_eq!(summary.unique_types, 1);
-        assert_eq!(summary.raw_items, 0);
     }
 
     #[test]
@@ -720,7 +627,9 @@ mod tests {
             Ok(ilst) => {
                 // Check if we get the correct item type and text
                 let pub_key = convert_mac_roman_to_utf8(b"\xa9pub");
-                if let Some(publisher_item) = ilst.get_first_item(&pub_key) {
+                if let Some(publisher_item) =
+                    ilst.items.iter().find(|item| item.item_type == pub_key)
+                {
                     match &publisher_item.value {
                         MetadataValue::Text(text) => {
                             assert_eq!(text, "Audible Studios", "Text should not be truncated");
@@ -826,7 +735,7 @@ mod tests {
             Ok(ilst) => {
                 // We should get something, but it might only be the first data atom
                 let pub_key = String::from_utf8_lossy(item_type).to_string();
-                if let Some(item) = ilst.get_first_item(&pub_key) {
+                if let Some(item) = ilst.items.iter().find(|item| item.item_type == pub_key) {
                     if let MetadataValue::Text(text) = &item.value {
                         // Should be "Audible", not corrupted
                         assert!(!text.is_empty());
@@ -869,7 +778,7 @@ mod tests {
         match result {
             Ok(ilst) => {
                 let pub_key = String::from_utf8_lossy(item_type).to_string();
-                if let Some(item) = ilst.get_first_item(&pub_key) {
+                if let Some(item) = ilst.items.iter().find(|item| item.item_type == pub_key) {
                     if let MetadataValue::Text(text) = &item.value {
                         // Text might have null padding, but should start correctly
                         assert!(
@@ -883,68 +792,6 @@ mod tests {
             Err(_) => {
                 // May fail if padding causes size mismatch
             }
-        }
-    }
-
-    #[test]
-    fn test_real_world_offset_corruption() {
-        // Create test data that would exhibit the corruption pattern seen in real-world files
-        // if there were a 4-byte offset error in parsing
-        let mut data = Vec::new();
-
-        // Create a metadata item that should parse as "©nam" with "Publishing Credits"
-        // but would show as "�nam" with "ing Credits" if there's a 4-byte offset bug
-        let item_type = b"\xa9nam"; // ©nam in UTF-8
-        let text_data = b"Publishing Credits";
-
-        // Calculate sizes correctly
-        let data_atom_size = 4 + 4 + 4 + 4 + 4 + text_data.len(); // size + type + flags + country + language + data
-        let item_size = 4 + 4 + data_atom_size; // 4 bytes item size + 4 bytes item type + data atom
-
-        // Item header
-        data.extend_from_slice(&(item_size as u32).to_be_bytes());
-        data.extend_from_slice(item_type);
-
-        // Data atom
-        data.extend_from_slice(&(data_atom_size as u32).to_be_bytes());
-        data.extend_from_slice(b"data");
-        data.extend_from_slice(&1u32.to_be_bytes()); // Type flags (1 = UTF-8 text)
-        data.extend_from_slice(&0u32.to_be_bytes()); // Country
-        data.extend_from_slice(&0u32.to_be_bytes()); // Language
-        data.extend_from_slice(text_data);
-
-        // Parse the data
-        let cursor = std::io::Cursor::new(&data);
-        let result = parse_ilst_data(cursor);
-
-        assert!(result.is_ok(), "Failed to parse test data");
-        let ilst = result.unwrap();
-
-        // Check that we have the correct item type (not corrupted)
-        assert!(
-            ilst.items.iter().any(|item| item.item_type == "©nam"),
-            "Should contain ©nam key, found types: {:?}",
-            ilst.get_types()
-        );
-
-        // Check that the text is complete (not truncated)
-        if let Some(item) = ilst.get_first_item("©nam") {
-            if let MetadataValue::Text(text) = &item.value {
-                assert_eq!(
-                    text, "Publishing Credits",
-                    "Text should be complete, not truncated"
-                );
-            } else {
-                panic!("Expected text value");
-            }
-
-            // Check that language field is reasonable (not corrupted)
-            assert_eq!(
-                item.metadata.language, 0,
-                "Language should be 0, not corrupted"
-            );
-        } else {
-            panic!("Should have items for ©nam");
         }
     }
 

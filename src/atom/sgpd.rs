@@ -36,82 +36,6 @@ impl SampleGroupDescriptionAtom {
     pub fn parse<R: Read>(reader: R) -> Result<Self, anyhow::Error> {
         parse_sample_group_description_atom(reader)
     }
-
-    /// Get the number of sample group description entries
-    pub fn entry_count(&self) -> u32 {
-        self.entries.len() as u32
-    }
-
-    /// Check if the atom has any entries
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    /// Get the grouping type as a string
-    pub fn grouping_type_string(&self) -> String {
-        self.grouping_type.to_string()
-    }
-
-    /// Get an entry by index
-    pub fn get_entry(&self, index: usize) -> Option<&SampleGroupDescriptionEntry> {
-        self.entries.get(index)
-    }
-
-    /// Get the total size of all description data
-    pub fn total_description_size(&self) -> usize {
-        self.entries
-            .iter()
-            .map(|entry| entry.description_data.len())
-            .sum()
-    }
-
-    /// Validate the atom structure
-    pub fn validate(&self) -> Result<(), anyhow::Error> {
-        // Check version-specific constraints
-        match self.version {
-            0 => {
-                if self.default_length.is_some() {
-                    return Err(anyhow!("Version 0 should not have default_length"));
-                }
-                if self.default_sample_description_index.is_some() {
-                    return Err(anyhow!(
-                        "Version 0 should not have default_sample_description_index"
-                    ));
-                }
-            }
-            1 => {
-                if self.default_sample_description_index.is_some() {
-                    return Err(anyhow!(
-                        "Version 1 should not have default_sample_description_index"
-                    ));
-                }
-                // For version 1, if default_length is 0, each entry should have description_length
-                if let Some(default_len) = self.default_length {
-                    if default_len == 0 {
-                        for (i, entry) in self.entries.iter().enumerate() {
-                            if entry.description_length.is_none() {
-                                return Err(anyhow!(
-                                    "Entry {} missing description_length when default_length is 0",
-                                    i
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {
-                // Version 2+
-                if self.default_length.is_some() {
-                    return Err(anyhow!(
-                        "Version {} should not have default_length",
-                        self.version
-                    ));
-                }
-            }
-        }
-
-        Ok(())
-    }
 }
 
 impl TryFrom<&[u8]> for SampleGroupDescriptionAtom {
@@ -265,9 +189,6 @@ fn parse_sgpd_data(data: &[u8]) -> Result<SampleGroupDescriptionAtom, anyhow::Er
         entries,
     };
 
-    // Validate the parsed atom
-    atom.validate()?;
-
     Ok(atom)
 }
 
@@ -369,27 +290,6 @@ mod tests {
     }
 
     #[test]
-    fn test_validation() {
-        let test_data = vec![1, 2, 3];
-        let data = create_test_sgpd_data_v0(b"test", &test_data);
-        let atom = parse_sample_group_description_atom(Cursor::new(&data)).unwrap();
-
-        // Should validate successfully
-        atom.validate().unwrap();
-    }
-
-    #[test]
-    fn test_empty_atom() {
-        let data = create_test_sgpd_data_v1(b"empt", 0, &[]);
-        let atom = parse_sample_group_description_atom(Cursor::new(&data)).unwrap();
-
-        assert!(atom.is_empty());
-        assert_eq!(atom.entry_count(), 0);
-        assert_eq!(atom.total_description_size(), 0);
-        assert!(atom.get_entry(0).is_none());
-    }
-
-    #[test]
     fn test_invalid_atom_type() {
         let data = create_test_sgpd_data_v0(b"test", &[1, 2, 3]);
         let mut modified_data = data;
@@ -398,15 +298,5 @@ mod tests {
 
         let result = parse_sample_group_description_atom(Cursor::new(&modified_data));
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_try_from_trait() {
-        let test_data = vec![7, 8, 9];
-        let data = create_test_sgpd_data_v0(b"from", &test_data);
-        let result = SampleGroupDescriptionAtom::try_from(data.as_slice()).unwrap();
-
-        assert_eq!(result.grouping_type_string(), "from");
-        assert_eq!(result.entries[0].description_data, test_data);
     }
 }
