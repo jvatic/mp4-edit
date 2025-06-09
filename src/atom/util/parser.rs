@@ -29,7 +29,7 @@ pub fn parse_fixed_size_atom<R: Read>(mut reader: R) -> Result<(FourCC, Vec<u8>)
         if size < 8 {
             return Err(anyhow!("Invalid atom size"));
         }
-        (8u64, size as u64 - 8)
+        (8u64, size - 8)
     };
 
     // Read the remaining atom data
