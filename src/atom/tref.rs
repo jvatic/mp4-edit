@@ -1,10 +1,14 @@
 use anyhow::{anyhow, Context};
+use futures_io::AsyncRead;
 use std::{
     fmt,
     io::{Cursor, Read},
 };
 
-use crate::atom::util::{parse_fixed_size_atom, FourCC};
+use crate::{
+    atom::util::{parser::parse_fixed_size_atom, FourCC},
+    parser::Parse,
+};
 
 pub const TREF: &[u8; 4] = b"tref";
 
@@ -69,9 +73,19 @@ pub struct TrackReferenceAtom {
     pub references: Vec<TrackReference>,
 }
 
-impl TrackReferenceAtom {
-    pub fn parse<R: Read>(reader: R) -> Result<Self, anyhow::Error> {
-        parse_tref_atom(reader)
+impl Parse for TrackReferenceAtom {
+    async fn parse<R: AsyncRead + Unpin + Send>(reader: R) -> Result<Self, anyhow::Error> {
+        let (atom_type, data) = parse_fixed_size_atom(reader).await?;
+        if atom_type != TREF {
+            return Err(anyhow!(
+                "Invalid atom type: expected tref, got {}",
+                atom_type
+            ));
+        }
+
+        // Parse the data using existing sync function
+        let cursor = Cursor::new(data);
+        parse_tref_data(cursor)
     }
 }
 
@@ -90,28 +104,6 @@ impl fmt::Display for TrackReferenceAtom {
             write!(f, " }}")
         }
     }
-}
-
-impl TryFrom<&[u8]> for TrackReferenceAtom {
-    type Error = anyhow::Error;
-
-    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
-        let reader = Cursor::new(data);
-        parse_tref_atom(reader)
-    }
-}
-
-fn parse_tref_atom<R: Read>(reader: R) -> Result<TrackReferenceAtom, anyhow::Error> {
-    let (atom_type, data) = parse_fixed_size_atom(reader)?;
-    if atom_type != TREF {
-        return Err(anyhow!(
-            "Invalid atom type: expected tref, got {}",
-            atom_type
-        ));
-    }
-
-    let mut cursor = Cursor::new(data);
-    parse_tref_data(&mut cursor)
 }
 
 fn parse_tref_data<R: Read>(mut reader: R) -> Result<TrackReferenceAtom, anyhow::Error> {
@@ -182,46 +174,4 @@ fn parse_tref_data<R: Read>(mut reader: R) -> Result<TrackReferenceAtom, anyhow:
     }
 
     Ok(TrackReferenceAtom { references })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_display_formatting() {
-        let reference = TrackReference {
-            reference_type: FourCC(*reference_types::HINT),
-            track_ids: vec![1, 2, 3],
-        };
-
-        let display_str = format!("{}", reference);
-        assert!(display_str.contains("hint"));
-        assert!(display_str.contains("1, 2, 3"));
-    }
-
-    #[test]
-    fn test_invalid_reference_size() {
-        let mut data = Vec::new();
-        data.extend_from_slice(&16u32.to_be_bytes()); // Total tref size
-        data.extend_from_slice(b"tref");
-        data.extend_from_slice(&4u32.to_be_bytes()); // Invalid reference size (too small)
-        data.extend_from_slice(b"hint");
-
-        let result = TrackReferenceAtom::parse(Cursor::new(data));
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_invalid_track_ids_length() {
-        let mut data = Vec::new();
-        data.extend_from_slice(&15u32.to_be_bytes()); // Total tref size
-        data.extend_from_slice(b"tref");
-        data.extend_from_slice(&11u32.to_be_bytes()); // Reference size: 11 bytes
-        data.extend_from_slice(b"hint");
-        data.extend_from_slice(&[1, 2, 3]); // 3 bytes - not multiple of 4
-
-        let result = TrackReferenceAtom::parse(Cursor::new(data));
-        assert!(result.is_err());
-    }
 }

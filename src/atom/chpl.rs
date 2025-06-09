@@ -1,11 +1,15 @@
 use anyhow::{anyhow, Context};
 use derive_more::Deref;
+use futures_io::AsyncRead;
 use std::{
     fmt,
     io::{BufRead, BufReader, Cursor, Read},
 };
 
-use crate::atom::util::{parse_fixed_size_atom, DebugEllipsis};
+use crate::{
+    atom::util::{parse_fixed_size_atom, DebugEllipsis},
+    parser::Parse,
+};
 
 pub const CHPL: &[u8; 4] = b"chpl";
 
@@ -44,28 +48,17 @@ pub struct ChapterListAtom {
     pub chapters: ChapterEntries,
 }
 
-impl ChapterListAtom {
-    pub fn parse<R: Read>(reader: R) -> Result<Self, anyhow::Error> {
-        parse_chapter_list_atom(reader)
-    }
-}
+impl Parse for ChapterListAtom {
+    async fn parse<R: AsyncRead + Unpin + Send>(reader: R) -> Result<Self, anyhow::Error> {
+        let (atom_type, data) = parse_fixed_size_atom(reader).await?;
+        if atom_type != CHPL {
+            return Err(anyhow!("Invalid atom type: {} (expected chpl)", atom_type));
+        }
 
-impl TryFrom<&[u8]> for ChapterListAtom {
-    type Error = anyhow::Error;
-
-    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
-        let reader = Cursor::new(data);
-        parse_chapter_list_atom(reader)
+        // Parse the data using existing sync function
+        let cursor = Cursor::new(data);
+        parse_chpl_data(cursor)
     }
-}
-
-fn parse_chapter_list_atom<R: Read>(reader: R) -> Result<ChapterListAtom, anyhow::Error> {
-    let (atom_type, data) = parse_fixed_size_atom(reader)?;
-    if atom_type != CHPL {
-        return Err(anyhow!("Invalid atom type: {} (expected chpl)", atom_type));
-    }
-    let mut cursor = Cursor::new(data);
-    parse_chpl_data(&mut cursor)
 }
 
 fn parse_chpl_data<R: Read>(mut reader: R) -> Result<ChapterListAtom, anyhow::Error> {

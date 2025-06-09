@@ -1,8 +1,9 @@
 use anyhow::{anyhow, Context};
 
+use futures_io::AsyncRead;
 use std::io::{Cursor, Read};
 
-use crate::atom::util::parse_fixed_size_atom;
+use crate::{atom::util::parse_fixed_size_atom, parser::Parse};
 
 pub const MVHD: &[u8; 4] = b"mvhd";
 
@@ -42,28 +43,17 @@ pub struct MovieHeaderAtom {
     pub next_track_id: u32,
 }
 
-impl MovieHeaderAtom {
-    pub fn parse<R: Read>(reader: R) -> Result<Self, anyhow::Error> {
-        parse_mvhd_atom(reader)
-    }
-}
+impl Parse for MovieHeaderAtom {
+    async fn parse<R: AsyncRead + Unpin + Send>(reader: R) -> Result<Self, anyhow::Error> {
+        let (atom_type, data) = parse_fixed_size_atom(reader).await?;
+        if atom_type != MVHD {
+            return Err(anyhow!("Invalid atom type: {}", atom_type));
+        }
 
-impl TryFrom<&[u8]> for MovieHeaderAtom {
-    type Error = anyhow::Error;
-
-    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
-        let reader = Cursor::new(data);
-        parse_mvhd_atom(reader)
+        // Parse the data using existing sync function
+        let cursor = Cursor::new(data);
+        parse_mvhd_data(cursor)
     }
-}
-
-fn parse_mvhd_atom<R: Read>(reader: R) -> Result<MovieHeaderAtom, anyhow::Error> {
-    let (atom_type, data) = parse_fixed_size_atom(reader)?;
-    if atom_type != MVHD {
-        return Err(anyhow!("Invalid atom type: {}", atom_type));
-    }
-    let mut cursor = Cursor::new(data);
-    parse_mvhd_data(&mut cursor)
 }
 
 fn parse_mvhd_data<R: Read>(mut reader: R) -> Result<MovieHeaderAtom, anyhow::Error> {

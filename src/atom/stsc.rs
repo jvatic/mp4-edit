@@ -1,11 +1,15 @@
 use anyhow::{anyhow, Context};
 use derive_more::Deref;
+use futures_io::AsyncRead;
 use std::{
     fmt,
     io::{Cursor, Read},
 };
 
-use crate::atom::util::{parse_fixed_size_atom, DebugEllipsis};
+use crate::{
+    atom::util::{parse_fixed_size_atom, DebugEllipsis},
+    parser::Parse,
+};
 
 pub const STSC: &[u8; 4] = b"stsc";
 
@@ -46,28 +50,17 @@ pub struct SampleToChunkAtom {
     pub entries: SampleToChunkEntries,
 }
 
-impl SampleToChunkAtom {
-    pub fn parse<R: Read>(reader: R) -> Result<Self, anyhow::Error> {
-        parse_sample_to_chunk_atom(reader)
-    }
-}
+impl Parse for SampleToChunkAtom {
+    async fn parse<R: AsyncRead + Unpin + Send>(reader: R) -> Result<Self, anyhow::Error> {
+        let (atom_type, data) = parse_fixed_size_atom(reader).await?;
+        if atom_type != STSC {
+            return Err(anyhow!("Invalid atom type: {} (expected stsc)", atom_type));
+        }
 
-impl TryFrom<&[u8]> for SampleToChunkAtom {
-    type Error = anyhow::Error;
-
-    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
-        let reader = Cursor::new(data);
-        parse_sample_to_chunk_atom(reader)
+        // Parse the data using existing sync function
+        let mut cursor = Cursor::new(data);
+        parse_stsc_data(&mut cursor)
     }
-}
-
-fn parse_sample_to_chunk_atom<R: Read>(reader: R) -> Result<SampleToChunkAtom, anyhow::Error> {
-    let (atom_type, data) = parse_fixed_size_atom(reader)?;
-    if atom_type != STSC {
-        return Err(anyhow!("Invalid atom type: {} (expected stsc)", atom_type));
-    }
-    let mut cursor = Cursor::new(data);
-    parse_stsc_data(&mut cursor)
 }
 
 fn parse_stsc_data<R: Read>(mut reader: R) -> Result<SampleToChunkAtom, anyhow::Error> {

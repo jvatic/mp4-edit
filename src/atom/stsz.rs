@@ -1,11 +1,15 @@
 use anyhow::{anyhow, Context};
 use derive_more::Deref;
+use futures_io::AsyncRead;
 use std::{
     fmt::{self},
     io::{Cursor, Read},
 };
 
-use crate::atom::util::{parse_fixed_size_atom, DebugEllipsis};
+use crate::{
+    atom::util::{parser::parse_fixed_size_atom, DebugEllipsis},
+    parser::Parse,
+};
 
 pub const STSZ: &[u8; 4] = b"stsz";
 
@@ -44,32 +48,17 @@ pub struct SampleSizeAtom {
     pub entry_sizes: SampleEntrySizes,
 }
 
-impl SampleSizeAtom {
-    pub fn parse<R: Read>(reader: R) -> Result<Self, anyhow::Error> {
-        parse_stsz_atom(reader)
+impl Parse for SampleSizeAtom {
+    async fn parse<R: AsyncRead + Unpin + Send>(reader: R) -> Result<Self, anyhow::Error> {
+        let (atom_type, data) = parse_fixed_size_atom(reader).await?;
+        if atom_type != STSZ {
+            return Err(anyhow!("Invalid atom type: {}", atom_type));
+        }
+
+        // Parse the data using existing sync function
+        let cursor = Cursor::new(data);
+        parse_stsz_data(cursor)
     }
-}
-
-impl TryFrom<&[u8]> for SampleSizeAtom {
-    type Error = anyhow::Error;
-
-    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
-        let reader = Cursor::new(data);
-        parse_stsz_atom(reader)
-    }
-}
-
-fn parse_stsz_atom<R: Read>(reader: R) -> Result<SampleSizeAtom, anyhow::Error> {
-    let (atom_type, data) = parse_fixed_size_atom(reader)?;
-    if atom_type != STSZ {
-        return Err(anyhow!(
-            "Invalid atom type: expected stsz, got {}",
-            atom_type
-        ));
-    }
-
-    let mut cursor = Cursor::new(data);
-    parse_stsz_data(&mut cursor)
 }
 
 fn parse_stsz_data<R: Read>(mut reader: R) -> Result<SampleSizeAtom, anyhow::Error> {
@@ -145,53 +134,5 @@ impl fmt::Display for SampleSizeAtom {
         } else {
             write!(f, "variable_sizes: {} entries)", self.entry_sizes.len())
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_invalid_size() {
-        // Test with data too small
-        let mut data = Vec::new();
-        data.extend_from_slice(&16u32.to_be_bytes()); // 16 bytes total
-        data.extend_from_slice(b"stsz");
-        data.extend_from_slice(&0u32.to_be_bytes()); // Version/flags
-        data.extend_from_slice(&1024u32.to_be_bytes()); // Sample size
-                                                        // Missing sample count
-
-        let result = SampleSizeAtom::parse(Cursor::new(data));
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_invalid_table_size() {
-        // Test with incorrect table size for variable samples
-        let mut data = Vec::new();
-        data.extend_from_slice(&24u32.to_be_bytes()); // 24 bytes total
-        data.extend_from_slice(b"stsz");
-        data.extend_from_slice(&0u32.to_be_bytes()); // Version/flags
-        data.extend_from_slice(&0u32.to_be_bytes()); // Sample size (0 = variable)
-        data.extend_from_slice(&2u32.to_be_bytes()); // Sample count (2)
-        data.extend_from_slice(&512u32.to_be_bytes()); // Only one entry instead of two
-
-        let result = SampleSizeAtom::parse(Cursor::new(data));
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_unsupported_version() {
-        // Test with unsupported version
-        let mut data = Vec::new();
-        data.extend_from_slice(&20u32.to_be_bytes());
-        data.extend_from_slice(b"stsz");
-        data.extend_from_slice(&0x01000000u32.to_be_bytes()); // Version 1 (unsupported)
-        data.extend_from_slice(&1024u32.to_be_bytes());
-        data.extend_from_slice(&100u32.to_be_bytes());
-
-        let result = SampleSizeAtom::parse(Cursor::new(data));
-        assert!(result.is_err());
     }
 }

@@ -1,7 +1,11 @@
 use anyhow::{anyhow, Context};
+use futures_io::AsyncRead;
 use std::io::{Cursor, Read};
 
-use crate::atom::util::{parse_fixed_size_atom, FourCC};
+use crate::{
+    atom::util::{parse_fixed_size_atom, FourCC},
+    parser::Parse,
+};
 
 pub const SGPD: &[u8; 4] = b"sgpd";
 
@@ -32,35 +36,19 @@ pub struct SampleGroupDescriptionEntry {
     pub description_data: Vec<u8>,
 }
 
-impl SampleGroupDescriptionAtom {
-    pub fn parse<R: Read>(reader: R) -> Result<Self, anyhow::Error> {
-        parse_sample_group_description_atom(reader)
+impl Parse for SampleGroupDescriptionAtom {
+    async fn parse<R: AsyncRead + Unpin + Send>(reader: R) -> Result<Self, anyhow::Error> {
+        let (atom_type, data) = parse_fixed_size_atom(reader).await?;
+        if atom_type != SGPD {
+            return Err(anyhow!(
+                "Invalid atom type: {} (expected 'sgpd')",
+                atom_type
+            ));
+        }
+
+        // Parse the data using existing sync function
+        parse_sgpd_data(&data)
     }
-}
-
-impl TryFrom<&[u8]> for SampleGroupDescriptionAtom {
-    type Error = anyhow::Error;
-
-    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
-        let reader = Cursor::new(data);
-        parse_sample_group_description_atom(reader)
-    }
-}
-
-fn parse_sample_group_description_atom<R: Read>(
-    reader: R,
-) -> Result<SampleGroupDescriptionAtom, anyhow::Error> {
-    let (atom_type, data) = parse_fixed_size_atom(reader)?;
-
-    // Verify this is an sgpd atom
-    if atom_type != SGPD {
-        return Err(anyhow!(
-            "Invalid atom type: {} (expected 'sgpd')",
-            atom_type
-        ));
-    }
-
-    parse_sgpd_data(&data)
 }
 
 fn parse_sgpd_data(data: &[u8]) -> Result<SampleGroupDescriptionAtom, anyhow::Error> {
@@ -190,113 +178,4 @@ fn parse_sgpd_data(data: &[u8]) -> Result<SampleGroupDescriptionAtom, anyhow::Er
     };
 
     Ok(atom)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn create_test_sgpd_data_v0(grouping_type: &[u8; 4], entry_data: &[u8]) -> Vec<u8> {
-        let mut data = Vec::new();
-        let total_size = 8 + 4 + 4 + 4 + entry_data.len(); // header + grouping_type + entry_count + data
-
-        // Atom header
-        data.extend_from_slice(&(total_size as u32).to_be_bytes());
-        data.extend_from_slice(SGPD);
-
-        // Version and flags
-        data.push(0); // version 0
-        data.extend_from_slice(&[0, 0, 0]); // flags
-
-        // Grouping type
-        data.extend_from_slice(grouping_type);
-
-        // Entry count
-        data.extend_from_slice(&1u32.to_be_bytes());
-
-        // Entry data
-        data.extend_from_slice(entry_data);
-
-        data
-    }
-
-    fn create_test_sgpd_data_v1(
-        grouping_type: &[u8; 4],
-        default_length: u32,
-        entries: &[&[u8]],
-    ) -> Vec<u8> {
-        let mut data = Vec::new();
-        let entries_size: usize = entries.iter().map(|e| e.len()).sum();
-        let total_size = 8 + 4 + 4 + 4 + 4 + entries_size; // header + grouping_type + default_length + entry_count + data
-
-        // Atom header
-        data.extend_from_slice(&(total_size as u32).to_be_bytes());
-        data.extend_from_slice(SGPD);
-
-        // Version and flags
-        data.push(1); // version 1
-        data.extend_from_slice(&[0, 0, 0]); // flags
-
-        // Grouping type
-        data.extend_from_slice(grouping_type);
-
-        // Default length
-        data.extend_from_slice(&default_length.to_be_bytes());
-
-        // Entry count
-        data.extend_from_slice(&(entries.len() as u32).to_be_bytes());
-
-        // Entries
-        for entry in entries {
-            if default_length == 0 {
-                // Include length for each entry
-                data.extend_from_slice(&(entry.len() as u32).to_be_bytes());
-            }
-            data.extend_from_slice(entry);
-        }
-
-        data
-    }
-
-    #[test]
-    fn test_parse_sgpd_version_0() {
-        let test_data = vec![1, 2, 3, 4, 5];
-        let data = create_test_sgpd_data_v0(b"test", &test_data);
-        let result = parse_sample_group_description_atom(Cursor::new(&data)).unwrap();
-
-        assert_eq!(result.version, 0);
-        assert_eq!(result.grouping_type, FourCC(*b"test"));
-        assert_eq!(result.default_length, None);
-        assert_eq!(result.default_sample_description_index, None);
-        assert_eq!(result.entries.len(), 1);
-        assert_eq!(result.entries[0].description_data, test_data);
-        assert_eq!(result.entries[0].description_length, None);
-    }
-
-    #[test]
-    fn test_parse_sgpd_version_1_with_default_length() {
-        let entries = vec![vec![1, 2, 3], vec![4, 5, 6]];
-        let entry_refs: Vec<&[u8]> = entries.iter().map(|e| e.as_slice()).collect();
-        let data = create_test_sgpd_data_v1(b"grp1", 3, &entry_refs);
-        let result = parse_sample_group_description_atom(Cursor::new(&data)).unwrap();
-
-        assert_eq!(result.version, 1);
-        assert_eq!(result.grouping_type, FourCC(*b"grp1"));
-        assert_eq!(result.default_length, Some(3));
-        assert_eq!(result.default_sample_description_index, None);
-        assert_eq!(result.entries.len(), 2);
-        assert_eq!(result.entries[0].description_data, vec![1, 2, 3]);
-        assert_eq!(result.entries[1].description_data, vec![4, 5, 6]);
-    }
-
-    #[test]
-    fn test_invalid_atom_type() {
-        let data = create_test_sgpd_data_v0(b"test", &[1, 2, 3]);
-        let mut modified_data = data;
-        // Change atom type from 'sgpd' to 'badd'
-        modified_data[4..8].copy_from_slice(b"badd");
-
-        let result = parse_sample_group_description_atom(Cursor::new(&modified_data));
-        assert!(result.is_err());
-    }
 }

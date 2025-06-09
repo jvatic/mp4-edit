@@ -1,11 +1,15 @@
 use anyhow::{anyhow, Context};
 use derive_more::Deref;
+use futures_io::AsyncRead;
 use std::{
     fmt,
     io::{Cursor, Read},
 };
 
-use crate::atom::util::{parse_fixed_size_atom, DebugEllipsis};
+use crate::{
+    atom::util::{parse_fixed_size_atom, DebugEllipsis},
+    parser::Parse,
+};
 
 pub const STCO: &[u8; 4] = b"stco";
 pub const CO64: &[u8; 4] = b"co64";
@@ -38,37 +42,25 @@ pub struct ChunkOffsetAtom {
     pub is_64bit: bool,
 }
 
-impl ChunkOffsetAtom {
-    pub fn parse<R: Read>(reader: R) -> Result<Self, anyhow::Error> {
-        parse_chunk_offset_atom(reader)
+impl Parse for ChunkOffsetAtom {
+    async fn parse<R: AsyncRead + Unpin + Send>(reader: R) -> Result<Self, anyhow::Error> {
+        let (atom_type, data) = parse_fixed_size_atom(reader).await?;
+
+        let is_64bit = if atom_type == STCO {
+            false
+        } else if atom_type == CO64 {
+            true
+        } else {
+            return Err(anyhow!(
+                "Invalid atom type: {} (expected stco or co64)",
+                atom_type
+            ));
+        };
+
+        // Parse the data using existing sync function
+        let mut cursor = Cursor::new(data);
+        parse_stco_data(&mut cursor, is_64bit)
     }
-}
-
-impl TryFrom<&[u8]> for ChunkOffsetAtom {
-    type Error = anyhow::Error;
-
-    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
-        let reader = Cursor::new(data);
-        parse_chunk_offset_atom(reader)
-    }
-}
-
-fn parse_chunk_offset_atom<R: Read>(reader: R) -> Result<ChunkOffsetAtom, anyhow::Error> {
-    let (atom_type, data) = parse_fixed_size_atom(reader)?;
-
-    let is_64bit = if atom_type == STCO {
-        false
-    } else if atom_type == CO64 {
-        true
-    } else {
-        return Err(anyhow!(
-            "Invalid atom type: {} (expected stco or co64)",
-            atom_type
-        ));
-    };
-
-    let mut cursor = Cursor::new(data);
-    parse_stco_data(&mut cursor, is_64bit)
 }
 
 fn parse_stco_data<R: Read>(

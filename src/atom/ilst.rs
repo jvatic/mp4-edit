@@ -1,10 +1,14 @@
 use anyhow::{anyhow, Context};
+use futures_io::AsyncRead;
 use std::{
     fmt,
     io::{Cursor, Read},
 };
 
-use crate::atom::util::{parse_fixed_size_atom, DebugEllipsis};
+use crate::{
+    atom::util::{parser::parse_fixed_size_atom, DebugEllipsis},
+    parser::Parse,
+};
 
 pub const ILST: &[u8; 4] = b"ilst";
 
@@ -183,31 +187,20 @@ pub struct RawMetadataItem {
     pub data: Vec<u8>,
 }
 
-impl ItemListAtom {
-    pub fn parse<R: Read>(reader: R) -> Result<Self, anyhow::Error> {
-        parse_ilst_atom(reader)
-    }
-}
+impl Parse for ItemListAtom {
+    async fn parse<R: AsyncRead + Unpin + Send>(reader: R) -> Result<Self, anyhow::Error> {
+        let (atom_type, data) = parse_fixed_size_atom(reader).await?;
+        if atom_type != ILST {
+            return Err(anyhow!(
+                "Invalid atom type: expected ilst, got {:?}",
+                atom_type
+            ));
+        }
 
-impl TryFrom<&[u8]> for ItemListAtom {
-    type Error = anyhow::Error;
-
-    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
-        let reader = Cursor::new(data);
-        parse_ilst_atom(reader)
+        // Parse the data using existing sync function
+        let cursor = Cursor::new(data);
+        parse_ilst_data(cursor)
     }
-}
-
-fn parse_ilst_atom<R: Read>(reader: R) -> Result<ItemListAtom, anyhow::Error> {
-    let (atom_type, data) = parse_fixed_size_atom(reader)?;
-    if atom_type != ILST {
-        return Err(anyhow!(
-            "Invalid atom type: expected ilst, got {:?}",
-            atom_type
-        ));
-    }
-    let mut cursor = Cursor::new(data);
-    parse_ilst_data(&mut cursor)
 }
 
 fn parse_ilst_data<R: Read>(mut reader: R) -> Result<ItemListAtom, anyhow::Error> {

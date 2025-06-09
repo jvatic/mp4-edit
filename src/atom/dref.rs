@@ -1,7 +1,11 @@
 use anyhow::{anyhow, Context};
+use futures_io::AsyncRead;
 use std::io::{Cursor, Read};
 
-use crate::atom::util::{parse_fixed_size_atom, FourCC};
+use crate::{
+    atom::util::{parser::parse_fixed_size_atom, FourCC},
+    parser::Parse,
+};
 
 pub const DREF: &[u8; 4] = b"dref";
 
@@ -73,32 +77,20 @@ pub struct DataReferenceAtom {
     pub entries: Vec<DataReferenceEntry>,
 }
 
-impl DataReferenceAtom {
-    pub fn parse<R: Read>(reader: R) -> Result<Self, anyhow::Error> {
-        parse_dref_atom(reader)
+impl Parse for DataReferenceAtom {
+    async fn parse<R: AsyncRead + Unpin + Send>(reader: R) -> Result<Self, anyhow::Error> {
+        let (atom_type, data) = parse_fixed_size_atom(reader).await?;
+        if atom_type != DREF {
+            return Err(anyhow!(
+                "Invalid atom type: expected dref, got {}",
+                atom_type
+            ));
+        }
+
+        // Parse the data using existing sync function
+        let cursor = Cursor::new(data);
+        parse_dref_data(cursor)
     }
-}
-
-impl TryFrom<&[u8]> for DataReferenceAtom {
-    type Error = anyhow::Error;
-
-    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
-        let reader = Cursor::new(data);
-        parse_dref_atom(reader)
-    }
-}
-
-fn parse_dref_atom<R: Read>(reader: R) -> Result<DataReferenceAtom, anyhow::Error> {
-    let (atom_type, data) = parse_fixed_size_atom(reader)?;
-    if atom_type != DREF {
-        return Err(anyhow!(
-            "Invalid atom type: expected dref, got {}",
-            atom_type
-        ));
-    }
-
-    let mut cursor = Cursor::new(data);
-    parse_dref_data(&mut cursor)
 }
 
 fn parse_dref_data<R: Read>(mut reader: R) -> Result<DataReferenceAtom, anyhow::Error> {

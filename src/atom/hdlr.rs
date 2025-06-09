@@ -1,7 +1,8 @@
 use anyhow::{anyhow, Context};
+use futures_io::AsyncRead;
 use std::io::{Cursor, Read};
 
-use crate::atom::util::parse_fixed_size_atom;
+use crate::{atom::util::parse_fixed_size_atom, parser::Parse};
 
 pub const HDLR: &[u8; 4] = b"hdlr";
 
@@ -94,28 +95,17 @@ pub struct HandlerReferenceAtom {
     pub name: String,
 }
 
-impl HandlerReferenceAtom {
-    pub fn parse<R: Read>(reader: R) -> Result<Self, anyhow::Error> {
-        parse_hdlr_atom(reader)
-    }
-}
+impl Parse for HandlerReferenceAtom {
+    async fn parse<R: AsyncRead + Unpin + Send>(reader: R) -> Result<Self, anyhow::Error> {
+        let (atom_type, data) = parse_fixed_size_atom(reader).await?;
+        if atom_type != HDLR {
+            return Err(anyhow!("Invalid atom type: {}", atom_type));
+        }
 
-impl TryFrom<&[u8]> for HandlerReferenceAtom {
-    type Error = anyhow::Error;
-
-    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
-        let reader = Cursor::new(data);
-        parse_hdlr_atom(reader)
+        // Parse the data using existing sync function
+        let cursor = Cursor::new(data);
+        parse_hdlr_data(cursor)
     }
-}
-
-fn parse_hdlr_atom<R: Read>(reader: R) -> Result<HandlerReferenceAtom, anyhow::Error> {
-    let (atom_type, data) = parse_fixed_size_atom(reader)?;
-    if atom_type != HDLR {
-        return Err(anyhow!("Invalid atom type: {}", atom_type));
-    }
-    let mut cursor = Cursor::new(data);
-    parse_hdlr_data(&mut cursor)
 }
 
 fn parse_hdlr_data<R: Read>(mut reader: R) -> Result<HandlerReferenceAtom, anyhow::Error> {

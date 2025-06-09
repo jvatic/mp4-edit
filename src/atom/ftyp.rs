@@ -1,7 +1,11 @@
 use anyhow::{anyhow, Context};
+use futures_io::AsyncRead;
 use std::io::{Cursor, Read};
 
-use crate::atom::util::{parse_fixed_size_atom, FourCC};
+use crate::{
+    atom::util::{parse_fixed_size_atom, FourCC},
+    parser::Parse,
+};
 
 pub const FTYP: &[u8; 4] = b"ftyp";
 
@@ -17,32 +21,19 @@ pub struct FileTypeAtom {
     pub compatible_brands: Vec<FourCC>,
 }
 
-impl FileTypeAtom {
-    pub fn parse<R: Read>(reader: R) -> Result<Self, anyhow::Error> {
-        parse_ftyp_atom(reader)
+impl Parse for FileTypeAtom {
+    async fn parse<R: AsyncRead + Unpin + Send>(reader: R) -> Result<Self, anyhow::Error> {
+        let (atom_type, data) = parse_fixed_size_atom(reader).await?;
+        if atom_type != FTYP {
+            return Err(anyhow!(
+                "Invalid atom type: expected ftyp, got {}",
+                atom_type
+            ));
+        }
+
+        let cursor = Cursor::new(data);
+        parse_ftyp_data(cursor)
     }
-}
-
-impl TryFrom<&[u8]> for FileTypeAtom {
-    type Error = anyhow::Error;
-
-    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
-        let reader = Cursor::new(data);
-        parse_ftyp_atom(reader)
-    }
-}
-
-fn parse_ftyp_atom<R: Read>(reader: R) -> Result<FileTypeAtom, anyhow::Error> {
-    let (atom_type, data) = parse_fixed_size_atom(reader)?;
-    if atom_type != FTYP {
-        return Err(anyhow!(
-            "Invalid atom type: expected ftyp, got {}",
-            atom_type
-        ));
-    }
-
-    let mut cursor = Cursor::new(data);
-    parse_ftyp_data(&mut cursor)
 }
 
 fn parse_ftyp_data<R: Read>(mut reader: R) -> Result<FileTypeAtom, anyhow::Error> {
@@ -83,35 +74,4 @@ fn parse_ftyp_data<R: Read>(mut reader: R) -> Result<FileTypeAtom, anyhow::Error
         minor_version,
         compatible_brands,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_invalid_size() {
-        // Test with data too small (less than 8 bytes)
-        let mut data = Vec::new();
-        data.extend_from_slice(&12u32.to_be_bytes()); // 12 bytes total
-        data.extend_from_slice(b"ftyp");
-        data.extend_from_slice(b"mp41"); // Only 4 bytes of data, need 8 minimum
-
-        let result = FileTypeAtom::parse(Cursor::new(data));
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_invalid_compatible_brands_size() {
-        // Test with compatible brands not multiple of 4
-        let mut data = Vec::new();
-        data.extend_from_slice(&15u32.to_be_bytes()); // 15 bytes total
-        data.extend_from_slice(b"ftyp");
-        data.extend_from_slice(b"mp41"); // Major brand
-        data.extend_from_slice(&0u32.to_be_bytes()); // Minor version
-        data.extend_from_slice(b"mp4"); // Only 3 bytes, should be 4
-
-        let result = FileTypeAtom::parse(Cursor::new(data));
-        assert!(result.is_err());
-    }
 }

@@ -1,10 +1,11 @@
 use anyhow::anyhow;
-use std::{
-    fmt,
-    io::{Cursor, Read},
-};
+use futures_io::AsyncRead;
+use std::fmt;
 
-use crate::atom::util::{parse_fixed_size_atom, DebugEllipsis, FourCC};
+use crate::{
+    atom::util::{parse_fixed_size_atom, DebugEllipsis, FourCC},
+    parser::Parse,
+};
 
 pub const FREE: &[u8; 4] = b"free";
 pub const SKIP: &[u8; 4] = b"skip";
@@ -29,44 +30,22 @@ impl fmt::Debug for FreeAtom {
     }
 }
 
-impl FreeAtom {
-    pub fn parse<R: Read>(reader: R) -> Result<Self, anyhow::Error> {
-        parse_free_atom(reader)
+impl Parse for FreeAtom {
+    async fn parse<R: AsyncRead + Unpin + Send>(reader: R) -> Result<Self, anyhow::Error> {
+        let (atom_type, data) = parse_fixed_size_atom(reader).await?;
+
+        // Verify this is a free or skip atom
+        if atom_type != FREE && atom_type != SKIP {
+            return Err(anyhow!(
+                "Invalid atom type: {} (expected 'free' or 'skip')",
+                atom_type
+            ));
+        }
+
+        Ok(FreeAtom {
+            atom_type,
+            data_size: data.len(),
+            data,
+        })
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct FreeSpaceSummary {
-    pub atom_type: String,
-    pub size: usize,
-    pub is_zeroed: bool,
-    pub appears_random: bool,
-    pub first_bytes: Option<Vec<u8>>,
-}
-
-impl TryFrom<&[u8]> for FreeAtom {
-    type Error = anyhow::Error;
-
-    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
-        let reader = Cursor::new(data);
-        parse_free_atom(reader)
-    }
-}
-
-fn parse_free_atom<R: Read>(reader: R) -> Result<FreeAtom, anyhow::Error> {
-    let (atom_type, data) = parse_fixed_size_atom(reader)?;
-
-    // Verify this is a free or skip atom
-    if atom_type != FREE && atom_type != SKIP {
-        return Err(anyhow!(
-            "Invalid atom type: {} (expected 'free' or 'skip')",
-            atom_type
-        ));
-    }
-
-    Ok(FreeAtom {
-        atom_type,
-        data_size: data.len(),
-        data,
-    })
 }

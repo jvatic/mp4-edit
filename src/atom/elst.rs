@@ -1,8 +1,9 @@
 use anyhow::{anyhow, Context};
 
+use futures_io::AsyncRead;
 use std::io::{Cursor, Read};
 
-use crate::atom::util::parse_fixed_size_atom;
+use crate::{atom::util::parse_fixed_size_atom, parser::Parse};
 
 pub const ELST: &[u8; 4] = b"elst";
 
@@ -27,45 +28,17 @@ pub struct EditEntry {
     pub media_rate: f32,
 }
 
-impl EditListAtom {
-    pub fn parse<R: Read>(reader: R) -> Result<Self, anyhow::Error> {
-        parse_elst_atom(reader)
-    }
-}
+impl Parse for EditListAtom {
+    async fn parse<R: AsyncRead + Unpin + Send>(reader: R) -> Result<Self, anyhow::Error> {
+        let (atom_type, data) = parse_fixed_size_atom(reader).await?;
+        if atom_type != ELST {
+            return Err(anyhow!("Invalid atom type: {}", atom_type));
+        }
 
-impl EditEntry {
-    /// Check if this is an empty edit (no media displayed)
-    pub fn is_empty_edit(&self) -> bool {
-        self.media_time == -1
+        // Parse the data using existing sync function
+        let cursor = Cursor::new(data);
+        parse_elst_data(cursor)
     }
-
-    /// Check if this edit plays at normal speed
-    pub fn is_normal_speed(&self) -> bool {
-        (self.media_rate - 1.0).abs() < f32::EPSILON
-    }
-
-    /// Check if this edit is a dwell edit (media_rate == 0.0)
-    pub fn is_dwell_edit(&self) -> bool {
-        self.media_rate.abs() < f32::EPSILON
-    }
-}
-
-impl TryFrom<&[u8]> for EditListAtom {
-    type Error = anyhow::Error;
-
-    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
-        let reader = Cursor::new(data);
-        parse_elst_atom(reader)
-    }
-}
-
-fn parse_elst_atom<R: Read>(reader: R) -> Result<EditListAtom, anyhow::Error> {
-    let (atom_type, data) = parse_fixed_size_atom(reader)?;
-    if atom_type != ELST {
-        return Err(anyhow!("Invalid atom type: {}", atom_type));
-    }
-    let mut cursor = Cursor::new(data);
-    parse_elst_data(&mut cursor)
 }
 
 fn parse_elst_data<R: Read>(mut reader: R) -> Result<EditListAtom, anyhow::Error> {
