@@ -1,8 +1,7 @@
 use derive_more::Display;
 use futures_io::AsyncRead;
 use futures_util::io::AsyncReadExt;
-use futures_util::stream::Stream;
-use std::pin::Pin;
+use futures_util::stream::{Stream, TryStreamExt};
 use thiserror::Error;
 
 use crate::{
@@ -99,7 +98,10 @@ impl Parser {
     ) -> Result<&[Atom], ParseError> {
         self.current_offset = 0;
         self.atoms.clear();
-        self.atoms = self.parse_atoms_from_reader(&mut reader, None).await?;
+        self.atoms = self
+            .parse_atoms_from_reader(&mut reader, None)
+            .try_collect()
+            .await?;
 
         if self.atoms.is_empty() {
             return Err(ParseError {
@@ -396,13 +398,12 @@ impl Parser {
     }
 
     /// Recursively parse atoms from a reader with an optional length limit.
-    fn parse_atoms_from_reader<'a, R: AsyncRead + Unpin>(
+    fn parse_atoms_from_reader<'a, R: AsyncRead + Unpin + 'a>(
         &'a mut self,
         reader: &'a mut R,
         length_limit: Option<usize>,
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<Vec<Atom>, ParseError>> + 'a>> {
-        Box::pin(async move {
-            let mut atoms = Vec::new();
+    ) -> impl Stream<Item = Result<Atom, ParseError>> + 'a {
+        async_stream::stream! {
             let start_offset = self.current_offset;
 
             while let Some(parsed_atom) = self
@@ -425,12 +426,16 @@ impl Parser {
                         let mut cursor = child_data.as_slice();
                         let saved_offset = self.current_offset;
                         self.current_offset -= child_data.len();
-                        atom.children = self
-                            .parse_atoms_from_reader(&mut cursor, Some(child_data.len()))
-                            .await?;
+
+                        // Collect children from stream
+                        let children: Result<Vec<_>, _> = Box::pin(
+                            self.parse_atoms_from_reader(&mut cursor, Some(child_data.len()))
+                        ).try_collect().await;
+                        atom.children = children?;
+
                         self.current_offset = saved_offset;
                     } else {
-                        return Err(ParseError {
+                        yield Err(ParseError {
                             kind: ParseErrorKind::AtomParsing,
                             location: Some((
                                 parsed_atom.offset as usize,
@@ -438,30 +443,34 @@ impl Parser {
                             )),
                             source: Some(anyhow::anyhow!("Invalid meta atom").into()),
                         });
+                        return;
                     }
                 } else if is_container_atom(&parsed_atom.atom_type) {
                     // Parse children for container atoms
                     let mut cursor = parsed_atom.content_data.as_slice();
                     let saved_offset = self.current_offset;
                     self.current_offset = parsed_atom.offset as usize + parsed_atom.header_size;
-                    atom.children = self
-                        .parse_atoms_from_reader(&mut cursor, Some(parsed_atom.content_data.len()))
-                        .await?;
+
+                    // Collect children from stream
+                    let children: Result<Vec<_>, _> = Box::pin(
+                        self.parse_atoms_from_reader(&mut cursor, Some(parsed_atom.content_data.len()))
+                    ).try_collect().await;
+                    atom.children = children?;
+
                     self.current_offset = saved_offset;
                 } else if atom.data.is_none() {
                     // Unhandled atom, store raw data
                     atom.data = Some(RawData(parsed_atom.content_data).into());
                 }
 
-                atoms.push(atom);
+                yield Ok(atom);
 
                 // Size can be 0 (meaning "rest of file") so we need to prevent infinite loop.
                 if parsed_atom.size == 0 {
                     break;
                 }
             }
-            Ok(atoms)
-        })
+        }
     }
 }
 
