@@ -2,7 +2,7 @@ use crate::atom::util::fourcc::FourCC;
 use anyhow::{anyhow, Context};
 use std::io::Read;
 
-pub fn parse_fixed_size_atom<R: Read>(mut reader: R) -> Result<(FourCC, Vec<u8>), anyhow::Error> {
+pub fn parse_atom_header<R: Read>(mut reader: R) -> Result<(FourCC, u64, u64), anyhow::Error> {
     // Read atom header (8 bytes minimum)
     let mut header = [0u8; 8];
     reader.read_exact(&mut header).context("read header")?;
@@ -11,7 +11,7 @@ pub fn parse_fixed_size_atom<R: Read>(mut reader: R) -> Result<(FourCC, Vec<u8>)
     let atom_type: [u8; 4] = header[4..8].try_into()?;
 
     // Handle extended size (64-bit) if needed
-    let (_header_size, data_size) = if size == 1 {
+    let (header_size, data_size) = if size == 1 {
         // Extended size format
         let mut extended_size = [0u8; 8];
         reader
@@ -32,11 +32,17 @@ pub fn parse_fixed_size_atom<R: Read>(mut reader: R) -> Result<(FourCC, Vec<u8>)
         (8u64, size - 8)
     };
 
+    Ok((FourCC(atom_type), header_size, data_size))
+}
+
+pub fn parse_fixed_size_atom<R: Read>(mut reader: R) -> Result<(FourCC, Vec<u8>), anyhow::Error> {
+    let (atom_type, _header_size, data_size) = parse_atom_header(&mut reader)?;
+
     // Read the remaining atom data
     let mut data = vec![0u8; data_size as usize];
     reader
         .read_exact(&mut data)
         .context(format!("read atom data (size={data_size})"))?;
 
-    Ok((FourCC(atom_type), data))
+    Ok((atom_type, data))
 }
