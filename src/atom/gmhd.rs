@@ -181,12 +181,12 @@ fn parse_gmhd_data<R: Read>(mut reader: R) -> Result<GenericMediaHeaderAtom, any
 
     // Read opcolor RGB values (6 bytes total, 2 bytes each)
     let mut opcolor = [0u16; 3];
-    for i in 0..3 {
+    for (i, color) in opcolor.iter_mut().enumerate() {
         let mut color_buf = [0u8; 2];
         reader
             .read_exact(&mut color_buf)
             .context(format!("read opcolor component {}", i))?;
-        opcolor[i] = u16::from_be_bytes(color_buf);
+        *color = u16::from_be_bytes(color_buf);
     }
 
     Ok(GenericMediaHeaderAtom {

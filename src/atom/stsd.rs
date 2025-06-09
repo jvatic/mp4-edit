@@ -54,7 +54,7 @@ impl SampleEntryType {
         }
     }
 
-    pub fn as_bytes<'a>(&'a self) -> &'a [u8; 4] {
+    pub fn as_bytes(&self) -> &[u8; 4] {
         match self {
             SampleEntryType::Avc1 => SAMPLE_ENTRY_AVC1,
             SampleEntryType::Hvc1 => SAMPLE_ENTRY_HVC1,

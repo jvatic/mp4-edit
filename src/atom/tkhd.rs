@@ -143,9 +143,9 @@ fn parse_tkhd_v0<R: Read>(mut reader: R, flags: [u8; 3]) -> Result<TrackHeaderAt
 
     // Matrix (9 x 32-bit values)
     let mut matrix = [0i32; 9];
-    for i in 0..9 {
+    for item in &mut matrix {
         reader.read_exact(&mut buf).context("matrix")?;
-        matrix[i] = i32::from_be_bytes(buf);
+        *item = i32::from_be_bytes(buf);
     }
     let matrix = if is_empty_matrix(&matrix) {
         None
@@ -228,9 +228,9 @@ fn parse_tkhd_v1<R: Read>(mut reader: R, flags: [u8; 3]) -> Result<TrackHeaderAt
 
     // Matrix (9 x 32-bit values)
     let mut matrix = [0i32; 9];
-    for i in 0..9 {
+    for item in &mut matrix {
         reader.read_exact(&mut buf4).context("matrix")?;
-        matrix[i] = i32::from_be_bytes(buf4);
+        *item = i32::from_be_bytes(buf4);
     }
     let matrix = if is_empty_matrix(&matrix) {
         None

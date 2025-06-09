@@ -140,7 +140,7 @@ fn parse_smhd_data<R: Read>(mut reader: R) -> Result<SoundMediaHeaderAtom, anyho
     let reserved = u16::from_be_bytes(reserved_buf);
 
     // Validate that the balance is within reasonable bounds
-    if balance < -1.0 || balance > 1.0 {
+    if !(-1.0..=1.0).contains(&balance) {
         return Err(anyhow!("Invalid balance value: {}", balance));
     }
 

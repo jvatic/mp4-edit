@@ -463,7 +463,7 @@ fn parse_item_data<R: Read>(
         }
         21 => {
             // Unsigned 8-bit integer
-            if data_bytes.len() >= 1 {
+            if !data_bytes.is_empty() {
                 MetadataValue::UInt8(data_bytes[0])
             } else {
                 MetadataValue::Binary(data_bytes)
