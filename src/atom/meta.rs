@@ -1,10 +1,14 @@
 use anyhow::{anyhow, Context};
+use futures_io::AsyncRead;
 use std::{
     fmt,
     io::{Cursor, Read},
 };
 
-use crate::atom::util::{parse_fixed_size_atom, DebugEllipsis};
+use crate::{
+    atom::util::{parser::parse_fixed_size_atom, DebugEllipsis},
+    parser::Parse,
+};
 
 pub const META: &[u8; 4] = b"meta";
 
@@ -28,28 +32,17 @@ impl fmt::Debug for MetadataAtom {
     }
 }
 
-impl MetadataAtom {
-    pub fn parse<R: Read>(reader: R) -> Result<Self, anyhow::Error> {
-        parse_meta_atom(reader)
-    }
-}
+impl Parse for MetadataAtom {
+    async fn parse<R: AsyncRead + Unpin + Send>(reader: R) -> Result<Self, anyhow::Error> {
+        let (atom_type, data) = parse_fixed_size_atom(reader).await?;
+        if atom_type != META {
+            return Err(anyhow!("Invalid atom type: {}", atom_type));
+        }
 
-impl TryFrom<&[u8]> for MetadataAtom {
-    type Error = anyhow::Error;
-
-    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
-        let reader = Cursor::new(data);
-        parse_meta_atom(reader)
+        // Parse the data using existing sync function
+        let cursor = Cursor::new(data);
+        parse_meta_data(cursor)
     }
-}
-
-fn parse_meta_atom<R: Read>(reader: R) -> Result<MetadataAtom, anyhow::Error> {
-    let (atom_type, data) = parse_fixed_size_atom(reader)?;
-    if atom_type != META {
-        return Err(anyhow!("Invalid atom type: {}", atom_type));
-    }
-    let mut cursor = Cursor::new(data);
-    parse_meta_data(&mut cursor)
 }
 
 fn parse_meta_data<R: Read>(mut reader: R) -> Result<MetadataAtom, anyhow::Error> {

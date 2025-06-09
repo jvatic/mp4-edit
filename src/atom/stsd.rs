@@ -1,8 +1,12 @@
 use anyhow::{anyhow, Context};
 use derive_more::Display;
+use futures_io::AsyncRead;
 use std::io::{Cursor, Read};
 
-use crate::atom::util::{parse_fixed_size_atom, FourCC};
+use crate::{
+    atom::util::{parser::parse_fixed_size_atom, FourCC},
+    parser::Parse,
+};
 
 pub const STSD: &[u8; 4] = b"stsd";
 
@@ -156,28 +160,17 @@ pub struct SampleDescriptionTableAtom {
     pub entries: Vec<SampleEntry>,
 }
 
-impl SampleDescriptionTableAtom {
-    pub fn parse<R: Read>(reader: R) -> Result<Self, anyhow::Error> {
-        parse_stsd_atom(reader)
-    }
-}
+impl Parse for SampleDescriptionTableAtom {
+    async fn parse<R: AsyncRead + Unpin + Send>(reader: R) -> Result<Self, anyhow::Error> {
+        let (atom_type, data) = parse_fixed_size_atom(reader).await?;
+        if atom_type != STSD {
+            return Err(anyhow!("Invalid atom type: {}", atom_type));
+        }
 
-impl TryFrom<&[u8]> for SampleDescriptionTableAtom {
-    type Error = anyhow::Error;
-
-    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
-        let reader = Cursor::new(data);
-        parse_stsd_atom(reader)
+        // Parse the data using existing sync function
+        let cursor = Cursor::new(data);
+        parse_stsd_data(cursor)
     }
-}
-
-fn parse_stsd_atom<R: Read>(reader: R) -> Result<SampleDescriptionTableAtom, anyhow::Error> {
-    let (atom_type, data) = parse_fixed_size_atom(reader)?;
-    if atom_type != STSD {
-        return Err(anyhow!("Invalid atom type: {}", atom_type));
-    }
-    let mut cursor = Cursor::new(data);
-    parse_stsd_data(&mut cursor)
 }
 
 fn parse_stsd_data<R: Read>(mut reader: R) -> Result<SampleDescriptionTableAtom, anyhow::Error> {

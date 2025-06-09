@@ -2,6 +2,7 @@ use derive_more::Display;
 use futures_io::AsyncRead;
 use futures_util::io::{AsyncReadExt, Cursor};
 use futures_util::stream::{Stream, StreamExt, TryStreamExt};
+use std::future::Future;
 use thiserror::Error;
 
 use crate::{
@@ -31,6 +32,13 @@ use crate::{
     },
     Atom, AtomData,
 };
+
+/// Async trait for parsing atoms from an AsyncRead stream
+pub trait Parse: Sized {
+    fn parse<R: AsyncRead + Unpin + Send>(
+        reader: R,
+    ) -> impl Future<Output = Result<Self, anyhow::Error>> + Send;
+}
 
 #[derive(Debug, Error)]
 #[error(
@@ -122,7 +130,7 @@ impl Parser {
         self.parse_atom_stream(reader, None)
     }
 
-    pub fn to_vec(self) -> Vec<Atom> {
+    fn to_vec(self) -> Vec<Atom> {
         self.atoms
     }
 
@@ -243,36 +251,53 @@ impl Parser {
         }))
     }
 
-    fn parse_atom_data(&self, parsed_atom: &ParsedAtom) -> Result<AtomData, ParseError> {
+    async fn parse_atom_data(&self, parsed_atom: &ParsedAtom) -> Result<AtomData, ParseError> {
         let atom_type_fourcc = FourCC::from(parsed_atom.atom_type);
         let complete_atom_data = parsed_atom.complete_atom_data.as_slice();
 
+        let cursor = Cursor::new(complete_atom_data.to_vec());
         let atom_data = match &parsed_atom.atom_type {
-            FTYP => Some(FileTypeAtom::try_from(complete_atom_data).map(AtomData::from)),
-            MVHD => Some(MovieHeaderAtom::try_from(complete_atom_data).map(AtomData::from)),
-            ELST => Some(EditListAtom::try_from(complete_atom_data).map(AtomData::from)),
-            MDHD => Some(MediaHeaderAtom::try_from(complete_atom_data).map(AtomData::from)),
-            HDLR => Some(HandlerReferenceAtom::try_from(complete_atom_data).map(AtomData::from)),
-            GMHD => Some(GenericMediaHeaderAtom::try_from(complete_atom_data).map(AtomData::from)),
-            SMHD => Some(SoundMediaHeaderAtom::try_from(complete_atom_data).map(AtomData::from)),
-            META => Some(MetadataAtom::try_from(complete_atom_data).map(AtomData::from)),
-            ILST => Some(ItemListAtom::try_from(complete_atom_data).map(AtomData::from)),
-            TKHD => Some(TrackHeaderAtom::try_from(complete_atom_data).map(AtomData::from)),
-            STSD => {
-                Some(SampleDescriptionTableAtom::try_from(complete_atom_data).map(AtomData::from))
-            }
-            TREF => Some(TrackReferenceAtom::try_from(complete_atom_data).map(AtomData::from)),
-            DREF => Some(DataReferenceAtom::try_from(complete_atom_data).map(AtomData::from)),
-            STSZ => Some(SampleSizeAtom::try_from(complete_atom_data).map(AtomData::from)),
-            STCO | CO64 => Some(ChunkOffsetAtom::try_from(complete_atom_data).map(AtomData::from)),
-            STTS => Some(TimeToSampleAtom::try_from(complete_atom_data).map(AtomData::from)),
-            STSC => Some(SampleToChunkAtom::try_from(complete_atom_data).map(AtomData::from)),
-            CHPL => Some(ChapterListAtom::try_from(complete_atom_data).map(AtomData::from)),
-            SGPD => {
-                Some(SampleGroupDescriptionAtom::try_from(complete_atom_data).map(AtomData::from))
-            }
-            SBGP => Some(SampleToGroupAtom::try_from(complete_atom_data).map(AtomData::from)),
-            FREE | SKIP => Some(FreeAtom::try_from(complete_atom_data).map(AtomData::from)),
+            FTYP => Some(FileTypeAtom::parse(cursor).await.map(AtomData::from)),
+            MVHD => Some(MovieHeaderAtom::parse(cursor).await.map(AtomData::from)),
+            MDHD => Some(MediaHeaderAtom::parse(cursor).await.map(AtomData::from)),
+            ELST => Some(EditListAtom::parse(cursor).await.map(AtomData::from)),
+            HDLR => Some(
+                HandlerReferenceAtom::parse(cursor)
+                    .await
+                    .map(AtomData::from),
+            ),
+            GMHD => Some(
+                GenericMediaHeaderAtom::parse(cursor)
+                    .await
+                    .map(AtomData::from),
+            ),
+            SMHD => Some(
+                SoundMediaHeaderAtom::parse(cursor)
+                    .await
+                    .map(AtomData::from),
+            ),
+            META => Some(MetadataAtom::parse(cursor).await.map(AtomData::from)),
+            ILST => Some(ItemListAtom::parse(cursor).await.map(AtomData::from)),
+            TKHD => Some(TrackHeaderAtom::parse(cursor).await.map(AtomData::from)),
+            STSD => Some(
+                SampleDescriptionTableAtom::parse(cursor)
+                    .await
+                    .map(AtomData::from),
+            ),
+            TREF => Some(TrackReferenceAtom::parse(cursor).await.map(AtomData::from)),
+            DREF => Some(DataReferenceAtom::parse(cursor).await.map(AtomData::from)),
+            STSZ => Some(SampleSizeAtom::parse(cursor).await.map(AtomData::from)),
+            STCO | CO64 => Some(ChunkOffsetAtom::parse(cursor).await.map(AtomData::from)),
+            STTS => Some(TimeToSampleAtom::parse(cursor).await.map(AtomData::from)),
+            STSC => Some(SampleToChunkAtom::parse(cursor).await.map(AtomData::from)),
+            CHPL => Some(ChapterListAtom::parse(cursor).await.map(AtomData::from)),
+            SGPD => Some(
+                SampleGroupDescriptionAtom::parse(cursor)
+                    .await
+                    .map(AtomData::from),
+            ),
+            SBGP => Some(SampleToGroupAtom::parse(cursor).await.map(AtomData::from)),
+            FREE | SKIP => Some(FreeAtom::parse(cursor).await.map(AtomData::from)),
             _ => None,
         }
         .transpose()
@@ -307,12 +332,12 @@ impl Parser {
                 // Skip container atoms in the stream, but process leaf atoms
                 if !is_container_atom(&parsed_atom.atom_type) && &parsed_atom.atom_type != META {
                     // Yield non-container atoms
-                    yield Ok((atom_type_fourcc, self.parse_atom_data(&parsed_atom)?));
+                    yield Ok((atom_type_fourcc, self.parse_atom_data(&parsed_atom).await?));
                 } else if is_container_atom(&parsed_atom.atom_type) || &parsed_atom.atom_type == META {
                     // For container atoms, recursively parse children and yield their content as they come
                     let (mut cursor, size) = if &parsed_atom.atom_type == META {
                         // Handle META atoms specially, ignoring the META-specific headers for now
-                        match self.parse_atom_data(&parsed_atom)? {
+                        match self.parse_atom_data(&parsed_atom).await? {
                             AtomData::Metadata(meta_atom) => {
                                 let size = meta_atom.child_data.len();
                                 (Cursor::new(meta_atom.child_data), size)
@@ -377,7 +402,7 @@ impl Parser {
                 .parse_next_atom(reader, length_limit, start_offset)
                 .await?
             {
-                let atom_data = self.parse_atom_data(&parsed_atom)?;
+                let atom_data = self.parse_atom_data(&parsed_atom).await?;
 
                 let mut atom = Atom {
                     atom_type: parsed_atom.atom_type.into(),

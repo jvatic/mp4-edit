@@ -1,10 +1,11 @@
 use anyhow::{anyhow, Context};
+use futures_io::AsyncRead;
 use std::{
     fmt,
     io::{Cursor, Read},
 };
 
-use crate::atom::util::parse_fixed_size_atom;
+use crate::{atom::util::parse_fixed_size_atom, parser::Parse};
 
 pub const MDHD: &[u8; 4] = b"mdhd";
 
@@ -48,28 +49,17 @@ pub struct MediaHeaderAtom {
     pub pre_defined: u16,
 }
 
-impl MediaHeaderAtom {
-    pub fn parse<R: Read>(reader: R) -> Result<Self, anyhow::Error> {
-        parse_mdhd_atom(reader)
-    }
-}
+impl Parse for MediaHeaderAtom {
+    async fn parse<R: AsyncRead + Unpin + Send>(reader: R) -> Result<Self, anyhow::Error> {
+        let (atom_type, data) = parse_fixed_size_atom(reader).await?;
+        if atom_type != MDHD {
+            return Err(anyhow!("Invalid atom type: {}", atom_type));
+        }
 
-impl TryFrom<&[u8]> for MediaHeaderAtom {
-    type Error = anyhow::Error;
-
-    fn try_from(data: &[u8]) -> Result<Self, Self::Error> {
-        let reader = Cursor::new(data);
-        parse_mdhd_atom(reader)
+        // Parse the data using existing sync function
+        let cursor = Cursor::new(data);
+        parse_mdhd_data(cursor)
     }
-}
-
-fn parse_mdhd_atom<R: Read>(reader: R) -> Result<MediaHeaderAtom, anyhow::Error> {
-    let (atom_type, data) = parse_fixed_size_atom(reader)?;
-    if atom_type != MDHD {
-        return Err(anyhow!("Invalid atom type: {}", atom_type));
-    }
-    let mut cursor = Cursor::new(data);
-    parse_mdhd_data(&mut cursor)
 }
 
 fn parse_mdhd_data<R: Read>(mut reader: R) -> Result<MediaHeaderAtom, anyhow::Error> {

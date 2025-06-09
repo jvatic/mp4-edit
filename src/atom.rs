@@ -27,8 +27,8 @@ pub use self::{
     ilst::ItemListAtom, mdhd::MediaHeaderAtom, meta::MetadataAtom, mvhd::MovieHeaderAtom,
     sbgp::SampleToGroupAtom, sgpd::SampleGroupDescriptionAtom, smhd::SoundMediaHeaderAtom,
     stco_co64::ChunkOffsetAtom, stsc::SampleToChunkAtom, stsd::SampleDescriptionTableAtom,
-    stsz::SampleSizeAtom, stts::TimeToSampleAtom, tkhd::TrackHeaderAtom,
-    tref::TrackReferenceAtom, util::FourCC,
+    stsz::SampleSizeAtom, stts::TimeToSampleAtom, tkhd::TrackHeaderAtom, tref::TrackReferenceAtom,
+    util::FourCC,
 };
 
 #[derive(Clone)]
