@@ -48,37 +48,6 @@ impl SampleSizeAtom {
     pub fn parse<R: Read>(reader: R) -> Result<Self, anyhow::Error> {
         parse_stsz_atom(reader)
     }
-
-    /// Returns the size of the sample at the given index (0-based)
-    pub fn get_sample_size(&self, sample_index: usize) -> Option<u32> {
-        if sample_index >= self.sample_count as usize {
-            return None;
-        }
-
-        if self.sample_size != 0 {
-            // All samples have the same size
-            Some(self.sample_size)
-        } else {
-            // Look up size in the table
-            self.entry_sizes.get(sample_index).copied()
-        }
-    }
-
-    /// Returns true if all samples have the same size
-    pub fn has_constant_sample_size(&self) -> bool {
-        self.sample_size != 0
-    }
-
-    /// Returns the total size of all samples in bytes
-    pub fn total_sample_size(&self) -> u64 {
-        if self.sample_size != 0 {
-            // All samples have the same size
-            self.sample_size as u64 * self.sample_count as u64
-        } else {
-            // Sum all individual sizes
-            self.entry_sizes.iter().map(|&size| size as u64).sum()
-        }
-    }
 }
 
 impl TryFrom<&[u8]> for SampleSizeAtom {
@@ -182,73 +151,6 @@ impl fmt::Display for SampleSizeAtom {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_parse_constant_sample_size() {
-        // Create test data: stsz atom with constant sample size
-        let mut data = Vec::new();
-
-        // Atom size (20 bytes total: 8 header + 12 data)
-        data.extend_from_slice(&20u32.to_be_bytes());
-        // Atom type "stsz"
-        data.extend_from_slice(b"stsz");
-        // Version (0) and flags (0)
-        data.extend_from_slice(&0u32.to_be_bytes());
-        // Sample size (1024 - constant for all samples)
-        data.extend_from_slice(&1024u32.to_be_bytes());
-        // Sample count (100)
-        data.extend_from_slice(&100u32.to_be_bytes());
-        // No table since sample size is constant
-
-        let stsz = SampleSizeAtom::parse(Cursor::new(data)).unwrap();
-
-        assert_eq!(stsz.version, 0);
-        assert_eq!(stsz.flags, 0);
-        assert_eq!(stsz.sample_size, 1024);
-        assert_eq!(stsz.sample_count, 100);
-        assert!(stsz.entry_sizes.is_empty());
-        assert!(stsz.has_constant_sample_size());
-        assert_eq!(stsz.get_sample_size(0), Some(1024));
-        assert_eq!(stsz.get_sample_size(50), Some(1024));
-        assert_eq!(stsz.get_sample_size(99), Some(1024));
-        assert_eq!(stsz.get_sample_size(100), None);
-        assert_eq!(stsz.total_sample_size(), 1024 * 100);
-    }
-
-    #[test]
-    fn test_parse_variable_sample_sizes() {
-        // Create test data: stsz atom with variable sample sizes
-        let mut data = Vec::new();
-
-        // Atom size (28 bytes total: 8 header + 20 data)
-        data.extend_from_slice(&28u32.to_be_bytes());
-        // Atom type "stsz"
-        data.extend_from_slice(b"stsz");
-        // Version (0) and flags (0)
-        data.extend_from_slice(&0u32.to_be_bytes());
-        // Sample size (0 - variable sizes)
-        data.extend_from_slice(&0u32.to_be_bytes());
-        // Sample count (2)
-        data.extend_from_slice(&2u32.to_be_bytes());
-        // Sample size table
-        data.extend_from_slice(&512u32.to_be_bytes()); // First sample: 512 bytes
-        data.extend_from_slice(&1024u32.to_be_bytes()); // Second sample: 1024 bytes
-
-        let stsz = SampleSizeAtom::parse(Cursor::new(data)).unwrap();
-
-        assert_eq!(stsz.version, 0);
-        assert_eq!(stsz.flags, 0);
-        assert_eq!(stsz.sample_size, 0);
-        assert_eq!(stsz.sample_count, 2);
-        assert_eq!(stsz.entry_sizes.len(), 2);
-        assert_eq!(stsz.entry_sizes[0], 512);
-        assert_eq!(stsz.entry_sizes[1], 1024);
-        assert!(!stsz.has_constant_sample_size());
-        assert_eq!(stsz.get_sample_size(0), Some(512));
-        assert_eq!(stsz.get_sample_size(1), Some(1024));
-        assert_eq!(stsz.get_sample_size(2), None);
-        assert_eq!(stsz.total_sample_size(), 512 + 1024);
-    }
 
     #[test]
     fn test_invalid_size() {

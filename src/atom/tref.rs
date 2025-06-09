@@ -44,27 +44,6 @@ impl TrackReference {
     pub fn is_type(&self, ref_type: &[u8; 4]) -> bool {
         self.reference_type == ref_type
     }
-
-    /// Check if this reference points to a specific track ID
-    pub fn references_track(&self, track_id: u32) -> bool {
-        self.track_ids.contains(&track_id)
-    }
-
-    /// Get a human-readable description of the reference type
-    pub fn type_description(&self) -> &'static str {
-        match &self.reference_type.0 {
-            reference_types::HINT => "Hint Track Reference",
-            reference_types::CHAP => "Chapter Track Reference",
-            reference_types::SUBT => "Subtitle Track Reference",
-            reference_types::ADSC => "Audio Description Reference",
-            reference_types::FORC => "Forced Subtitle Reference",
-            reference_types::KARO => "Karaoke Track Reference",
-            reference_types::META => "Metadata Track Reference",
-            reference_types::AUXV => "Auxiliary Video Reference",
-            reference_types::CLCP => "Closed Caption Reference",
-            _ => "Unknown Reference Type",
-        }
-    }
 }
 
 impl fmt::Display for TrackReference {

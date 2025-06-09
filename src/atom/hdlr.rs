@@ -98,51 +98,6 @@ impl HandlerReferenceAtom {
     pub fn parse<R: Read>(reader: R) -> Result<Self, anyhow::Error> {
         parse_hdlr_atom(reader)
     }
-
-    /// Check if this handler is for video media
-    pub fn is_video_handler(&self) -> bool {
-        self.handler_type == HandlerType::Video
-    }
-
-    /// Check if this handler is for audio media
-    pub fn is_audio_handler(&self) -> bool {
-        self.handler_type == HandlerType::Audio
-    }
-
-    /// Check if this handler is for text/subtitle media
-    pub fn is_text_handler(&self) -> bool {
-        matches!(self.handler_type, HandlerType::Text | HandlerType::Subtitle)
-    }
-
-    /// Check if this handler is for metadata
-    pub fn is_meta_handler(&self) -> bool {
-        self.handler_type == HandlerType::Meta
-    }
-
-    /// Get the handler type as a 4-character code string
-    pub fn handler_type_string(&self) -> String {
-        let bytes = self.handler_type.to_bytes();
-        std::str::from_utf8(&bytes).unwrap_or("????").to_string()
-    }
-
-    /// Get the component type as a 4-character code string
-    pub fn component_type_string(&self) -> String {
-        std::str::from_utf8(&self.component_type)
-            .unwrap_or("????")
-            .to_string()
-    }
-
-    /// Get the component manufacturer as a 4-character code string
-    pub fn component_manufacturer_string(&self) -> String {
-        std::str::from_utf8(&self.component_manufacturer)
-            .unwrap_or("????")
-            .to_string()
-    }
-
-    /// Check if the handler has a valid name
-    pub fn has_name(&self) -> bool {
-        !self.name.is_empty()
-    }
 }
 
 impl TryFrom<&[u8]> for HandlerReferenceAtom {
@@ -289,28 +244,6 @@ mod tests {
         assert!(!unknown_handler.is_media_handler());
         assert_eq!(unknown_handler.as_str(), "Unknown");
         assert_eq!(unknown_handler.to_bytes(), *b"test");
-    }
-
-    #[test]
-    fn test_handler_reference_methods() {
-        let handler = HandlerReferenceAtom {
-            version: 0,
-            flags: [0, 0, 0],
-            component_type: [0, 0, 0, 0],
-            handler_type: HandlerType::Video,
-            component_manufacturer: *b"appl",
-            component_flags: 0,
-            component_flags_mask: 0,
-            name: "Video Handler".to_string(),
-        };
-
-        assert!(handler.is_video_handler());
-        assert!(!handler.is_audio_handler());
-        assert!(!handler.is_text_handler());
-        assert!(!handler.is_meta_handler());
-        assert_eq!(handler.handler_type_string(), "vide");
-        assert_eq!(handler.component_manufacturer_string(), "appl");
-        assert!(handler.has_name());
     }
 
     #[test]

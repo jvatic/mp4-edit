@@ -46,15 +46,6 @@ impl MovieHeaderAtom {
     pub fn parse<R: Read>(reader: R) -> Result<Self, anyhow::Error> {
         parse_mvhd_atom(reader)
     }
-
-    /// Convert duration to seconds using the timescale
-    pub fn duration_seconds(&self) -> f64 {
-        if self.timescale == 0 {
-            0.0
-        } else {
-            self.duration as f64 / self.timescale as f64
-        }
-    }
 }
 
 impl TryFrom<&[u8]> for MovieHeaderAtom {

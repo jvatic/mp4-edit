@@ -38,26 +38,6 @@ impl TrackHeaderAtom {
     pub fn parse<R: Read>(reader: R) -> Result<Self, anyhow::Error> {
         parse_tkhd_atom(reader)
     }
-
-    /// Check if track is enabled (bit 0 of flags)
-    pub fn is_enabled(&self) -> bool {
-        (self.flags[2] & 0x01) != 0
-    }
-
-    /// Check if track is used in movie (bit 1 of flags)
-    pub fn is_in_movie(&self) -> bool {
-        (self.flags[2] & 0x02) != 0
-    }
-
-    /// Check if track is used in preview (bit 2 of flags)
-    pub fn is_in_preview(&self) -> bool {
-        (self.flags[2] & 0x04) != 0
-    }
-
-    /// Check if track is used in poster (bit 3 of flags)
-    pub fn is_in_poster(&self) -> bool {
-        (self.flags[2] & 0x08) != 0
-    }
 }
 
 impl TryFrom<&[u8]> for TrackHeaderAtom {
