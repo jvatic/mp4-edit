@@ -9,6 +9,7 @@ pub mod ilst;
 pub mod mdhd;
 pub mod meta;
 pub mod mvhd;
+pub mod sbgp;
 pub mod sgpd;
 pub mod smhd;
 pub mod stco_co64;
@@ -24,9 +25,10 @@ pub use self::{
     chpl::ChapterListAtom, dref::DataReferenceAtom, elst::EditListAtom, free::FreeAtom,
     ftyp::FileTypeAtom, gmhd::GenericMediaHeaderAtom, hdlr::HandlerReferenceAtom,
     ilst::ItemListAtom, mdhd::MediaHeaderAtom, meta::MetadataAtom, mvhd::MovieHeaderAtom,
-    sgpd::SampleGroupDescriptionAtom, smhd::SoundMediaHeaderAtom, stco_co64::ChunkOffsetAtom,
-    stsc::SampleToChunkAtom, stsd::SampleDescriptionTableAtom, stsz::SampleSizeAtom,
-    stts::TimeToSampleAtom, tkhd::TrackHeaderAtom, tref::TrackReferenceAtom, util::FourCC,
+    sbgp::SampleToGroupAtom, sgpd::SampleGroupDescriptionAtom, smhd::SoundMediaHeaderAtom,
+    stco_co64::ChunkOffsetAtom, stsc::SampleToChunkAtom, stsd::SampleDescriptionTableAtom,
+    stsz::SampleSizeAtom, stts::TimeToSampleAtom, tkhd::TrackHeaderAtom,
+    tref::TrackReferenceAtom, util::FourCC,
 };
 
 #[derive(Clone)]
@@ -67,6 +69,7 @@ pub enum AtomData {
     ChunkOffset(ChunkOffsetAtom),
     TimeToSample(TimeToSampleAtom),
     SampleToChunk(SampleToChunkAtom),
+    SampleToGroup(SampleToGroupAtom),
     SampleGroupDescription(SampleGroupDescriptionAtom),
     ChapterList(ChapterListAtom),
     Free(FreeAtom),
@@ -173,6 +176,12 @@ impl From<TimeToSampleAtom> for AtomData {
 impl From<SampleToChunkAtom> for AtomData {
     fn from(atom: SampleToChunkAtom) -> Self {
         AtomData::SampleToChunk(atom)
+    }
+}
+
+impl From<SampleToGroupAtom> for AtomData {
+    fn from(atom: SampleToGroupAtom) -> Self {
+        AtomData::SampleToGroup(atom)
     }
 }
 

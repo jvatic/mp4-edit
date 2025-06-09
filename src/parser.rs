@@ -15,6 +15,7 @@ use crate::{
         mdhd::{MediaHeaderAtom, MDHD},
         meta::{MetadataAtom, META},
         mvhd::{MovieHeaderAtom, MVHD},
+        sbgp::{SampleToGroupAtom, SBGP},
         sgpd::{SampleGroupDescriptionAtom, SGPD},
         smhd::{SoundMediaHeaderAtom, SMHD},
         stco_co64::{ChunkOffsetAtom, CO64, STCO},
@@ -359,6 +360,15 @@ impl Parser {
                     ),
                     SGPD => Some(
                         SampleGroupDescriptionAtom::try_from(complete_atom_data.as_slice())
+                            .map_err(|e| ParseError {
+                                kind: ParseErrorKind::AtomParsing,
+                                location: Some((atom_offset as usize, complete_atom_data.len())),
+                                source: Some(e.context(atom_type_fourcc).into()),
+                            })?
+                            .into(),
+                    ),
+                    SBGP => Some(
+                        SampleToGroupAtom::try_from(complete_atom_data.as_slice())
                             .map_err(|e| ParseError {
                                 kind: ParseErrorKind::AtomParsing,
                                 location: Some((atom_offset as usize, complete_atom_data.len())),
