@@ -5,6 +5,7 @@ pub mod free;
 pub mod ftyp;
 pub mod gmhd;
 pub mod hdlr;
+pub mod ilst;
 pub mod mdhd;
 pub mod meta;
 pub mod mvhd;
@@ -21,10 +22,10 @@ mod util;
 pub use self::{
     chpl::ChapterListAtom, dref::DataReferenceAtom, elst::EditListAtom, free::FreeAtom,
     ftyp::FileTypeAtom, gmhd::GenericMediaHeaderAtom, hdlr::HandlerReferenceAtom,
-    mdhd::MediaHeaderAtom, meta::MetadataAtom, mvhd::MovieHeaderAtom, smhd::SoundMediaHeaderAtom,
-    stco_co64::ChunkOffsetAtom, stsc::SampleToChunkAtom, stsd::SampleDescriptionTableAtom,
-    stsz::SampleSizeAtom, stts::TimeToSampleAtom, tkhd::TrackHeaderAtom, tref::TrackReferenceAtom,
-    util::FourCC,
+    ilst::ItemListAtom, mdhd::MediaHeaderAtom, meta::MetadataAtom, mvhd::MovieHeaderAtom,
+    smhd::SoundMediaHeaderAtom, stco_co64::ChunkOffsetAtom, stsc::SampleToChunkAtom,
+    stsd::SampleDescriptionTableAtom, stsz::SampleSizeAtom, stts::TimeToSampleAtom,
+    tkhd::TrackHeaderAtom, tref::TrackReferenceAtom, util::FourCC,
 };
 
 #[derive(Clone)]
@@ -55,6 +56,7 @@ pub enum AtomData {
     MediaHeader(MediaHeaderAtom),
     HandlerReference(HandlerReferenceAtom),
     GenericMediaHeader(GenericMediaHeaderAtom),
+    ItemList(ItemListAtom),
     Metadata(MetadataAtom),
     SoundMediaHeader(SoundMediaHeaderAtom),
     SampleDescriptionTable(SampleDescriptionTableAtom),
@@ -109,6 +111,12 @@ impl From<HandlerReferenceAtom> for AtomData {
 impl From<GenericMediaHeaderAtom> for AtomData {
     fn from(atom: GenericMediaHeaderAtom) -> Self {
         AtomData::GenericMediaHeader(atom)
+    }
+}
+
+impl From<ItemListAtom> for AtomData {
+    fn from(atom: ItemListAtom) -> Self {
+        AtomData::ItemList(atom)
     }
 }
 
