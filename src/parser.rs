@@ -143,6 +143,8 @@ impl Parser {
             return Ok(None);
         }
 
+        let atom_offset = self.current_offset as u64;
+
         // Try to read the atom header (size and type)
         let mut header = [0u8; 8];
         match reader.read_exact(&mut header).await {
@@ -196,8 +198,6 @@ impl Parser {
         } else {
             0
         };
-
-        let atom_offset = (self.current_offset - header_size as usize) as u64;
 
         // Read the atom content
         let content_data = self.read_data(reader, content_size).await?;
