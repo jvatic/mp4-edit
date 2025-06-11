@@ -2,8 +2,10 @@ use anyhow::Context;
 use std::env;
 use tokio::fs;
 use tokio_util::compat::TokioAsyncReadCompatExt;
+use futures_util::stream::StreamExt;
+use futures_util::pin_mut;
 
-use mp4_parser::{parse_mp4, Atom, AtomData};
+use mp4_parser::{Parser, ParseEvent, Atom, AtomData};
 
 /// Format file size in human-readable format
 fn format_size(size: u64) -> String {
@@ -31,63 +33,104 @@ fn get_atom_summary(data: &Option<AtomData>) -> String {
     }
 }
 
-/// Recursively print [Atom]s with indentation to show nesting along with offset and size details.
-fn print_atoms(atoms: &[Atom], indent: usize) {
-    if indent == 0 {
-        println!("\n\x1b[1;36m╭─ MP4 Atom Structure ──────────────────────────────────────────────────────────────\x1b[0m");
-        println!("\x1b[1;36m│\x1b[0m");
-        println!(
-            "\x1b[1;36m│\x1b[0m \x1b[1;33m{:<20} │ {:<23} │ {:<10} │ {:<30}\x1b[0m",
-            "Atom Type", "Offset Range", "Size", "Summary"
-        );
-        println!(
-            "\x1b[1;36m│\x1b[0m \x1b[2m{:─<20}─┼─{:─<23}─┼─{:─<10}─┼─{:─<30}\x1b[0m",
-            "", "", "", ""
-        );
-    }
+/// Print atom with proper formatting and indentation
+fn print_atom(atom: &Atom, indent: usize) {
+    let indent_str = if indent > 0 {
+        format!("{:<width$}", "", width = indent)
+    } else {
+        String::new()
+    };
 
-    for atom in atoms {
-        let indent_str = if indent > 0 {
-            format!("{:<width$}", "", width = indent)
-        } else {
-            String::new()
-        };
+    let atom_display = format!("{}{}", indent_str, atom.atom_type);
+    let size_display = format_size(atom.size);
+    let offset_display = format!(
+        "0x{:08x}..=0x{:08x}",
+        atom.offset,
+        atom.offset + atom.size - 1
+    );
+    let summary = get_atom_summary(&atom.data);
 
-        let atom_display = format!("{}{}", indent_str, atom.atom_type);
-        let size_display = format_size(atom.size);
-        let offset_display = format!(
-            "0x{:08x}..=0x{:08x}",
-            atom.offset,
-            atom.offset + atom.size - 1
-        );
-        let summary = get_atom_summary(&atom.data);
+    // Color coding based on atom type
+    let atom_color = match atom.atom_type.to_string().as_str() {
+        "ftyp" | "styp" => "\x1b[1;32m",          // Green for file type
+        "moov" | "trak" | "mdia" => "\x1b[1;34m", // Blue for containers
+        "mvhd" | "tkhd" | "mdhd" => "\x1b[1;35m", // Magenta for headers
+        "stbl" | "stts" | "stsc" | "stsz" | "stco" | "co64" => "\x1b[1;31m", // Red for sample tables
+        _ => "\x1b[0m",                                                      // Default
+    };
 
-        // Color coding based on atom type
-        let atom_color = match atom.atom_type.to_string().as_str() {
-            "ftyp" | "styp" => "\x1b[1;32m",          // Green for file type
-            "moov" | "trak" | "mdia" => "\x1b[1;34m", // Blue for containers
-            "mvhd" | "tkhd" | "mdhd" => "\x1b[1;35m", // Magenta for headers
-            "stbl" | "stts" | "stsc" | "stsz" | "stco" | "co64" => "\x1b[1;31m", // Red for sample tables
-            _ => "\x1b[0m",                                                      // Default
-        };
+    println!("\x1b[1;36m│\x1b[0m {}{:<20}\x1b[0m │ \x1b[2m{:<23}\x1b[0m │ \x1b[1m{:<10}\x1b[0m │ \x1b[2m{:<30}\x1b[0m",
+        atom_color, atom_display, offset_display, size_display, summary);
+}
 
-        if indent == 0 {
-            println!("\x1b[1;36m│\x1b[0m {}{:<20}\x1b[0m │ \x1b[2m{:<23}\x1b[0m │ \x1b[1m{:<10}\x1b[0m │ \x1b[2m{:<30}\x1b[0m",
-                atom_color, atom_display, offset_display, size_display, summary);
-        } else {
-            println!("\x1b[1;36m│\x1b[0m {}{:<20}\x1b[0m │ \x1b[2m{:<23}\x1b[0m │ \x1b[1m{:<10}\x1b[0m │ \x1b[2m{:<30}\x1b[0m",
-                atom_color, atom_display, offset_display, size_display, summary);
+/// Print table header
+fn print_table_header() {
+    println!("\n\x1b[1;36m╭─ MP4 Atom Structure ──────────────────────────────────────────────────────────────\x1b[0m");
+    println!("\x1b[1;36m│\x1b[0m");
+    println!(
+        "\x1b[1;36m│\x1b[0m \x1b[1;33m{:<20} │ {:<23} │ {:<10} │ {:<30}\x1b[0m",
+        "Atom Type", "Offset Range", "Size", "Summary"
+    );
+    println!(
+        "\x1b[1;36m│\x1b[0m \x1b[2m{:─<20}─┼─{:─<23}─┼─{:─<10}─┼─{:─<30}\x1b[0m",
+        "", "", "", ""
+    );
+}
+
+/// Print table footer
+fn print_table_footer() {
+    println!("\x1b[1;36m│\x1b[0m");
+    println!("\x1b[1;36m╰────────────────────────────────────────────────────────────────────────────────────\x1b[0m\n");
+}
+
+/// Print atoms directly from stream events
+async fn print_atoms_from_stream(
+    mut parser: Parser,
+    reader: impl futures_io::AsyncRead + Unpin,
+) -> anyhow::Result<usize> {
+    let stream = parser.parse_stream(reader);
+    pin_mut!(stream);
+
+    let mut indent_level = 0;
+    let mut atom_count = 0;
+    let mut first_atom = true;
+
+    while let Some(event) = stream.next().await {
+        let event = event.context("Failed to parse stream event")?;
+
+        match event {
+            ParseEvent::EnterContainer(atom) => {
+                if first_atom {
+                    print_table_header();
+                    first_atom = false;
+                }
+                
+                print_atom(&atom, indent_level);
+                indent_level += 1;
+                atom_count += 1;
+            }
+            ParseEvent::Leaf(atom) => {
+                if first_atom {
+                    print_table_header();
+                    first_atom = false;
+                }
+                
+                print_atom(&atom, indent_level);
+                atom_count += 1;
+            }
+            ParseEvent::ExitContainer => {
+                if indent_level > 0 {
+                    indent_level -= 1;
+                }
+            }
         }
-
-        if !atom.children.is_empty() {
-            print_atoms(&atom.children, indent + 1);
-        }
     }
 
-    if indent == 0 {
-        println!("\x1b[1;36m│\x1b[0m");
-        println!("\x1b[1;36m╰────────────────────────────────────────────────────────────────────────────────────\x1b[0m\n");
+    if !first_atom {
+        print_table_footer();
     }
+
+    Ok(atom_count)
 }
 
 #[tokio::main]
@@ -99,27 +142,18 @@ async fn main() -> anyhow::Result<()> {
     }
     let file = fs::File::open(&args[1]).await?;
 
-    let atoms = parse_mp4(file.compat())
+    println!("\x1b[1;32m🎬 Analyzing MP4 file: {}\x1b[0m", &args[1]);
+    
+    let parser = Parser::new();
+    let atom_count = print_atoms_from_stream(parser, file.compat())
         .await
         .context("Failed to parse MP4 file")?;
 
-    println!("\x1b[1;32m🎬 Analyzing MP4 file: {}\x1b[0m", &args[1]);
-    print_atoms(&atoms, 0);
-
     // Print summary statistics
-    let total_atoms = count_atoms(&atoms);
     let file_size = fs::metadata(&args[1]).await?.len();
     println!("\x1b[1;33m📊 Summary:\x1b[0m");
-    println!("   Total atoms: \x1b[1m{}\x1b[0m", total_atoms);
+    println!("   Total atoms: \x1b[1m{}\x1b[0m", atom_count);
     println!("   File size: \x1b[1m{}\x1b[0m", format_size(file_size));
 
     Ok(())
-}
-
-/// Count total number of atoms recursively
-fn count_atoms(atoms: &[Atom]) -> usize {
-    atoms
-        .iter()
-        .map(|atom| 1 + count_atoms(&atom.children))
-        .sum()
 }
