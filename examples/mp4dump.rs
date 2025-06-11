@@ -1,11 +1,14 @@
 use anyhow::Context;
-use std::env;
-use tokio::fs;
-use tokio_util::compat::TokioAsyncReadCompatExt;
-use futures_util::stream::StreamExt;
 use futures_util::pin_mut;
+use futures_util::stream::StreamExt;
+use std::env;
+use tokio::{
+    fs,
+    io::{self, AsyncRead},
+};
+use tokio_util::compat::TokioAsyncReadCompatExt;
 
-use mp4_parser::{Parser, ParseEvent, Atom, AtomData};
+use mp4_parser::{Atom, AtomData, ParseEvent, Parser};
 
 /// Format file size in human-readable format
 fn format_size(size: u64) -> String {
@@ -104,7 +107,7 @@ async fn print_atoms_from_stream(
                     print_table_header();
                     first_atom = false;
                 }
-                
+
                 print_atom(&atom, indent_level);
                 indent_level += 1;
                 atom_count += 1;
@@ -114,7 +117,7 @@ async fn print_atoms_from_stream(
                     print_table_header();
                     first_atom = false;
                 }
-                
+
                 print_atom(&atom, indent_level);
                 atom_count += 1;
             }
@@ -133,6 +136,15 @@ async fn print_atoms_from_stream(
     Ok(atom_count)
 }
 
+async fn open_input(input_name: &str) -> anyhow::Result<Box<dyn AsyncRead + Unpin + Send>> {
+    if input_name == "-" {
+        Ok(Box::new(io::stdin()))
+    } else {
+        let file = fs::File::open(input_name).await?;
+        Ok(Box::new(file))
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -140,10 +152,10 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("Usage: {} <mp4_filename>", args[0]);
         std::process::exit(1);
     }
-    let file = fs::File::open(&args[1]).await?;
+    let file = open_input(args[1].as_str()).await?;
 
     println!("\x1b[1;32m🎬 Analyzing MP4 file: {}\x1b[0m", &args[1]);
-    
+
     let parser = Parser::new();
     let atom_count = print_atoms_from_stream(parser, file.compat())
         .await
