@@ -1,8 +1,11 @@
 use anyhow::{anyhow, Context};
 use futures_io::AsyncRead;
-use std::io::{Cursor, Read};
+use std::io::Read;
 
-use crate::{atom::util::parse_fixed_size_atom, parser::Parse};
+use crate::{
+    atom::{util::async_to_sync_read, FourCC},
+    parser::Parse,
+};
 
 pub const SMHD: &[u8; 4] = b"smhd";
 
@@ -20,15 +23,14 @@ pub struct SoundMediaHeaderAtom {
 }
 
 impl Parse for SoundMediaHeaderAtom {
-    async fn parse<R: AsyncRead + Unpin + Send>(reader: R) -> Result<Self, anyhow::Error> {
-        let (atom_type, data) = parse_fixed_size_atom(reader).await?;
+    async fn parse<R: AsyncRead + Unpin + Send>(
+        atom_type: FourCC,
+        reader: R,
+    ) -> Result<Self, anyhow::Error> {
         if atom_type != SMHD {
             return Err(anyhow!("Invalid atom type: {}", atom_type));
         }
-
-        // Parse the data using existing sync function
-        let cursor = Cursor::new(data);
-        parse_smhd_data(cursor)
+        parse_smhd_data(async_to_sync_read(reader).await?)
     }
 }
 
