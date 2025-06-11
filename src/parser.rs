@@ -284,7 +284,7 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
                 let atom_type_fourcc = FourCC::from(parsed_atom.atom_type);
                 let size = parsed_atom.size;
 
-                if !is_container_atom(&parsed_atom.atom_type) && parsed_atom.atom_type.deref() != META {
+                if !is_container_atom(&parsed_atom.atom_type) {
                     // Yield leaf atoms
                     let offset = parsed_atom.offset;
                     let atom_data = self.parse_atom_data(parsed_atom).await?;
@@ -295,7 +295,7 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
                         data: Some(atom_data),
                     };
                     yield Ok(ParseEvent::Leaf(atom));
-                } else if is_container_atom(&parsed_atom.atom_type) || parsed_atom.atom_type.deref() == META {
+                } else if is_container_atom(&parsed_atom.atom_type) {
                     // For container atoms, emit EnterContainer, then recursively emit children, then ExitContainer
                     let container_atom = Atom {
                         atom_type: atom_type_fourcc,
@@ -351,6 +351,7 @@ fn is_container_atom(atom_type: &[u8; 4]) -> bool {
             | b"traf"
             | b"sinf"
             | b"schi"
+            | b"meta"
     )
 }
 
