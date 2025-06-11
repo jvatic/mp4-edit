@@ -43,10 +43,8 @@ impl std::fmt::Debug for RawData {
 #[derive(Debug, Clone)]
 pub struct Atom {
     pub atom_type: FourCC,
-    pub size: u64,
     pub offset: u64,
-    // Optionally, store child atoms if any
-    pub children: Vec<Atom>,
+    pub size: u64,
     pub data: Option<AtomData>,
 }
 
