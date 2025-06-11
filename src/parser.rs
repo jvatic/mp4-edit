@@ -202,6 +202,7 @@ impl Parser {
         let atom_type = FourCC(atom_type);
 
         // Read the atom content
+        // TODO: refactor to use `take` (requires ensuring self.current_offset get's updated correctly)
         let content_data = self.read_data(reader, data_size as usize).await?;
 
         let total_size = header_size + data_size;
@@ -352,14 +353,7 @@ impl Parser {
                         }
                     }
 
-
-
                     yield Ok(ParseEvent::ExitContainer);
-                }
-
-                // Size can be 0 (meaning "rest of file") so we need to prevent infinite loop.
-                if size == 0 {
-                    break;
                 }
             }
         }
