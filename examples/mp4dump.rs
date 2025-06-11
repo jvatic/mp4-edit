@@ -87,11 +87,10 @@ fn print_table_footer() {
 }
 
 /// Print atoms directly from stream events
-async fn print_atoms_from_stream(
-    mut parser: Parser,
-    reader: impl futures_io::AsyncRead + Unpin,
+async fn print_atoms_from_stream<R: futures_io::AsyncRead + Unpin + Send>(
+    mut parser: Parser<R>,
 ) -> anyhow::Result<usize> {
-    let stream = parser.parse_stream(reader);
+    let stream = parser.parse_stream();
     pin_mut!(stream);
 
     let mut indent_level = 0;
@@ -156,8 +155,8 @@ async fn main() -> anyhow::Result<()> {
 
     println!("\x1b[1;32m🎬 Analyzing MP4 file: {}\x1b[0m", &args[1]);
 
-    let parser = Parser::new();
-    let atom_count = print_atoms_from_stream(parser, file.compat())
+    let parser = Parser::new(file.compat());
+    let atom_count = print_atoms_from_stream(parser)
         .await
         .context("Failed to parse MP4 file")?;
 

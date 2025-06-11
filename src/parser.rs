@@ -17,7 +17,7 @@ use crate::{
         hdlr::{HandlerReferenceAtom, HDLR},
         ilst::{ItemListAtom, ILST},
         mdhd::{MediaHeaderAtom, MDHD},
-        meta::{MetadataAtom, META},
+        meta::{META, META_VERSION_FLAGS_SIZE},
         mvhd::{MovieHeaderAtom, MVHD},
         sbgp::{SampleToGroupAtom, SBGP},
         sgpd::{SampleGroupDescriptionAtom, SGPD},
@@ -80,7 +80,8 @@ pub enum ParseEvent {
     ExitContainer,
 }
 
-pub struct Parser {
+pub struct Parser<R> {
+    reader: R,
     current_offset: usize,
 }
 
@@ -88,34 +89,26 @@ struct ParsedAtom {
     atom_type: FourCC,
     size: u64,
     offset: u64,
-    content_data: Vec<u8>,
+    content_size: usize,
 }
 
-impl Default for Parser {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Parser {
-    pub fn new() -> Self {
-        Parser { current_offset: 0 }
+impl<R: AsyncRead + Unpin + Send> Parser<R> {
+    pub fn new(reader: R) -> Self {
+        Parser {
+            reader,
+            current_offset: 0,
+        }
     }
 
-    pub fn parse_stream<'a, R: AsyncRead + Unpin + 'a>(
+    pub fn parse_stream<'a>(
         &'a mut self,
-        reader: R,
     ) -> impl Stream<Item = Result<ParseEvent, ParseError>> + 'a {
         self.current_offset = 0;
-        self.parse_atom_stream(reader, None)
+        self.parse_atom_stream(None)
     }
 
-    async fn read_exact<R: AsyncRead + Unpin>(
-        &mut self,
-        reader: &mut R,
-        buf: &mut [u8],
-    ) -> Result<(), ParseError> {
-        reader.read_exact(buf).await.map_err(|e| ParseError {
+    async fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), ParseError> {
+        self.reader.read_exact(buf).await.map_err(|e| ParseError {
             kind: ParseErrorKind::Io,
             location: Some((self.current_offset, buf.len())),
             source: Some(Box::new(e)),
@@ -124,19 +117,14 @@ impl Parser {
         Ok(())
     }
 
-    async fn read_data<R: AsyncRead + Unpin>(
-        &mut self,
-        reader: &mut R,
-        size: usize,
-    ) -> Result<Vec<u8>, ParseError> {
+    async fn read_data(&mut self, size: usize) -> Result<Vec<u8>, ParseError> {
         let mut data = vec![0u8; size];
-        self.read_exact(reader, &mut data).await?;
+        self.read_exact(&mut data).await?;
         Ok(data)
     }
 
-    async fn parse_next_atom<R: AsyncRead + Unpin>(
+    async fn parse_next_atom(
         &mut self,
-        mut reader: &mut R,
         length_limit: Option<usize>,
         start_offset: usize,
     ) -> Result<Option<ParsedAtom>, ParseError> {
@@ -148,7 +136,7 @@ impl Parser {
 
         // Try to read the atom header (size and type) - handle EOF gracefully
         let mut header = [0u8; 8];
-        match reader.read_exact(&mut header).await {
+        match self.reader.read_exact(&mut header).await {
             Ok(()) => {
                 self.current_offset += 8;
             }
@@ -171,7 +159,7 @@ impl Parser {
         let (header_size, data_size) = if size == 1 {
             // Extended size format
             let mut extended_size = [0u8; 8];
-            self.read_exact(&mut reader, &mut extended_size).await?;
+            self.read_exact(&mut extended_size).await?;
             let full_size = u64::from_be_bytes(extended_size);
             if full_size < 16 {
                 return Err(ParseError {
@@ -201,22 +189,19 @@ impl Parser {
 
         let atom_type = FourCC(atom_type);
 
-        // Read the atom content
-        // TODO: refactor to use `take` (requires ensuring self.current_offset get's updated correctly)
-        let content_data = self.read_data(reader, data_size as usize).await?;
-
         let total_size = header_size + data_size;
 
         Ok(Some(ParsedAtom {
             atom_type,
             size: total_size,
             offset: atom_offset,
-            content_data,
+            content_size: data_size as usize,
         }))
     }
 
-    async fn parse_atom_data(&self, parsed_atom: ParsedAtom) -> Result<AtomData, ParseError> {
-        let cursor = Cursor::new(parsed_atom.content_data);
+    async fn parse_atom_data(&mut self, parsed_atom: ParsedAtom) -> Result<AtomData, ParseError> {
+        let content_data = self.read_data(parsed_atom.content_size as usize).await?;
+        let cursor = Cursor::new(content_data);
         let atom_type = parsed_atom.atom_type.clone();
         let atom_data = match atom_type.deref() {
             FTYP => FileTypeAtom::parse(atom_type, cursor)
@@ -238,9 +223,6 @@ impl Parser {
                 .await
                 .map(AtomData::from),
             SMHD => SoundMediaHeaderAtom::parse(atom_type, cursor)
-                .await
-                .map(AtomData::from),
-            META => MetadataAtom::parse(atom_type, cursor)
                 .await
                 .map(AtomData::from),
             ILST => ItemListAtom::parse(atom_type, cursor)
@@ -291,15 +273,14 @@ impl Parser {
         Ok(atom_data)
     }
 
-    fn parse_atom_stream<'a, R: AsyncRead + Unpin + 'a>(
+    fn parse_atom_stream<'a>(
         &'a mut self,
-        mut reader: R,
         length_limit: Option<usize>,
     ) -> impl Stream<Item = Result<ParseEvent, ParseError>> + 'a {
         async_stream::stream! {
             let start_offset = self.current_offset;
 
-            while let Some(parsed_atom) = self.parse_next_atom(&mut reader, length_limit, start_offset).await? {
+            while let Some(parsed_atom) = self.parse_next_atom(length_limit, start_offset).await? {
                 let atom_type_fourcc = FourCC::from(parsed_atom.atom_type);
                 let size = parsed_atom.size;
 
@@ -324,24 +305,16 @@ impl Parser {
                     };
                     yield Ok(ParseEvent::EnterContainer(container_atom));
 
-                    let (cursor, size) = if parsed_atom.atom_type.deref() == META {
+                    let size = if parsed_atom.atom_type.deref() == META {
                         // Handle META atoms specially, ignoring the META-specific headers for now
-                        match self.parse_atom_data(parsed_atom).await? {
-                            AtomData::Metadata(meta_atom) => {
-                                let size = meta_atom.child_data.len();
-                                (Cursor::new(meta_atom.child_data), size)
-                            }
-                            _ => {
-                                unreachable!("META atoms should always contain [AtomData::Metadata]");
-                            }
-                        }
+                        self.read_data(META_VERSION_FLAGS_SIZE).await?;
+                        parsed_atom.content_size - META_VERSION_FLAGS_SIZE
                     } else {
-                        let size = parsed_atom.content_data.len();
-                        (Cursor::new(parsed_atom.content_data), size)
+                        parsed_atom.content_size
                     };
 
                     // Recursively parse children and emit their events
-                    let mut child_stream = Box::pin(self.parse_atom_stream(cursor, Some(size)));
+                    let mut child_stream = Box::pin(self.parse_atom_stream(Some(size)));
 
                     while let Some(child_event) = child_stream.as_mut().next().await {
                         match child_event {
@@ -399,8 +372,8 @@ mod tests {
         data.extend_from_slice(&0u32.to_be_bytes()); // Minor version
         data.extend_from_slice(b"mp41"); // Compatible brand
 
-        let mut parser = Parser::new();
-        let stream = parser.parse_stream(data.as_slice());
+        let mut parser = Parser::new(data.as_slice());
+        let stream = parser.parse_stream();
         pin_mut!(stream);
 
         let mut atoms = Vec::new();
@@ -428,8 +401,8 @@ mod tests {
         data.extend_from_slice(b"hello!"); // 6 bytes of content (24 - 16 - 2 padding)
         data.extend_from_slice(&[0u8; 2]); // padding to make exact size
 
-        let mut parser = Parser::new();
-        let stream = parser.parse_stream(data.as_slice());
+        let mut parser = Parser::new(data.as_slice());
+        let stream = parser.parse_stream();
         pin_mut!(stream);
 
         let mut atoms = Vec::new();
@@ -462,8 +435,8 @@ mod tests {
         data.extend_from_slice(b"tes2"); // Type: tes2
         data.extend_from_slice(b"data5678"); // 8 bytes content
 
-        let mut parser = Parser::new();
-        let stream = parser.parse_stream(data.as_slice());
+        let mut parser = Parser::new(data.as_slice());
+        let stream = parser.parse_stream();
         pin_mut!(stream);
 
         let mut atoms = Vec::new();
@@ -499,8 +472,8 @@ mod tests {
         data.extend_from_slice(b"chld"); // Type: chld (4 bytes)
         data.extend_from_slice(b"content!"); // 8 bytes content
 
-        let mut parser = Parser::new();
-        let stream = parser.parse_stream(data.as_slice());
+        let mut parser = Parser::new(data.as_slice());
+        let stream = parser.parse_stream();
         pin_mut!(stream);
 
         let mut events = Vec::new();
@@ -541,8 +514,8 @@ mod tests {
         // Create data that's too short for a complete atom header
         let data = vec![0u8; 4]; // Only 4 bytes, need at least 8
 
-        let mut parser = Parser::new();
-        let stream = parser.parse_stream(data.as_slice());
+        let mut parser = Parser::new(data.as_slice());
+        let stream = parser.parse_stream();
         pin_mut!(stream);
 
         let mut event_count = 0;
@@ -563,8 +536,8 @@ mod tests {
         data.extend_from_slice(&4u32.to_be_bytes()); // Size: 4 bytes (smaller than 8-byte header)
         data.extend_from_slice(b"test"); // Type: test
 
-        let mut parser = Parser::new();
-        let stream = parser.parse_stream(data.as_slice());
+        let mut parser = Parser::new(data.as_slice());
+        let stream = parser.parse_stream();
         pin_mut!(stream);
 
         // Should produce an error for invalid size
@@ -593,8 +566,8 @@ mod tests {
         data.extend_from_slice(b"tes2"); // Type: tes2
         data.extend_from_slice(b"content2"); // 8 bytes content
 
-        let mut parser = Parser::new();
-        let stream = parser.parse_stream(data.as_slice());
+        let mut parser = Parser::new(data.as_slice());
+        let stream = parser.parse_stream();
         pin_mut!(stream);
 
         // Collect all stream items
@@ -648,8 +621,8 @@ mod tests {
         data.extend_from_slice(b"chd2"); // Type: chd2
         data.extend_from_slice(child2_data); // Content
 
-        let mut parser = Parser::new();
-        let stream = parser.parse_stream(data.as_slice());
+        let mut parser = Parser::new(data.as_slice());
+        let stream = parser.parse_stream();
         pin_mut!(stream);
 
         // Collect all stream events
