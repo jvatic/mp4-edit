@@ -1,13 +1,13 @@
 use anyhow::{anyhow, Context};
 use derive_more::Deref;
 use futures_io::AsyncRead;
-use std::{
-    fmt,
-    io::{Cursor, Read},
-};
+use std::{fmt, io::Read};
 
 use crate::{
-    atom::util::{parse_fixed_size_atom, DebugEllipsis},
+    atom::{
+        util::{async_to_sync_read, DebugEllipsis},
+        FourCC,
+    },
     parser::Parse,
 };
 
@@ -49,14 +49,14 @@ pub struct TimeToSampleAtom {
 }
 
 impl Parse for TimeToSampleAtom {
-    async fn parse<R: AsyncRead + Unpin + Send>(reader: R) -> Result<Self, anyhow::Error> {
-        let (atom_type, data) = parse_fixed_size_atom(reader).await?;
+    async fn parse<R: AsyncRead + Unpin + Send>(
+        atom_type: FourCC,
+        reader: R,
+    ) -> Result<Self, anyhow::Error> {
         if atom_type != STTS {
             return Err(anyhow!("Invalid atom type: {} (expected stts)", atom_type));
         }
-
-        // Parse the data using existing sync function
-        let mut cursor = Cursor::new(data);
+        let mut cursor = async_to_sync_read(reader).await?;
         parse_stts_data(&mut cursor)
     }
 }

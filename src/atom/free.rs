@@ -1,9 +1,10 @@
 use anyhow::anyhow;
 use futures_io::AsyncRead;
+use futures_util::AsyncReadExt;
 use std::fmt;
 
 use crate::{
-    atom::util::{parse_fixed_size_atom, DebugEllipsis, FourCC},
+    atom::util::{DebugEllipsis, FourCC},
     parser::Parse,
 };
 
@@ -31,9 +32,10 @@ impl fmt::Debug for FreeAtom {
 }
 
 impl Parse for FreeAtom {
-    async fn parse<R: AsyncRead + Unpin + Send>(reader: R) -> Result<Self, anyhow::Error> {
-        let (atom_type, data) = parse_fixed_size_atom(reader).await?;
-
+    async fn parse<R: AsyncRead + Unpin + Send>(
+        atom_type: FourCC,
+        mut reader: R,
+    ) -> Result<Self, anyhow::Error> {
         // Verify this is a free or skip atom
         if atom_type != FREE && atom_type != SKIP {
             return Err(anyhow!(
@@ -42,6 +44,8 @@ impl Parse for FreeAtom {
             ));
         }
 
+        let mut data = Vec::new();
+        reader.read_to_end(&mut data).await?;
         Ok(FreeAtom {
             atom_type,
             data_size: data.len(),

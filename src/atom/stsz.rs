@@ -3,11 +3,14 @@ use derive_more::Deref;
 use futures_io::AsyncRead;
 use std::{
     fmt::{self},
-    io::{Cursor, Read},
+    io::Read,
 };
 
 use crate::{
-    atom::util::{parser::parse_fixed_size_atom, DebugEllipsis},
+    atom::{
+        util::{async_to_sync_read, DebugEllipsis},
+        FourCC,
+    },
     parser::Parse,
 };
 
@@ -49,15 +52,14 @@ pub struct SampleSizeAtom {
 }
 
 impl Parse for SampleSizeAtom {
-    async fn parse<R: AsyncRead + Unpin + Send>(reader: R) -> Result<Self, anyhow::Error> {
-        let (atom_type, data) = parse_fixed_size_atom(reader).await?;
+    async fn parse<R: AsyncRead + Unpin + Send>(
+        atom_type: FourCC,
+        reader: R,
+    ) -> Result<Self, anyhow::Error> {
         if atom_type != STSZ {
             return Err(anyhow!("Invalid atom type: {}", atom_type));
         }
-
-        // Parse the data using existing sync function
-        let cursor = Cursor::new(data);
-        parse_stsz_data(cursor)
+        parse_stsz_data(async_to_sync_read(reader).await?)
     }
 }
 

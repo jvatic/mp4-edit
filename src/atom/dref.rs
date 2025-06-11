@@ -1,9 +1,9 @@
 use anyhow::{anyhow, Context};
 use futures_io::AsyncRead;
-use std::io::{Cursor, Read};
+use std::io::Read;
 
 use crate::{
-    atom::util::{parser::parse_fixed_size_atom, FourCC},
+    atom::util::{async_to_sync_read, FourCC},
     parser::Parse,
 };
 
@@ -78,18 +78,17 @@ pub struct DataReferenceAtom {
 }
 
 impl Parse for DataReferenceAtom {
-    async fn parse<R: AsyncRead + Unpin + Send>(reader: R) -> Result<Self, anyhow::Error> {
-        let (atom_type, data) = parse_fixed_size_atom(reader).await?;
+    async fn parse<R: AsyncRead + Unpin + Send>(
+        atom_type: FourCC,
+        reader: R,
+    ) -> Result<Self, anyhow::Error> {
         if atom_type != DREF {
             return Err(anyhow!(
                 "Invalid atom type: expected dref, got {}",
                 atom_type
             ));
         }
-
-        // Parse the data using existing sync function
-        let cursor = Cursor::new(data);
-        parse_dref_data(cursor)
+        parse_dref_data(async_to_sync_read(reader).await?)
     }
 }
 

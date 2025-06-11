@@ -3,6 +3,7 @@ use futures_io::AsyncRead;
 use futures_util::io::{AsyncReadExt, Cursor};
 use futures_util::stream::{Stream, StreamExt};
 use std::future::Future;
+use std::ops::Deref;
 use thiserror::Error;
 
 use crate::{
@@ -36,6 +37,7 @@ use crate::{
 /// Async trait for parsing atoms from an AsyncRead stream
 pub trait Parse: Sized {
     fn parse<R: AsyncRead + Unpin + Send>(
+        atom_type: FourCC,
         reader: R,
     ) -> impl Future<Output = Result<Self, anyhow::Error>> + Send;
 }
@@ -83,11 +85,10 @@ pub struct Parser {
 }
 
 struct ParsedAtom {
-    atom_type: [u8; 4],
+    atom_type: FourCC,
     size: u64,
     offset: u64,
     content_data: Vec<u8>,
-    complete_atom_data: Vec<u8>,
 }
 
 impl Default for Parser {
@@ -135,7 +136,7 @@ impl Parser {
 
     async fn parse_next_atom<R: AsyncRead + Unpin>(
         &mut self,
-        reader: &mut R,
+        mut reader: &mut R,
         length_limit: Option<usize>,
         start_offset: usize,
     ) -> Result<Option<ParsedAtom>, ParseError> {
@@ -145,145 +146,146 @@ impl Parser {
 
         let atom_offset = self.current_offset as u64;
 
-        // Try to read the atom header (size and type)
+        // Try to read the atom header (size and type) - handle EOF gracefully
         let mut header = [0u8; 8];
         match reader.read_exact(&mut header).await {
             Ok(()) => {
                 self.current_offset += 8;
             }
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                // End of stream, which is normal
-                return Ok(None);
+                return Ok(None); // End of stream reached
             }
             Err(e) => {
                 return Err(ParseError {
                     kind: ParseErrorKind::Io,
-                    location: Some((self.current_offset, 8)),
+                    location: Some((atom_offset as usize, 8)),
                     source: Some(Box::new(e)),
                 });
             }
         }
 
-        let size_32 = u32::from_be_bytes([header[0], header[1], header[2], header[3]]);
-        let atom_type = [header[4], header[5], header[6], header[7]];
+        let size = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as u64;
+        let atom_type: [u8; 4] = header[4..8].try_into().unwrap();
 
-        // Handle extended size (64-bit) format
-        let (size, header_size) = if size_32 == 1 {
-            // Extended size format - next 8 bytes contain the actual 64-bit size
-            let mut extended_size_bytes = [0u8; 8];
-            self.read_exact(reader, &mut extended_size_bytes).await?;
-            let extended_size = u64::from_be_bytes(extended_size_bytes);
-            (extended_size, 16) // 8 bytes basic header + 8 bytes extended size
-        } else if size_32 == 0 {
-            // Size 0 means "rest of container" or "rest of file"
-            if let Some(limit) = length_limit {
-                // We're in a container, use remaining bytes
-                let bytes_read = self.current_offset - start_offset;
-                let remaining = limit.saturating_sub(bytes_read);
-                (remaining as u64 + 8, 8) // Include header size
-            } else {
-                // At top level with size=0 - treat as error for now
+        // Handle extended size (64-bit) if needed
+        let (header_size, data_size) = if size == 1 {
+            // Extended size format
+            let mut extended_size = [0u8; 8];
+            self.read_exact(&mut reader, &mut extended_size).await?;
+            let full_size = u64::from_be_bytes(extended_size);
+            if full_size < 16 {
                 return Err(ParseError {
-                    kind: ParseErrorKind::UnsupportedAtom,
-                    location: Some((self.current_offset - 8, 8)),
+                    kind: ParseErrorKind::InvalidSize,
+                    location: Some((atom_offset as usize, 16)),
                     source: None,
                 });
             }
+            (16u64, full_size - 16)
+        } else if size == 0 {
+            // Size extends to end of file - not supported in this context
+            return Err(ParseError {
+                kind: ParseErrorKind::InvalidSize,
+                location: Some((atom_offset as usize, 8)),
+                source: None,
+            });
         } else {
-            (size_32 as u64, 8) // Standard 32-bit size
+            if size < 8 {
+                return Err(ParseError {
+                    kind: ParseErrorKind::InvalidSize,
+                    location: Some((atom_offset as usize, 8)),
+                    source: None,
+                });
+            }
+            (8u64, size - 8)
         };
 
-        let content_size = if size > header_size {
-            (size - header_size) as usize
-        } else {
-            0
-        };
+        let atom_type = FourCC(atom_type);
 
         // Read the atom content
-        let content_data = self.read_data(reader, content_size).await?;
+        let content_data = self.read_data(reader, data_size as usize).await?;
 
-        // Create complete atom data (header + content) for atom parsers
-        let mut complete_atom_data = Vec::new();
-        if header_size == 16 {
-            // Extended size format: size(4) + type(4) + extended_size(8)
-            complete_atom_data.extend_from_slice(&1u32.to_be_bytes()); // size = 1 indicates extended
-            complete_atom_data.extend_from_slice(&atom_type);
-            complete_atom_data.extend_from_slice(&size.to_be_bytes());
-        } else {
-            // Standard format: size(4) + type(4)
-            complete_atom_data.extend_from_slice(&(size as u32).to_be_bytes());
-            complete_atom_data.extend_from_slice(&atom_type);
-        }
-        complete_atom_data.extend_from_slice(&content_data);
+        let total_size = header_size + data_size;
 
         Ok(Some(ParsedAtom {
             atom_type,
-            size,
+            size: total_size,
             offset: atom_offset,
             content_data,
-            complete_atom_data,
         }))
     }
 
-    async fn parse_atom_data(&self, parsed_atom: &ParsedAtom) -> Result<AtomData, ParseError> {
-        let atom_type_fourcc = FourCC::from(parsed_atom.atom_type);
-        let complete_atom_data = parsed_atom.complete_atom_data.as_slice();
-
-        let cursor = Cursor::new(complete_atom_data.to_vec());
-        let atom_data = match &parsed_atom.atom_type {
-            FTYP => Some(FileTypeAtom::parse(cursor).await.map(AtomData::from)),
-            MVHD => Some(MovieHeaderAtom::parse(cursor).await.map(AtomData::from)),
-            MDHD => Some(MediaHeaderAtom::parse(cursor).await.map(AtomData::from)),
-            ELST => Some(EditListAtom::parse(cursor).await.map(AtomData::from)),
-            HDLR => Some(
-                HandlerReferenceAtom::parse(cursor)
-                    .await
-                    .map(AtomData::from),
-            ),
-            GMHD => Some(
-                GenericMediaHeaderAtom::parse(cursor)
-                    .await
-                    .map(AtomData::from),
-            ),
-            SMHD => Some(
-                SoundMediaHeaderAtom::parse(cursor)
-                    .await
-                    .map(AtomData::from),
-            ),
-            META => Some(MetadataAtom::parse(cursor).await.map(AtomData::from)),
-            ILST => Some(ItemListAtom::parse(cursor).await.map(AtomData::from)),
-            TKHD => Some(TrackHeaderAtom::parse(cursor).await.map(AtomData::from)),
-            STSD => Some(
-                SampleDescriptionTableAtom::parse(cursor)
-                    .await
-                    .map(AtomData::from),
-            ),
-            TREF => Some(TrackReferenceAtom::parse(cursor).await.map(AtomData::from)),
-            DREF => Some(DataReferenceAtom::parse(cursor).await.map(AtomData::from)),
-            STSZ => Some(SampleSizeAtom::parse(cursor).await.map(AtomData::from)),
-            STCO | CO64 => Some(ChunkOffsetAtom::parse(cursor).await.map(AtomData::from)),
-            STTS => Some(TimeToSampleAtom::parse(cursor).await.map(AtomData::from)),
-            STSC => Some(SampleToChunkAtom::parse(cursor).await.map(AtomData::from)),
-            CHPL => Some(ChapterListAtom::parse(cursor).await.map(AtomData::from)),
-            SGPD => Some(
-                SampleGroupDescriptionAtom::parse(cursor)
-                    .await
-                    .map(AtomData::from),
-            ),
-            SBGP => Some(SampleToGroupAtom::parse(cursor).await.map(AtomData::from)),
-            FREE | SKIP => Some(FreeAtom::parse(cursor).await.map(AtomData::from)),
-            _ => None,
+    async fn parse_atom_data(&self, parsed_atom: ParsedAtom) -> Result<AtomData, ParseError> {
+        let cursor = Cursor::new(parsed_atom.content_data);
+        let atom_type = parsed_atom.atom_type.clone();
+        let atom_data = match atom_type.deref() {
+            FTYP => FileTypeAtom::parse(atom_type, cursor)
+                .await
+                .map(AtomData::from),
+            MVHD => MovieHeaderAtom::parse(atom_type, cursor)
+                .await
+                .map(AtomData::from),
+            MDHD => MediaHeaderAtom::parse(atom_type, cursor)
+                .await
+                .map(AtomData::from),
+            ELST => EditListAtom::parse(atom_type, cursor)
+                .await
+                .map(AtomData::from),
+            HDLR => HandlerReferenceAtom::parse(atom_type, cursor)
+                .await
+                .map(AtomData::from),
+            GMHD => GenericMediaHeaderAtom::parse(atom_type, cursor)
+                .await
+                .map(AtomData::from),
+            SMHD => SoundMediaHeaderAtom::parse(atom_type, cursor)
+                .await
+                .map(AtomData::from),
+            META => MetadataAtom::parse(atom_type, cursor)
+                .await
+                .map(AtomData::from),
+            ILST => ItemListAtom::parse(atom_type, cursor)
+                .await
+                .map(AtomData::from),
+            TKHD => TrackHeaderAtom::parse(atom_type, cursor)
+                .await
+                .map(AtomData::from),
+            STSD => SampleDescriptionTableAtom::parse(atom_type, cursor)
+                .await
+                .map(AtomData::from),
+            TREF => TrackReferenceAtom::parse(atom_type, cursor)
+                .await
+                .map(AtomData::from),
+            DREF => DataReferenceAtom::parse(atom_type, cursor)
+                .await
+                .map(AtomData::from),
+            STSZ => SampleSizeAtom::parse(atom_type, cursor)
+                .await
+                .map(AtomData::from),
+            STCO | CO64 => ChunkOffsetAtom::parse(atom_type, cursor)
+                .await
+                .map(AtomData::from),
+            STTS => TimeToSampleAtom::parse(atom_type, cursor)
+                .await
+                .map(AtomData::from),
+            STSC => SampleToChunkAtom::parse(atom_type, cursor)
+                .await
+                .map(AtomData::from),
+            CHPL => ChapterListAtom::parse(atom_type, cursor)
+                .await
+                .map(AtomData::from),
+            SGPD => SampleGroupDescriptionAtom::parse(atom_type, cursor)
+                .await
+                .map(AtomData::from),
+            SBGP => SampleToGroupAtom::parse(atom_type, cursor)
+                .await
+                .map(AtomData::from),
+            FREE | SKIP => FreeAtom::parse(atom_type, cursor).await.map(AtomData::from),
+            _ => Ok(RawData(cursor.get_ref().clone()).into()),
         }
-        .transpose()
         .map_err(|e| ParseError {
             kind: ParseErrorKind::AtomParsing,
-            location: Some((
-                parsed_atom.offset as usize,
-                parsed_atom.complete_atom_data.len(),
-            )),
-            source: Some(e.context(atom_type_fourcc).into()),
-        })?
-        .unwrap_or_else(|| RawData(parsed_atom.content_data.clone()).into());
+            location: Some((parsed_atom.offset as usize, parsed_atom.size as usize)),
+            source: Some(e.context(atom_type).into()),
+        })?;
 
         Ok(atom_data)
     }
@@ -295,25 +297,23 @@ impl Parser {
     ) -> impl Stream<Item = Result<ParseEvent, ParseError>> + 'a {
         async_stream::stream! {
             let start_offset = self.current_offset;
-            let mut current_offset = start_offset;
 
-            while let Some(parsed_atom) = self.parse_next_atom_with_offset(&mut reader, length_limit, current_offset).await? {
+            while let Some(parsed_atom) = self.parse_next_atom(&mut reader, length_limit, start_offset).await? {
                 let atom_type_fourcc = FourCC::from(parsed_atom.atom_type);
+                let size = parsed_atom.size;
 
-                // Update offset for next iteration
-                current_offset = parsed_atom.offset as usize + parsed_atom.complete_atom_data.len();
-
-                if !is_container_atom(&parsed_atom.atom_type) && &parsed_atom.atom_type != META {
+                if !is_container_atom(&parsed_atom.atom_type) && parsed_atom.atom_type.deref() != META {
                     // Yield leaf atoms
-                    let atom_data = self.parse_atom_data(&parsed_atom).await?;
+                    let offset = parsed_atom.offset;
+                    let atom_data = self.parse_atom_data(parsed_atom).await?;
                     let atom = Atom {
                         atom_type: atom_type_fourcc,
-                        size: parsed_atom.size,
-                        offset: parsed_atom.offset,
+                        offset,
+                        size,
                         data: Some(atom_data),
                     };
                     yield Ok(ParseEvent::Leaf(atom));
-                } else if is_container_atom(&parsed_atom.atom_type) || &parsed_atom.atom_type == META {
+                } else if is_container_atom(&parsed_atom.atom_type) || parsed_atom.atom_type.deref() == META {
                     // For container atoms, emit EnterContainer, then recursively emit children, then ExitContainer
                     let container_atom = Atom {
                         atom_type: atom_type_fourcc,
@@ -323,9 +323,9 @@ impl Parser {
                     };
                     yield Ok(ParseEvent::EnterContainer(container_atom));
 
-                    let (cursor, size) = if &parsed_atom.atom_type == META {
+                    let (cursor, size) = if parsed_atom.atom_type.deref() == META {
                         // Handle META atoms specially, ignoring the META-specific headers for now
-                        match self.parse_atom_data(&parsed_atom).await? {
+                        match self.parse_atom_data(parsed_atom).await? {
                             AtomData::Metadata(meta_atom) => {
                                 let size = meta_atom.child_data.len();
                                 (Cursor::new(meta_atom.child_data), size)
@@ -352,28 +352,17 @@ impl Parser {
                         }
                     }
 
+
+
                     yield Ok(ParseEvent::ExitContainer);
                 }
 
                 // Size can be 0 (meaning "rest of file") so we need to prevent infinite loop.
-                if parsed_atom.size == 0 {
+                if size == 0 {
                     break;
                 }
             }
         }
-    }
-
-    async fn parse_next_atom_with_offset<R: AsyncRead + Unpin>(
-        &mut self,
-        reader: &mut R,
-        length_limit: Option<usize>,
-        offset: usize,
-    ) -> Result<Option<ParsedAtom>, ParseError> {
-        let saved_offset = self.current_offset;
-        self.current_offset = offset;
-        let result = self.parse_next_atom(reader, length_limit, offset).await;
-        self.current_offset = saved_offset;
-        result
     }
 }
 
@@ -584,17 +573,15 @@ mod tests {
         let stream = parser.parse_stream(data.as_slice());
         pin_mut!(stream);
 
-        let mut atoms = Vec::new();
-        while let Some(result) = stream.next().await {
-            match result.unwrap() {
-                ParseEvent::Leaf(atom) => atoms.push(atom),
-                _ => {}
-            }
-        }
+        // Should produce an error for invalid size
+        let result = stream.next().await;
+        assert!(result.is_some(), "Expected an error result");
+        let error = result.unwrap();
+        assert!(error.is_err(), "Expected an error for invalid atom size");
 
-        // Should handle gracefully - size of 4 means content_size = 0
-        assert_eq!(atoms.len(), 1);
-        assert_eq!(atoms[0].size, 4);
+        if let Err(parse_error) = error {
+            assert!(matches!(parse_error.kind, ParseErrorKind::InvalidSize));
+        }
     }
 
     #[tokio::test]

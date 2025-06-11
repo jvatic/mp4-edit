@@ -3,7 +3,7 @@ use futures_io::AsyncRead;
 use std::io::{Cursor, Read};
 
 use crate::{
-    atom::util::{parse_fixed_size_atom, FourCC},
+    atom::util::{async_to_sync_read, FourCC},
     parser::Parse,
 };
 
@@ -37,17 +37,18 @@ pub struct SampleGroupDescriptionEntry {
 }
 
 impl Parse for SampleGroupDescriptionAtom {
-    async fn parse<R: AsyncRead + Unpin + Send>(reader: R) -> Result<Self, anyhow::Error> {
-        let (atom_type, data) = parse_fixed_size_atom(reader).await?;
+    async fn parse<R: AsyncRead + Unpin + Send>(
+        atom_type: FourCC,
+        reader: R,
+    ) -> Result<Self, anyhow::Error> {
         if atom_type != SGPD {
             return Err(anyhow!(
                 "Invalid atom type: {} (expected 'sgpd')",
                 atom_type
             ));
         }
-
-        // Parse the data using existing sync function
-        parse_sgpd_data(&data)
+        let cursor = async_to_sync_read(reader).await?;
+        parse_sgpd_data(cursor.get_ref())
     }
 }
 

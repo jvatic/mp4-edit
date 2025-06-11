@@ -1,7 +1,7 @@
 use derive_more::Deref;
 use std::fmt;
 
-#[derive(Clone, Deref, PartialEq, Eq)]
+#[derive(Clone, Copy, Deref, PartialEq, Eq)]
 pub struct FourCC(pub(crate) [u8; 4]);
 
 impl From<[u8; 4]> for FourCC {
