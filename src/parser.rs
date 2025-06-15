@@ -200,9 +200,9 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
     }
 
     async fn parse_atom_data(&mut self, parsed_atom: ParsedAtom) -> Result<AtomData, ParseError> {
-        let content_data = self.read_data(parsed_atom.content_size as usize).await?;
+        let content_data = self.read_data(parsed_atom.content_size).await?;
         let cursor = Cursor::new(content_data);
-        let atom_type = parsed_atom.atom_type.clone();
+        let atom_type = parsed_atom.atom_type;
         let atom_data = match atom_type.deref() {
             FTYP => FileTypeAtom::parse(atom_type, cursor)
                 .await
@@ -281,32 +281,19 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
             let start_offset = self.current_offset;
 
             while let Some(parsed_atom) = self.parse_next_atom(length_limit, start_offset).await? {
-                let atom_type_fourcc = FourCC::from(parsed_atom.atom_type);
-                let size = parsed_atom.size;
-
-                if !is_container_atom(&parsed_atom.atom_type) {
-                    // Yield leaf atoms
-                    let offset = parsed_atom.offset;
-                    let atom_data = self.parse_atom_data(parsed_atom).await?;
-                    let atom = Atom {
-                        atom_type: atom_type_fourcc,
-                        offset,
-                        size,
-                        data: Some(atom_data),
-                    };
-                    yield Ok(ParseEvent::Leaf(atom));
-                } else if is_container_atom(&parsed_atom.atom_type) {
+                if is_container_atom(&parsed_atom.atom_type) {
                     // For container atoms, emit EnterContainer, then recursively emit children, then ExitContainer
                     let container_atom = Atom {
-                        atom_type: atom_type_fourcc,
+                        atom_type: parsed_atom.atom_type,
                         size: parsed_atom.size,
                         offset: parsed_atom.offset,
                         data: None,
                     };
                     yield Ok(ParseEvent::EnterContainer(container_atom));
 
+                    // META containers have additional header data
                     let size = if parsed_atom.atom_type.deref() == META {
-                        // Handle META atoms specially, ignoring the META-specific headers for now
+                        // Ignore META version and flags
                         self.read_data(META_VERSION_FLAGS_SIZE).await?;
                         parsed_atom.content_size - META_VERSION_FLAGS_SIZE
                     } else {
@@ -327,6 +314,19 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
                     }
 
                     yield Ok(ParseEvent::ExitContainer);
+                } else {
+                    // Yield leaf atoms
+                    let atom_type = parsed_atom.atom_type;
+                    let offset = parsed_atom.offset;
+                    let size = parsed_atom.size;
+                    let atom_data = self.parse_atom_data(parsed_atom).await?;
+                    let atom = Atom {
+                        atom_type,
+                        offset,
+                        size,
+                        data: Some(atom_data),
+                    };
+                    yield Ok(ParseEvent::Leaf(atom));
                 }
             }
         }
