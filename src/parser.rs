@@ -166,19 +166,22 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
             let parsed_atom = self.parse_next_atom().await?;
             if is_container_atom(&parsed_atom.atom_type) {
                 // META containers have additional header data
-                let size = if parsed_atom.atom_type.deref() == META {
-                    // Ignore META version and flags
-                    self.read_data(META_VERSION_FLAGS_SIZE).await?;
-                    parsed_atom.content_size - META_VERSION_FLAGS_SIZE
+                let (size, data) = if parsed_atom.atom_type.deref() == META {
+                    // Handle META version and flags as RawData
+                    let version_flags = self.read_data(META_VERSION_FLAGS_SIZE).await?;
+                    (
+                        parsed_atom.content_size - META_VERSION_FLAGS_SIZE,
+                        Some(AtomData::RawData(RawData(version_flags))),
+                    )
                 } else {
-                    parsed_atom.content_size
+                    (parsed_atom.content_size, None)
                 };
 
                 let container_atom = Atom {
                     atom_type: parsed_atom.atom_type,
                     size: parsed_atom.size,
                     offset: parsed_atom.offset,
-                    data: None,
+                    data,
                     children: Box::pin(self.parse_metadata_inner(Some(size))).await?,
                 };
 
