@@ -1,5 +1,6 @@
 pub mod atom;
 pub mod parser;
+pub mod sample_size_prediction;
 pub mod writer;
 
 pub use atom::{Atom, AtomData};
