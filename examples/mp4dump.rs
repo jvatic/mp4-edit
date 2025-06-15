@@ -8,7 +8,7 @@ use tokio::{
 };
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
-use mp4_parser::{Atom, AtomData, ParseEvent, Parser};
+use mp4_parser::{Atom, AtomData, ParseMetadataEvent, Parser};
 
 /// Format file size in human-readable format
 fn format_size(size: u64) -> String {
@@ -90,7 +90,7 @@ fn print_table_footer() {
 async fn print_atoms_from_stream<R: futures_io::AsyncRead + Unpin + Send>(
     mut parser: Parser<R>,
 ) -> anyhow::Result<usize> {
-    let stream = parser.parse_stream();
+    let stream = parser.stream_metadata();
     pin_mut!(stream);
 
     let mut indent_level = 0;
@@ -101,7 +101,7 @@ async fn print_atoms_from_stream<R: futures_io::AsyncRead + Unpin + Send>(
         let event = event.context("Failed to parse stream event")?;
 
         match event {
-            ParseEvent::EnterContainer(atom) => {
+            ParseMetadataEvent::EnterContainer(atom) => {
                 if first_atom {
                     print_table_header();
                     first_atom = false;
@@ -111,7 +111,7 @@ async fn print_atoms_from_stream<R: futures_io::AsyncRead + Unpin + Send>(
                 indent_level += 1;
                 atom_count += 1;
             }
-            ParseEvent::Leaf(atom) => {
+            ParseMetadataEvent::Leaf(atom) => {
                 if first_atom {
                     print_table_header();
                     first_atom = false;
@@ -120,7 +120,7 @@ async fn print_atoms_from_stream<R: futures_io::AsyncRead + Unpin + Send>(
                 print_atom(&atom, indent_level);
                 atom_count += 1;
             }
-            ParseEvent::ExitContainer => {
+            ParseMetadataEvent::ExitContainer => {
                 if indent_level > 0 {
                     indent_level -= 1;
                 }
@@ -161,10 +161,12 @@ async fn main() -> anyhow::Result<()> {
         .context("Failed to parse MP4 file")?;
 
     // Print summary statistics
-    let file_size = fs::metadata(&args[1]).await?.len();
     println!("\x1b[1;33m📊 Summary:\x1b[0m");
     println!("   Total atoms: \x1b[1m{}\x1b[0m", atom_count);
-    println!("   File size: \x1b[1m{}\x1b[0m", format_size(file_size));
+    if args[1].as_str() != "-" {
+        let file_size = fs::metadata(&args[1]).await?.len();
+        println!("   File size: \x1b[1m{}\x1b[0m", format_size(file_size));
+    }
 
     Ok(())
 }

@@ -34,6 +34,8 @@ use crate::{
     Atom, AtomData,
 };
 
+const MDAT: &[u8; 4] = b"mdat";
+
 /// Async trait for parsing atoms from an AsyncRead stream
 pub trait Parse: Sized {
     fn parse<R: AsyncRead + Unpin + Send>(
@@ -62,6 +64,8 @@ pub struct ParseError {
 pub enum ParseErrorKind {
     #[display("I/O error")]
     Io,
+    #[display("EOF error")]
+    Eof,
     #[display("Invalid atom header")]
     InvalidHeader,
     #[display("Invalid atom size")]
@@ -74,15 +78,33 @@ pub enum ParseErrorKind {
     InsufficientData,
 }
 
-pub enum ParseEvent {
+pub enum ParseMetadataEvent {
     EnterContainer(Atom),
     Leaf(Atom),
     ExitContainer,
 }
 
+pub struct MediaChunk {
+    data: Vec<u8>,
+}
+
+impl MediaChunk {
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.data
+    }
+}
+
 pub struct Parser<R> {
     reader: R,
+    state: ParserState,
     current_offset: usize,
+    peek_buffer: Vec<u8>,
+}
+
+enum ParserState {
+    NotStarted,
+    MetaData,
+    MediaData,
 }
 
 struct ParsedAtom {
@@ -95,24 +117,63 @@ struct ParsedAtom {
 impl<R: AsyncRead + Unpin + Send> Parser<R> {
     pub fn new(reader: R) -> Self {
         Parser {
-            reader,
+            reader: reader,
+            state: ParserState::NotStarted,
             current_offset: 0,
+            peek_buffer: Vec::new(),
         }
     }
 
-    pub fn parse_stream<'a>(
+    pub fn stream_metadata<'a>(
         &'a mut self,
-    ) -> impl Stream<Item = Result<ParseEvent, ParseError>> + 'a {
-        self.current_offset = 0;
-        self.parse_atom_stream(None)
+    ) -> impl Stream<Item = Result<ParseMetadataEvent, ParseError>> + 'a {
+        if !matches!(self.state, ParserState::NotStarted) {
+            panic!("parser in an invalid state");
+        }
+        self.state = ParserState::MetaData;
+        self.parse_metadata_stream(None)
+    }
+
+    pub fn stream_media_chunks<'a>(
+        &'a mut self,
+        chunk_offsets: ChunkOffsetAtom,
+    ) -> impl Stream<Item = Result<MediaChunk, ParseError>> + 'a {
+        if !matches!(self.state, ParserState::MetaData) {
+            panic!("parser in an invalid state");
+        }
+        self.state = ParserState::MediaData;
+        async_stream::stream! {
+            yield Ok(MediaChunk {data: Vec::new()});
+        }
+    }
+
+    async fn peek_exact(&mut self, buf: &mut [u8]) -> Result<(), ParseError> {
+        let size = buf.len();
+        if self.peek_buffer.len() < size {
+            let mut temp_buf = vec![0u8; size - self.peek_buffer.len()];
+            self.reader.read_exact(&mut temp_buf).await.map_err(|e| {
+                if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                    return ParseError {
+                        kind: ParseErrorKind::Eof,
+                        location: Some((self.current_offset, size)),
+                        source: Some(Box::new(e)),
+                    };
+                }
+                ParseError {
+                    kind: ParseErrorKind::Io,
+                    location: Some((self.current_offset, size)),
+                    source: Some(Box::new(e)),
+                }
+            })?;
+            self.peek_buffer.extend_from_slice(&temp_buf[..]);
+        }
+        buf.copy_from_slice(&self.peek_buffer[..size]);
+        Ok(())
     }
 
     async fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), ParseError> {
-        self.reader.read_exact(buf).await.map_err(|e| ParseError {
-            kind: ParseErrorKind::Io,
-            location: Some((self.current_offset, buf.len())),
-            source: Some(Box::new(e)),
-        })?;
+        self.peek_exact(buf).await?;
+        self.peek_buffer.drain(..buf.len());
         self.current_offset += buf.len();
         Ok(())
     }
@@ -123,34 +184,18 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
         Ok(data)
     }
 
-    async fn parse_next_atom(
-        &mut self,
-        length_limit: Option<usize>,
-        start_offset: usize,
-    ) -> Result<Option<ParsedAtom>, ParseError> {
-        if length_limit.is_some_and(|limit| self.current_offset - start_offset >= limit) {
-            return Ok(None);
-        }
+    async fn peek_next_atom_type(&mut self) -> Result<FourCC, ParseError> {
+        let mut header = [0u8; 8];
+        self.peek_exact(&mut header).await?;
+        Ok(FourCC([header[4], header[5], header[6], header[7]]))
+    }
 
+    async fn parse_next_atom(&mut self) -> Result<ParsedAtom, ParseError> {
         let atom_offset = self.current_offset as u64;
 
-        // Try to read the atom header (size and type) - handle EOF gracefully
+        // Try to read the atom header (size and type)
         let mut header = [0u8; 8];
-        match self.reader.read_exact(&mut header).await {
-            Ok(()) => {
-                self.current_offset += 8;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
-                return Ok(None); // End of stream reached
-            }
-            Err(e) => {
-                return Err(ParseError {
-                    kind: ParseErrorKind::Io,
-                    location: Some((atom_offset as usize, 8)),
-                    source: Some(Box::new(e)),
-                });
-            }
-        }
+        self.read_exact(&mut header).await?;
 
         let size = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as u64;
         let atom_type: [u8; 4] = header[4..8].try_into().unwrap();
@@ -191,12 +236,12 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
 
         let total_size = header_size + data_size;
 
-        Ok(Some(ParsedAtom {
+        Ok(ParsedAtom {
             atom_type,
             size: total_size,
             offset: atom_offset,
             content_size: data_size as usize,
-        }))
+        })
     }
 
     async fn parse_atom_data(&mut self, parsed_atom: ParsedAtom) -> Result<AtomData, ParseError> {
@@ -273,14 +318,36 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
         Ok(atom_data)
     }
 
-    fn parse_atom_stream<'a>(
+    fn parse_metadata_stream<'a>(
         &'a mut self,
         length_limit: Option<usize>,
-    ) -> impl Stream<Item = Result<ParseEvent, ParseError>> + 'a {
+    ) -> impl Stream<Item = Result<ParseMetadataEvent, ParseError>> + 'a {
         async_stream::stream! {
             let start_offset = self.current_offset;
 
-            while let Some(parsed_atom) = self.parse_next_atom(length_limit, start_offset).await? {
+            loop {
+                // ensure we're respecting container bounds
+                if length_limit.is_some_and(|limit| self.current_offset - start_offset >= limit) {
+                   break;
+                }
+
+                // only parse as far as the mdat atom (we're assuming mdat is the last atom)
+                let next_atom_type = match self.peek_next_atom_type().await {
+                    Ok(next_atom_type) => Ok(next_atom_type),
+                    Err(err) => {
+                        if matches!(err.kind, ParseErrorKind::Eof) {
+                            // end of stream, this means there's no mdat atom
+                            // TODO: rewrite the tests to always include an mdat atom so we can get rid of this check
+                            break;
+                        }
+                        Err(err)
+                    },
+                }?;
+                if next_atom_type == MDAT {
+                    break;
+                }
+
+                let parsed_atom = self.parse_next_atom().await?;
                 if is_container_atom(&parsed_atom.atom_type) {
                     // For container atoms, emit EnterContainer, then recursively emit children, then ExitContainer
                     let container_atom = Atom {
@@ -289,7 +356,7 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
                         offset: parsed_atom.offset,
                         data: None,
                     };
-                    yield Ok(ParseEvent::EnterContainer(container_atom));
+                    yield Ok(ParseMetadataEvent::EnterContainer(container_atom));
 
                     // META containers have additional header data
                     let size = if parsed_atom.atom_type.deref() == META {
@@ -301,7 +368,7 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
                     };
 
                     // Recursively parse children and emit their events
-                    let mut child_stream = Box::pin(self.parse_atom_stream(Some(size)));
+                    let mut child_stream = Box::pin(self.parse_metadata_stream(Some(size)));
 
                     while let Some(child_event) = child_stream.as_mut().next().await {
                         match child_event {
@@ -313,7 +380,7 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
                         }
                     }
 
-                    yield Ok(ParseEvent::ExitContainer);
+                    yield Ok(ParseMetadataEvent::ExitContainer);
                 } else {
                     // Yield leaf atoms
                     let atom_type = parsed_atom.atom_type;
@@ -326,7 +393,7 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
                         size,
                         data: Some(atom_data),
                     };
-                    yield Ok(ParseEvent::Leaf(atom));
+                    yield Ok(ParseMetadataEvent::Leaf(atom));
                 }
             }
         }
@@ -351,7 +418,7 @@ fn is_container_atom(atom_type: &[u8; 4]) -> bool {
             | b"traf"
             | b"sinf"
             | b"schi"
-            | b"meta"
+            | META
     )
 }
 
@@ -374,13 +441,13 @@ mod tests {
         data.extend_from_slice(b"mp41"); // Compatible brand
 
         let mut parser = Parser::new(data.as_slice());
-        let stream = parser.parse_stream();
+        let stream = parser.stream_metadata();
         pin_mut!(stream);
 
         let mut atoms = Vec::new();
         while let Some(result) = stream.next().await {
             match result.unwrap() {
-                ParseEvent::Leaf(atom) => atoms.push(atom),
+                ParseMetadataEvent::Leaf(atom) => atoms.push(atom),
                 _ => {}
             }
         }
@@ -403,13 +470,13 @@ mod tests {
         data.extend_from_slice(&[0u8; 2]); // padding to make exact size
 
         let mut parser = Parser::new(data.as_slice());
-        let stream = parser.parse_stream();
+        let stream = parser.stream_metadata();
         pin_mut!(stream);
 
         let mut atoms = Vec::new();
         while let Some(result) = stream.next().await {
             match result.unwrap() {
-                ParseEvent::Leaf(atom) => atoms.push(atom),
+                ParseMetadataEvent::Leaf(atom) => atoms.push(atom),
                 _ => {}
             }
         }
@@ -437,13 +504,13 @@ mod tests {
         data.extend_from_slice(b"data5678"); // 8 bytes content
 
         let mut parser = Parser::new(data.as_slice());
-        let stream = parser.parse_stream();
+        let stream = parser.stream_metadata();
         pin_mut!(stream);
 
         let mut atoms = Vec::new();
         while let Some(result) = stream.next().await {
             match result.unwrap() {
-                ParseEvent::Leaf(atom) => atoms.push(atom),
+                ParseMetadataEvent::Leaf(atom) => atoms.push(atom),
                 _ => {}
             }
         }
@@ -474,7 +541,7 @@ mod tests {
         data.extend_from_slice(b"content!"); // 8 bytes content
 
         let mut parser = Parser::new(data.as_slice());
-        let stream = parser.parse_stream();
+        let stream = parser.stream_metadata();
         pin_mut!(stream);
 
         let mut events = Vec::new();
@@ -489,7 +556,7 @@ mod tests {
         let chld_fourcc = b"chld";
 
         match &events[0] {
-            ParseEvent::EnterContainer(atom) => {
+            ParseMetadataEvent::EnterContainer(atom) => {
                 assert_eq!(atom.atom_type.deref(), moov_fourcc);
                 assert_eq!(atom.size, 24);
             }
@@ -497,7 +564,7 @@ mod tests {
         }
 
         match &events[1] {
-            ParseEvent::Leaf(atom) => {
+            ParseMetadataEvent::Leaf(atom) => {
                 assert_eq!(atom.atom_type.deref(), chld_fourcc);
                 assert_eq!(atom.size, 16);
             }
@@ -505,7 +572,7 @@ mod tests {
         }
 
         match &events[2] {
-            ParseEvent::ExitContainer => {}
+            ParseMetadataEvent::ExitContainer => {}
             _ => panic!("Expected ExitContainer event"),
         }
     }
@@ -516,7 +583,7 @@ mod tests {
         let data = vec![0u8; 4]; // Only 4 bytes, need at least 8
 
         let mut parser = Parser::new(data.as_slice());
-        let stream = parser.parse_stream();
+        let stream = parser.stream_metadata();
         pin_mut!(stream);
 
         let mut event_count = 0;
@@ -538,7 +605,7 @@ mod tests {
         data.extend_from_slice(b"test"); // Type: test
 
         let mut parser = Parser::new(data.as_slice());
-        let stream = parser.parse_stream();
+        let stream = parser.stream_metadata();
         pin_mut!(stream);
 
         // Should produce an error for invalid size
@@ -568,7 +635,7 @@ mod tests {
         data.extend_from_slice(b"content2"); // 8 bytes content
 
         let mut parser = Parser::new(data.as_slice());
-        let stream = parser.parse_stream();
+        let stream = parser.stream_metadata();
         pin_mut!(stream);
 
         // Collect all stream items
@@ -581,14 +648,14 @@ mod tests {
         assert_eq!(events.len(), 2);
 
         // Check first atom
-        if let ParseEvent::Leaf(atom1) = &events[0] {
+        if let ParseMetadataEvent::Leaf(atom1) = &events[0] {
             assert_eq!(atom1.atom_type.deref(), b"tes1");
         } else {
             panic!("Expected Leaf event");
         }
 
         // Check second atom
-        if let ParseEvent::Leaf(atom2) = &events[1] {
+        if let ParseMetadataEvent::Leaf(atom2) = &events[1] {
             assert_eq!(atom2.atom_type.deref(), b"tes2");
         } else {
             panic!("Expected Leaf event");
@@ -623,7 +690,7 @@ mod tests {
         data.extend_from_slice(child2_data); // Content
 
         let mut parser = Parser::new(data.as_slice());
-        let stream = parser.parse_stream();
+        let stream = parser.stream_metadata();
         pin_mut!(stream);
 
         // Collect all stream events
@@ -637,28 +704,28 @@ mod tests {
 
         // Check event sequence
         match &events[0] {
-            ParseEvent::EnterContainer(atom) => {
+            ParseMetadataEvent::EnterContainer(atom) => {
                 assert_eq!(atom.atom_type.deref(), b"moov");
             }
             _ => panic!("Expected EnterContainer event"),
         }
 
         match &events[1] {
-            ParseEvent::Leaf(atom) => {
+            ParseMetadataEvent::Leaf(atom) => {
                 assert_eq!(atom.atom_type.deref(), b"chd1");
             }
             _ => panic!("Expected first Leaf event"),
         }
 
         match &events[2] {
-            ParseEvent::Leaf(atom) => {
+            ParseMetadataEvent::Leaf(atom) => {
                 assert_eq!(atom.atom_type.deref(), b"chd2");
             }
             _ => panic!("Expected second Leaf event"),
         }
 
         match &events[3] {
-            ParseEvent::ExitContainer => {}
+            ParseMetadataEvent::ExitContainer => {}
             _ => panic!("Expected ExitContainer event"),
         }
     }
