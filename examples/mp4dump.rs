@@ -90,41 +90,110 @@ fn print_table_footer() {
 async fn print_atoms_from_stream<R: futures_io::AsyncRead + Unpin + Send>(
     mut parser: Parser<R>,
 ) -> anyhow::Result<usize> {
-    let stream = parser.stream_metadata();
-    pin_mut!(stream);
-
     let mut indent_level = 0;
     let mut atom_count = 0;
     let mut first_atom = true;
 
-    while let Some(event) = stream.next().await {
-        let event = event.context("Failed to parse stream event")?;
+    let mut movie_header = None;
+    let mut track_id = None;
+    let mut sample_sizes = None;
+    let mut sample_durations = None;
+    let mut chunk_offsets = None;
+    let mut sample_to_chunk = None;
 
-        match event {
-            ParseMetadataEvent::EnterContainer(atom) => {
-                if first_atom {
-                    print_table_header();
-                    first_atom = false;
-                }
+    {
+        let stream = parser.stream_metadata();
+        pin_mut!(stream);
+        while let Some(event) = stream
+            .next()
+            .await
+            .transpose()
+            .context("Failed to parse metadata stream event")?
+        {
+            match event {
+                ParseMetadataEvent::EnterContainer(atom) => {
+                    if first_atom {
+                        print_table_header();
+                        first_atom = false;
+                    }
 
-                print_atom(&atom, indent_level);
-                indent_level += 1;
-                atom_count += 1;
-            }
-            ParseMetadataEvent::Leaf(atom) => {
-                if first_atom {
-                    print_table_header();
-                    first_atom = false;
+                    print_atom(&atom, indent_level);
+                    indent_level += 1;
+                    atom_count += 1;
                 }
+                ParseMetadataEvent::Leaf(atom) => {
+                    if first_atom {
+                        print_table_header();
+                        first_atom = false;
+                    }
 
-                print_atom(&atom, indent_level);
-                atom_count += 1;
-            }
-            ParseMetadataEvent::ExitContainer => {
-                if indent_level > 0 {
-                    indent_level -= 1;
+                    print_atom(&atom, indent_level);
+                    atom_count += 1;
+
+                    if let Some(AtomData::TrackHeader(h)) = atom.data.as_ref() {
+                        track_id = Some(h.track_id);
+                    }
+
+                    // take sample metadata for track 1
+                    if matches!(track_id, Some(1)) && atom.data.is_some() {
+                        use AtomData::*;
+                        match atom.data.unwrap() {
+                            SampleSize(data) => sample_sizes = Some(data),
+                            TimeToSample(data) => sample_durations = Some(data),
+                            ChunkOffset(data) => chunk_offsets = Some(data),
+                            SampleToChunk(data) => sample_to_chunk = Some(data),
+                            _ => {}
+                        }
+                    } else if movie_header.is_none() {
+                        use AtomData::*;
+                        match atom.data.unwrap() {
+                            MovieHeader(data) => movie_header = Some(data),
+                            _ => {}
+                        }
+                    }
+                }
+                ParseMetadataEvent::ExitContainer => {
+                    if indent_level > 0 {
+                        indent_level -= 1;
+                    }
                 }
             }
+        }
+    }
+
+    if movie_header.is_some()
+        && sample_sizes.is_some()
+        && sample_durations.is_some()
+        && chunk_offsets.is_some()
+        && sample_to_chunk.is_some()
+    {
+        let movie_header = movie_header.unwrap();
+        let stream = parser.stream_samples(
+            sample_sizes.unwrap(),
+            sample_durations.unwrap(),
+            chunk_offsets.unwrap(),
+            sample_to_chunk.unwrap(),
+        );
+        pin_mut!(stream);
+
+        let timescale = movie_header.timescale;
+
+        let mut i = -1;
+        while let Some(sample) = stream
+            .next()
+            .await
+            .transpose()
+            .context("Failed to parse chunk stream item")?
+        {
+            i += 1;
+            if i > 5 {
+                break;
+            }
+            println!(
+                "Sample: {:?} duration={}",
+                sample.data.len(),
+                (sample.duration as f64) / (timescale as f64),
+            );
         }
     }
 
