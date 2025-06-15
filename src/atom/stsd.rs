@@ -345,11 +345,12 @@ fn parse_sample_entry<R: Read>(mut reader: R) -> Result<SampleEntry, anyhow::Err
         .context("read sample entry data")?;
 
     let data = match entry_type {
-        SampleEntryType::Avc1
-        | SampleEntryType::Hvc1
-        | SampleEntryType::Mp4v
-        | SampleEntryType::Aavd => SampleEntryData::Video(parse_video_sample_entry(&data)?),
-        SampleEntryType::Mp4a => SampleEntryData::Audio(parse_audio_sample_entry(&data)?),
+        SampleEntryType::Avc1 | SampleEntryType::Hvc1 | SampleEntryType::Mp4v => {
+            SampleEntryData::Video(parse_video_sample_entry(&data)?)
+        }
+        SampleEntryType::Mp4a | SampleEntryType::Aavd => {
+            SampleEntryData::Audio(parse_audio_sample_entry(&data)?)
+        }
         _ => SampleEntryData::Other(data),
     };
 
