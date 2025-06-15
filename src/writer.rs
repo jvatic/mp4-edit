@@ -3,7 +3,7 @@ use futures_io::AsyncWrite;
 use futures_util::AsyncWriteExt;
 use thiserror::Error;
 
-use crate::atom::FourCC;
+use crate::Atom;
 
 #[derive(Debug, Error)]
 #[error("{kind}{}", self.source.as_ref().map(|e| format!(" ({e})")).unwrap_or(String::new()))]
@@ -24,73 +24,76 @@ pub enum WriteErrorKind {
 pub struct Mp4Writer {}
 
 impl Mp4Writer {
+    /// Serialize an atom and all its children into bytes
+    fn serialize_atom(atom: &Atom) -> Vec<u8> {
+        let mut result = Vec::new();
+
+        // Get atom data bytes
+        let data_bytes = if let Some(data) = &atom.data {
+            let bytes: Vec<u8> = data.clone().into();
+            bytes
+        } else {
+            Vec::new()
+        };
+
+        // Serialize all children
+        let mut children_bytes = Vec::new();
+        for child in &atom.children {
+            let child_bytes = Self::serialize_atom(child);
+            children_bytes.extend(child_bytes);
+        }
+
+        // Calculate total content size (data + children)
+        let content_size = data_bytes.len() as u64 + children_bytes.len() as u64;
+
+        // Determine if we need 64-bit size
+        let total_size_with_32bit_header = 8u64 + content_size;
+        let use_64bit = total_size_with_32bit_header > u32::MAX as u64;
+
+        if use_64bit {
+            // Extended 64-bit size format: size=1 (4 bytes) + type (4 bytes) + extended_size (8 bytes) + content
+            let total_size = 16u64 + content_size;
+
+            // Write size=1 to indicate extended format
+            result.extend_from_slice(&1u32.to_be_bytes());
+
+            // Write atom type
+            result.extend_from_slice(&atom.atom_type.0);
+
+            // Write extended size
+            result.extend_from_slice(&total_size.to_be_bytes());
+        } else {
+            // Standard 32-bit size format: size (4 bytes) + type (4 bytes) + content
+            let total_size = total_size_with_32bit_header as u32;
+
+            // Write size
+            result.extend_from_slice(&total_size.to_be_bytes());
+
+            // Write atom type
+            result.extend_from_slice(&atom.atom_type.0);
+        }
+
+        // Write atom data
+        result.extend_from_slice(&data_bytes);
+
+        // Write children
+        result.extend_from_slice(&children_bytes);
+
+        result
+    }
+
     pub async fn write_atom<W: AsyncWrite + Unpin>(
         mut writer: W,
-        atom_type: FourCC,
-        data: impl Into<Vec<u8>>,
+        atom: Atom,
     ) -> Result<(), WriteError> {
-        // Serialize the atom data first to know its size
-        let data_bytes = data.into();
+        // Serialize the entire atom tree into bytes
+        let bytes = Self::serialize_atom(&atom);
 
-        let header_size = 8u64; // 4 bytes size + 4 bytes type
-        let total_size = header_size + data_bytes.len() as u64;
-
-        // Check if we need extended 64-bit size
-        if total_size > u32::MAX as u64 {
-            // Extended size format: size=1, type, extended_size, data
-            writer
-                .write_all(&1u32.to_be_bytes())
-                .await
-                .map_err(|e| WriteError {
-                    kind: WriteErrorKind::Io,
-                    source: Some(Box::new(e)),
-                })?;
-
-            writer
-                .write_all(&atom_type.0)
-                .await
-                .map_err(|e| WriteError {
-                    kind: WriteErrorKind::Io,
-                    source: Some(Box::new(e)),
-                })?;
-
-            let extended_total_size = 16u64 + data_bytes.len() as u64; // 16 bytes header + data
-            writer
-                .write_all(&extended_total_size.to_be_bytes())
-                .await
-                .map_err(|e| WriteError {
-                    kind: WriteErrorKind::Io,
-                    source: Some(Box::new(e)),
-                })?;
-        } else {
-            // Standard 32-bit size format
-            writer
-                .write_all(&(total_size as u32).to_be_bytes())
-                .await
-                .map_err(|e| WriteError {
-                    kind: WriteErrorKind::Io,
-                    source: Some(Box::new(e)),
-                })?;
-
-            writer
-                .write_all(&atom_type.0)
-                .await
-                .map_err(|e| WriteError {
-                    kind: WriteErrorKind::Io,
-                    source: Some(Box::new(e)),
-                })?;
-        }
-
-        // Write the atom data
-        if !data_bytes.is_empty() {
-            writer
-                .write_all(&data_bytes)
-                .await
-                .map_err(|e| WriteError {
-                    kind: WriteErrorKind::Io,
-                    source: Some(Box::new(e)),
-                })?;
-        }
+        // Write all bytes at once
+        writer.write_all(&bytes).await.map_err(|e| WriteError {
+            kind: WriteErrorKind::Io,
+            source: Some(Box::new(e)),
+        })?;
 
         writer.flush().await.map_err(|e| WriteError {
             kind: WriteErrorKind::Io,

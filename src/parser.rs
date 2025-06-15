@@ -148,7 +148,10 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
             let next_atom_type = match self.peek_next_atom_type().await {
                 Ok(next_atom_type) => Ok(next_atom_type),
                 Err(err) => {
-                    if matches!(err.kind, ParseErrorKind::Eof) {
+                    if matches!(
+                        err.kind,
+                        ParseErrorKind::Eof | ParseErrorKind::InvalidHeader
+                    ) {
                         // end of stream, this means there's no mdat atom
                         // TODO: rewrite the tests to always include an mdat atom so we can get rid of this check
                         break;
@@ -359,7 +362,15 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
     async fn peek_next_atom_type(&mut self) -> Result<FourCC, ParseError> {
         let mut header = [0u8; 8];
         self.peek_exact(&mut header).await?;
-        Ok(FourCC([header[4], header[5], header[6], header[7]]))
+        let atom_type: [u8; 4] = header[4..].try_into().unwrap();
+        if atom_type == [0u8; 4] {
+            return Err(ParseError {
+                kind: ParseErrorKind::InvalidHeader,
+                location: Some((self.current_offset, 8)),
+                source: None,
+            });
+        }
+        Ok(FourCC(atom_type))
     }
 
     async fn parse_next_atom(&mut self) -> Result<ParsedAtom, ParseError> {
