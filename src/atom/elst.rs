@@ -43,6 +43,52 @@ impl Parse for EditListAtom {
     }
 }
 
+impl From<EditListAtom> for Vec<u8> {
+    fn from(atom: EditListAtom) -> Self {
+        let mut data = Vec::new();
+
+        // Version (1 byte)
+        data.push(atom.version);
+
+        // Flags (3 bytes)
+        data.extend_from_slice(&atom.flags);
+
+        // Entry count (4 bytes, big-endian)
+        data.extend_from_slice(&(atom.entries.len() as u32).to_be_bytes());
+
+        // Entries
+        for entry in atom.entries {
+            match atom.version {
+                0 => {
+                    // Version 0: 32-bit fields
+                    data.extend_from_slice(&(entry.segment_duration as u32).to_be_bytes());
+                    data.extend_from_slice(&(entry.media_time as i32).to_be_bytes());
+                    // Convert f32 to fixed-point 16.16
+                    let rate_fixed = (entry.media_rate * 65536.0) as u32;
+                    data.extend_from_slice(&rate_fixed.to_be_bytes());
+                }
+                1 => {
+                    // Version 1: 64-bit fields for duration and time
+                    data.extend_from_slice(&entry.segment_duration.to_be_bytes());
+                    data.extend_from_slice(&entry.media_time.to_be_bytes());
+                    // Convert f32 to fixed-point 16.16
+                    let rate_fixed = (entry.media_rate * 65536.0) as u32;
+                    data.extend_from_slice(&rate_fixed.to_be_bytes());
+                }
+                _ => {
+                    // Fallback to version 0 format for unknown versions
+                    data.extend_from_slice(&(entry.segment_duration as u32).to_be_bytes());
+                    data.extend_from_slice(&(entry.media_time as i32).to_be_bytes());
+                    let rate_fixed = (entry.media_rate * 65536.0) as u32;
+                    data.extend_from_slice(&rate_fixed.to_be_bytes());
+                }
+            }
+        }
+
+        data
+    }
+}
+
 fn parse_elst_data<R: Read>(mut reader: R) -> Result<EditListAtom, anyhow::Error> {
     // Read version and flags (4 bytes)
     let mut version_flags = [0u8; 4];

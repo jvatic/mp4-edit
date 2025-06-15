@@ -198,3 +198,38 @@ impl From<RawData> for AtomData {
         AtomData::RawData(data)
     }
 }
+
+impl From<RawData> for Vec<u8> {
+    fn from(data: RawData) -> Self {
+        data.0
+    }
+}
+
+impl From<AtomData> for Vec<u8> {
+    fn from(data: AtomData) -> Self {
+        use AtomData::*;
+        match data {
+            FileType(atom) => atom.into(),
+            MovieHeader(atom) => atom.into(),
+            TrackHeader(atom) => atom.into(),
+            EditList(atom) => atom.into(),
+            MediaHeader(atom) => atom.into(),
+            HandlerReference(atom) => atom.into(),
+            GenericMediaHeader(atom) => atom.into(),
+            ItemList(atom) => atom.into(),
+            SoundMediaHeader(atom) => atom.into(),
+            SampleDescriptionTable(atom) => atom.into(),
+            TrackReference(atom) => atom.into(),
+            DataReference(atom) => atom.into(),
+            SampleSize(atom) => atom.into(),
+            ChunkOffset(atom) => atom.into(),
+            TimeToSample(atom) => atom.into(),
+            SampleToChunk(atom) => atom.into(),
+            SampleToGroup(atom) => atom.into(),
+            SampleGroupDescription(atom) => atom.into(),
+            ChapterList(atom) => atom.into(),
+            Free(atom) => atom.into(),
+            RawData(data) => data.into(),
+        }
+    }
+}

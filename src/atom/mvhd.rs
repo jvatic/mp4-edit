@@ -269,3 +269,91 @@ fn is_empty_matrix(matrix: &[i32; 9]) -> bool {
     let identity = [0x00010000, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000];
     matrix == &empty || matrix == &identity
 }
+
+impl From<MovieHeaderAtom> for Vec<u8> {
+    fn from(atom: MovieHeaderAtom) -> Self {
+        let mut data = Vec::new();
+
+        // Version and flags (4 bytes)
+        let version_flags = (atom.version as u32) << 24
+            | (atom.flags[0] as u32) << 16
+            | (atom.flags[1] as u32) << 8
+            | (atom.flags[2] as u32);
+        data.extend_from_slice(&version_flags.to_be_bytes());
+
+        // Determine version based on whether values fit in 32-bit
+        let needs_64_bit = atom.creation_time > u32::MAX as u64
+            || atom.modification_time > u32::MAX as u64
+            || atom.duration > u32::MAX as u64;
+
+        let version = if needs_64_bit { 1 } else { 0 };
+
+        // Update version in the version_flags that was already written
+        let version_flags = (version as u32) << 24
+            | (atom.flags[0] as u32) << 16
+            | (atom.flags[1] as u32) << 8
+            | (atom.flags[2] as u32);
+        // Replace the version_flags bytes that were already written
+        data[0..4].copy_from_slice(&version_flags.to_be_bytes());
+
+        match version {
+            0 => {
+                // Creation time (32-bit)
+                data.extend_from_slice(&(atom.creation_time as u32).to_be_bytes());
+                // Modification time (32-bit)
+                data.extend_from_slice(&(atom.modification_time as u32).to_be_bytes());
+                // Timescale (32-bit)
+                data.extend_from_slice(&atom.timescale.to_be_bytes());
+                // Duration (32-bit)
+                data.extend_from_slice(&(atom.duration as u32).to_be_bytes());
+            }
+            1 => {
+                // Creation time (64-bit)
+                data.extend_from_slice(&atom.creation_time.to_be_bytes());
+                // Modification time (64-bit)
+                data.extend_from_slice(&atom.modification_time.to_be_bytes());
+                // Timescale (32-bit)
+                data.extend_from_slice(&atom.timescale.to_be_bytes());
+                // Duration (64-bit)
+                data.extend_from_slice(&atom.duration.to_be_bytes());
+            }
+            _ => {} // Should not happen due to validation during parsing
+        }
+
+        // Rate (fixed-point 16.16)
+        let rate_fixed = (atom.rate * 65536.0) as u32;
+        data.extend_from_slice(&rate_fixed.to_be_bytes());
+
+        // Volume (fixed-point 8.8)
+        let volume_fixed = (atom.volume * 256.0) as u16;
+        data.extend_from_slice(&volume_fixed.to_be_bytes());
+
+        // Reserved (10 bytes)
+        data.extend_from_slice(&[0u8; 10]);
+
+        // Matrix (9 x 32-bit values)
+        let matrix = atom
+            .matrix
+            .unwrap_or([0x00010000, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000]);
+        for value in matrix {
+            data.extend_from_slice(&value.to_be_bytes());
+        }
+
+        // Preview time
+        data.extend_from_slice(&atom.preview_time.to_be_bytes());
+        // Preview duration
+        data.extend_from_slice(&atom.preview_duration.to_be_bytes());
+        // Poster time
+        data.extend_from_slice(&atom.poster_time.to_be_bytes());
+        // Selection time
+        data.extend_from_slice(&atom.selection_time.to_be_bytes());
+        // Selection duration
+        data.extend_from_slice(&atom.selection_duration.to_be_bytes());
+        // Current time
+        data.extend_from_slice(&atom.current_time.to_be_bytes());
+        // Next track ID
+        data.extend_from_slice(&atom.next_track_id.to_be_bytes());
+
+        data
+    }
+}

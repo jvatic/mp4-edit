@@ -171,3 +171,28 @@ fn parse_tref_data<R: Read>(mut reader: R) -> Result<TrackReferenceAtom, anyhow:
 
     Ok(TrackReferenceAtom { references })
 }
+
+impl From<TrackReferenceAtom> for Vec<u8> {
+    fn from(atom: TrackReferenceAtom) -> Self {
+        let mut data = Vec::new();
+
+        // Serialize each reference as a child atom
+        for reference in atom.references {
+            // Calculate size: 8 bytes header + 4 bytes per track ID
+            let size = 8 + (reference.track_ids.len() * 4);
+
+            // Write size (4 bytes)
+            data.extend_from_slice(&(size as u32).to_be_bytes());
+
+            // Write reference type (4 bytes)
+            data.extend_from_slice(&reference.reference_type.0);
+
+            // Write track IDs (4 bytes each)
+            for track_id in reference.track_ids {
+                data.extend_from_slice(&track_id.to_be_bytes());
+            }
+        }
+
+        data
+    }
+}

@@ -50,6 +50,39 @@ impl Parse for SampleToGroupAtom {
     }
 }
 
+impl From<SampleToGroupAtom> for Vec<u8> {
+    fn from(atom: SampleToGroupAtom) -> Self {
+        let mut data = Vec::new();
+
+        // Version (1 byte)
+        data.push(atom.version);
+
+        // Flags (3 bytes)
+        data.extend_from_slice(&atom.flags);
+
+        // Grouping type (4 bytes)
+        data.extend_from_slice(&atom.grouping_type.0);
+
+        // Grouping type parameter (4 bytes) - version >= 1 only
+        if let Some(param) = atom.grouping_type_parameter {
+            data.extend_from_slice(&param.to_be_bytes());
+        }
+
+        // Entry count (4 bytes, big-endian)
+        data.extend_from_slice(&(atom.entries.len() as u32).to_be_bytes());
+
+        // Entries
+        for entry in atom.entries {
+            // Sample count (4 bytes, big-endian)
+            data.extend_from_slice(&entry.sample_count.to_be_bytes());
+            // Group description index (4 bytes, big-endian)
+            data.extend_from_slice(&entry.group_description_index.to_be_bytes());
+        }
+
+        data
+    }
+}
+
 fn parse_sbgp_data(data: &[u8]) -> Result<SampleToGroupAtom, anyhow::Error> {
     let mut cursor = Cursor::new(data);
     let mut buffer = [0u8; 4];

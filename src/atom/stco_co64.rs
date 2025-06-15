@@ -17,6 +17,12 @@ pub const CO64: &[u8; 4] = b"co64";
 #[derive(Clone, Deref)]
 pub struct ChunkOffsets(Vec<u64>);
 
+impl ChunkOffsets {
+    pub fn into_inner(self) -> Vec<u64> {
+        self.0
+    }
+}
+
 impl fmt::Debug for ChunkOffsets {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.0.len() <= 10 {
@@ -60,6 +66,34 @@ impl Parse for ChunkOffsetAtom {
 
         let cursor = async_to_sync_read(reader).await?;
         parse_stco_data(cursor, is_64bit)
+    }
+}
+
+impl From<ChunkOffsetAtom> for Vec<u8> {
+    fn from(atom: ChunkOffsetAtom) -> Self {
+        let mut data = Vec::new();
+
+        // Version (1 byte)
+        data.push(atom.version);
+
+        // Flags (3 bytes)
+        data.extend_from_slice(&atom.flags);
+
+        // Entry count (4 bytes, big-endian)
+        data.extend_from_slice(&(atom.chunk_offsets.len() as u32).to_be_bytes());
+
+        // Chunk offsets
+        for offset in atom.chunk_offsets.iter() {
+            if atom.is_64bit {
+                // 64-bit offsets (co64)
+                data.extend_from_slice(&offset.to_be_bytes());
+            } else {
+                // 32-bit offsets (stco)
+                data.extend_from_slice(&(*offset as u32).to_be_bytes());
+            }
+        }
+
+        data
     }
 }
 

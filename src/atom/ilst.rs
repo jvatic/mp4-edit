@@ -205,6 +205,107 @@ impl Parse for ItemListAtom {
     }
 }
 
+impl From<ItemListAtom> for Vec<u8> {
+    fn from(atom: ItemListAtom) -> Self {
+        let mut data = Vec::new();
+
+        // Serialize parsed metadata items
+        for item in atom.items.iter() {
+            let mut item_data = Vec::new();
+
+            // Add 'data' atom
+            let mut data_atom = Vec::new();
+
+            // Type flags and metadata
+            data_atom.extend_from_slice(&item.metadata.type_flags.to_be_bytes());
+            data_atom.extend_from_slice(&item.metadata.country.to_be_bytes());
+            data_atom.extend_from_slice(&item.metadata.language.to_be_bytes());
+
+            // Value data based on type
+            match &item.value {
+                MetadataValue::Text(text) => {
+                    data_atom.extend_from_slice(text.as_bytes());
+                }
+                MetadataValue::Binary(bytes) => {
+                    data_atom.extend_from_slice(bytes);
+                }
+                MetadataValue::Jpeg(bytes) => {
+                    data_atom.extend_from_slice(bytes);
+                }
+                MetadataValue::Png(bytes) => {
+                    data_atom.extend_from_slice(bytes);
+                }
+                MetadataValue::UInt8(val) => {
+                    data_atom.push(*val);
+                }
+                MetadataValue::UInt16(val) => {
+                    data_atom.extend_from_slice(&val.to_be_bytes());
+                }
+                MetadataValue::UInt32(val) => {
+                    data_atom.extend_from_slice(&val.to_be_bytes());
+                }
+                MetadataValue::UInt64(val) => {
+                    data_atom.extend_from_slice(&val.to_be_bytes());
+                }
+                MetadataValue::Int8(val) => {
+                    data_atom.push(*val as u8);
+                }
+                MetadataValue::Int16(val) => {
+                    data_atom.extend_from_slice(&val.to_be_bytes());
+                }
+                MetadataValue::Int32(val) => {
+                    data_atom.extend_from_slice(&val.to_be_bytes());
+                }
+                MetadataValue::Int64(val) => {
+                    data_atom.extend_from_slice(&val.to_be_bytes());
+                }
+                MetadataValue::Float32(val) => {
+                    data_atom.extend_from_slice(&val.to_be_bytes());
+                }
+                MetadataValue::Float64(val) => {
+                    data_atom.extend_from_slice(&val.to_be_bytes());
+                }
+            }
+
+            // Write 'data' atom size and type
+            let data_atom_size = 8 + data_atom.len();
+            item_data.extend_from_slice(&(data_atom_size as u32).to_be_bytes());
+            item_data.extend_from_slice(b"data");
+            item_data.extend_from_slice(&data_atom);
+
+            // Write item size, type and data
+            let item_size = 8 + item_data.len();
+            data.extend_from_slice(&(item_size as u32).to_be_bytes());
+
+            // Convert item_type string to 4 bytes
+            let type_bytes = item.item_type.as_bytes();
+            if type_bytes.len() >= 4 {
+                data.extend_from_slice(&type_bytes[..4]);
+            } else {
+                let mut padded = [0u8; 4];
+                padded[..type_bytes.len()].copy_from_slice(type_bytes);
+                data.extend_from_slice(&padded);
+            }
+
+            data.extend_from_slice(&item_data);
+        }
+
+        // Serialize raw metadata items
+        for raw_item in atom.raw_items.iter() {
+            // Item size and raw data
+            let item_size = 8 + raw_item.data.len();
+            data.extend_from_slice(&(item_size as u32).to_be_bytes());
+
+            // Item type (4 bytes)
+            data.extend_from_slice(&raw_item.item_type);
+
+            data.extend_from_slice(&raw_item.data);
+        }
+
+        data
+    }
+}
+
 fn parse_ilst_data<R: Read>(mut reader: R) -> Result<ItemListAtom, anyhow::Error> {
     let mut items = Vec::new();
     let mut raw_items = Vec::new();
