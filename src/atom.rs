@@ -45,6 +45,7 @@ pub struct Atom {
     pub offset: u64,
     pub size: u64,
     pub data: Option<AtomData>,
+    pub children: Vec<Atom>,
 }
 
 #[derive(Debug, Clone)]

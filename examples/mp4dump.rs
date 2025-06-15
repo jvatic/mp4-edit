@@ -8,7 +8,10 @@ use tokio::{
 };
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
-use mp4_parser::{Atom, AtomData, ParseMetadataEvent, Parser};
+use mp4_parser::atom::{
+    ChunkOffsetAtom, MovieHeaderAtom, SampleSizeAtom, SampleToChunkAtom, TimeToSampleAtom,
+};
+use mp4_parser::{Atom, AtomData, Parser};
 
 /// Format file size in human-readable format
 fn format_size(size: u64) -> String {
@@ -86,11 +89,65 @@ fn print_table_footer() {
     println!("\x1b[1;36m╰────────────────────────────────────────────────────────────────────────────────────\x1b[0m\n");
 }
 
-/// Print atoms directly from stream events
+/// Process atom recursively, handling data extraction and printing
+fn process_atom(
+    atom: &Atom,
+    indent: usize,
+    atom_count: &mut usize,
+    movie_header: &mut Option<MovieHeaderAtom>,
+    track_id: &mut Option<u32>,
+    sample_sizes: &mut Option<SampleSizeAtom>,
+    sample_durations: &mut Option<TimeToSampleAtom>,
+    chunk_offsets: &mut Option<ChunkOffsetAtom>,
+    sample_to_chunk: &mut Option<SampleToChunkAtom>,
+) {
+    print_atom(atom, indent);
+    *atom_count += 1;
+
+    // Extract data from atom
+    if let Some(data) = &atom.data {
+        if let AtomData::TrackHeader(h) = data {
+            *track_id = Some(h.track_id);
+        }
+
+        // take sample metadata for track 1
+        if matches!(track_id, Some(1)) {
+            use AtomData::*;
+            match data {
+                SampleSize(data) => *sample_sizes = Some(data.clone()),
+                TimeToSample(data) => *sample_durations = Some(data.clone()),
+                ChunkOffset(data) => *chunk_offsets = Some(data.clone()),
+                SampleToChunk(data) => *sample_to_chunk = Some(data.clone()),
+                _ => {}
+            }
+        } else if movie_header.is_none() {
+            use AtomData::*;
+            if let MovieHeader(data) = data {
+                *movie_header = Some(data.clone());
+            }
+        }
+    }
+
+    // Process children recursively
+    for child in &atom.children {
+        process_atom(
+            child,
+            indent + 1,
+            atom_count,
+            movie_header,
+            track_id,
+            sample_sizes,
+            sample_durations,
+            chunk_offsets,
+            sample_to_chunk,
+        );
+    }
+}
+
+/// Print atoms directly from hierarchical stream
 async fn print_atoms_from_stream<R: futures_io::AsyncRead + Unpin + Send>(
     mut parser: Parser<R>,
 ) -> anyhow::Result<usize> {
-    let mut indent_level = 0;
     let mut atom_count = 0;
     let mut first_atom = true;
 
@@ -101,64 +158,24 @@ async fn print_atoms_from_stream<R: futures_io::AsyncRead + Unpin + Send>(
     let mut chunk_offsets = None;
     let mut sample_to_chunk = None;
 
-    {
-        let stream = parser.stream_metadata();
-        pin_mut!(stream);
-        while let Some(event) = stream
-            .next()
-            .await
-            .transpose()
-            .context("Failed to parse metadata stream event")?
-        {
-            match event {
-                ParseMetadataEvent::EnterContainer(atom) => {
-                    if first_atom {
-                        print_table_header();
-                        first_atom = false;
-                    }
-
-                    print_atom(&atom, indent_level);
-                    indent_level += 1;
-                    atom_count += 1;
-                }
-                ParseMetadataEvent::Leaf(atom) => {
-                    if first_atom {
-                        print_table_header();
-                        first_atom = false;
-                    }
-
-                    print_atom(&atom, indent_level);
-                    atom_count += 1;
-
-                    if let Some(AtomData::TrackHeader(h)) = atom.data.as_ref() {
-                        track_id = Some(h.track_id);
-                    }
-
-                    // take sample metadata for track 1
-                    if matches!(track_id, Some(1)) && atom.data.is_some() {
-                        use AtomData::*;
-                        match atom.data.unwrap() {
-                            SampleSize(data) => sample_sizes = Some(data),
-                            TimeToSample(data) => sample_durations = Some(data),
-                            ChunkOffset(data) => chunk_offsets = Some(data),
-                            SampleToChunk(data) => sample_to_chunk = Some(data),
-                            _ => {}
-                        }
-                    } else if movie_header.is_none() {
-                        use AtomData::*;
-                        match atom.data.unwrap() {
-                            MovieHeader(data) => movie_header = Some(data),
-                            _ => {}
-                        }
-                    }
-                }
-                ParseMetadataEvent::ExitContainer => {
-                    if indent_level > 0 {
-                        indent_level -= 1;
-                    }
-                }
-            }
+    let atoms = parser.parse_metadata().await?;
+    for atom in atoms {
+        if first_atom {
+            print_table_header();
+            first_atom = false;
         }
+
+        process_atom(
+            &atom,
+            0,
+            &mut atom_count,
+            &mut movie_header,
+            &mut track_id,
+            &mut sample_sizes,
+            &mut sample_durations,
+            &mut chunk_offsets,
+            &mut sample_to_chunk,
+        );
     }
 
     if movie_header.is_some()

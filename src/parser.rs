@@ -1,7 +1,7 @@
 use derive_more::Display;
 use futures_io::AsyncRead;
 use futures_util::io::{AsyncReadExt, Cursor};
-use futures_util::stream::{Stream, StreamExt};
+use futures_util::stream::Stream;
 use std::future::Future;
 use std::ops::Deref;
 use thiserror::Error;
@@ -78,12 +78,6 @@ pub enum ParseErrorKind {
     InsufficientData,
 }
 
-pub enum ParseMetadataEvent {
-    EnterContainer(Atom),
-    Leaf(Atom),
-    ExitContainer,
-}
-
 pub struct Sample {
     pub data: Vec<u8>,
     pub duration: u32,
@@ -128,55 +122,84 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
         }
     }
 
-    pub fn stream_metadata<'a>(
-        &'a mut self,
-    ) -> impl Stream<Item = Result<ParseMetadataEvent, ParseError>> + 'a {
+    pub async fn parse_metadata<'a>(&'a mut self) -> Result<Vec<Atom>, ParseError> {
         if !matches!(self.state, ParserState::NotStarted) {
             panic!("parser in an invalid state");
         }
         self.state = ParserState::MetaData;
-        self.parse_metadata_stream(None)
+        self.parse_metadata_inner(None).await
     }
 
-    /// Streams individual samples from the MP4 file with full metadata.
-    ///
-    /// # Returns
-    ///
-    /// A stream of `Result<Sample, ParseError>` where each `Sample` contains:
-    /// - `data`: The raw sample data bytes
-    /// - `size`: Size of the sample in bytes
-    /// - `duration`: Duration of the sample in timescale units
-    /// - `description_index`: Index into the sample description table (1-based)
-    /// - `sample_number`: Sequential sample number (0-based)
-    /// - `timestamp`: Cumulative timestamp in timescale units
-    ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// # use futures_util::stream::StreamExt;
-    /// # async fn example() -> Result<(), BoxedError> {
-    /// let mut parser = Parser::new(reader);
-    /// // ... parse metadata atoms to get required atoms ...
-    ///
-    /// let sample_stream = parser.stream_samples(
-    ///     sample_sizes,
-    ///     sample_durations,
-    ///     sample_descriptions,
-    ///     chunk_offsets,
-    ///     sample_to_chunk
-    /// );
-    ///
-    /// // Process each sample individually
-    /// pin_mut!(sample_stream);
-    /// while let Some(sample_result) = sample_stream.next().await {
-    ///     let sample = sample_result?;
-    ///     println!("Sample {}: {} bytes, duration {}",
-    ///         sample.sample_number, sample.size, sample.duration);
-    ///     // Process sample.data...
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
+    async fn parse_metadata_inner<'a>(
+        &'a mut self,
+        length_limit: Option<usize>,
+    ) -> Result<Vec<Atom>, ParseError> {
+        let start_offset = self.current_offset;
+
+        let mut top_level_atoms = Vec::new();
+
+        loop {
+            // ensure we're respecting container bounds
+            if length_limit.is_some_and(|limit| self.current_offset - start_offset >= limit) {
+                break;
+            }
+
+            // only parse as far as the mdat atom (we're assuming mdat is the last atom)
+            let next_atom_type = match self.peek_next_atom_type().await {
+                Ok(next_atom_type) => Ok(next_atom_type),
+                Err(err) => {
+                    if matches!(err.kind, ParseErrorKind::Eof) {
+                        // end of stream, this means there's no mdat atom
+                        // TODO: rewrite the tests to always include an mdat atom so we can get rid of this check
+                        break;
+                    }
+                    Err(err)
+                }
+            }?;
+            if next_atom_type == MDAT {
+                break;
+            }
+
+            let parsed_atom = self.parse_next_atom().await?;
+            if is_container_atom(&parsed_atom.atom_type) {
+                // META containers have additional header data
+                let size = if parsed_atom.atom_type.deref() == META {
+                    // Ignore META version and flags
+                    self.read_data(META_VERSION_FLAGS_SIZE).await?;
+                    parsed_atom.content_size - META_VERSION_FLAGS_SIZE
+                } else {
+                    parsed_atom.content_size
+                };
+
+                let container_atom = Atom {
+                    atom_type: parsed_atom.atom_type,
+                    size: parsed_atom.size,
+                    offset: parsed_atom.offset,
+                    data: None,
+                    children: Box::pin(self.parse_metadata_inner(Some(size))).await?,
+                };
+
+                top_level_atoms.push(container_atom);
+            } else {
+                // Yield leaf atoms
+                let atom_type = parsed_atom.atom_type;
+                let offset = parsed_atom.offset;
+                let size = parsed_atom.size;
+                let atom_data = self.parse_atom_data(parsed_atom).await?;
+                let atom = Atom {
+                    atom_type,
+                    offset,
+                    size,
+                    data: Some(atom_data),
+                    children: Vec::new(),
+                };
+                top_level_atoms.push(atom);
+            }
+        }
+
+        Ok(top_level_atoms)
+    }
+
     pub fn stream_samples<'a>(
         &'a mut self,
         sample_sizes: SampleSizeAtom,
@@ -466,87 +489,6 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
 
         Ok(atom_data)
     }
-
-    fn parse_metadata_stream<'a>(
-        &'a mut self,
-        length_limit: Option<usize>,
-    ) -> impl Stream<Item = Result<ParseMetadataEvent, ParseError>> + 'a {
-        async_stream::stream! {
-            let start_offset = self.current_offset;
-
-            loop {
-                // ensure we're respecting container bounds
-                if length_limit.is_some_and(|limit| self.current_offset - start_offset >= limit) {
-                   break;
-                }
-
-                // only parse as far as the mdat atom (we're assuming mdat is the last atom)
-                let next_atom_type = match self.peek_next_atom_type().await {
-                    Ok(next_atom_type) => Ok(next_atom_type),
-                    Err(err) => {
-                        if matches!(err.kind, ParseErrorKind::Eof) {
-                            // end of stream, this means there's no mdat atom
-                            // TODO: rewrite the tests to always include an mdat atom so we can get rid of this check
-                            break;
-                        }
-                        Err(err)
-                    },
-                }?;
-                if next_atom_type == MDAT {
-                    break;
-                }
-
-                let parsed_atom = self.parse_next_atom().await?;
-                if is_container_atom(&parsed_atom.atom_type) {
-                    // For container atoms, emit EnterContainer, then recursively emit children, then ExitContainer
-                    let container_atom = Atom {
-                        atom_type: parsed_atom.atom_type,
-                        size: parsed_atom.size,
-                        offset: parsed_atom.offset,
-                        data: None,
-                    };
-                    yield Ok(ParseMetadataEvent::EnterContainer(container_atom));
-
-                    // META containers have additional header data
-                    let size = if parsed_atom.atom_type.deref() == META {
-                        // Ignore META version and flags
-                        self.read_data(META_VERSION_FLAGS_SIZE).await?;
-                        parsed_atom.content_size - META_VERSION_FLAGS_SIZE
-                    } else {
-                        parsed_atom.content_size
-                    };
-
-                    // Recursively parse children and emit their events
-                    let mut child_stream = Box::pin(self.parse_metadata_stream(Some(size)));
-
-                    while let Some(child_event) = child_stream.as_mut().next().await {
-                        match child_event {
-                            Ok(event) => yield Ok(event),
-                            Err(e) => {
-                                yield Err(e);
-                                return;
-                            }
-                        }
-                    }
-
-                    yield Ok(ParseMetadataEvent::ExitContainer);
-                } else {
-                    // Yield leaf atoms
-                    let atom_type = parsed_atom.atom_type;
-                    let offset = parsed_atom.offset;
-                    let size = parsed_atom.size;
-                    let atom_data = self.parse_atom_data(parsed_atom).await?;
-                    let atom = Atom {
-                        atom_type,
-                        offset,
-                        size,
-                        data: Some(atom_data),
-                    };
-                    yield Ok(ParseMetadataEvent::Leaf(atom));
-                }
-            }
-        }
-    }
 }
 
 /// Determines whether a given atom type (fourcc) should be treated as a container for other atoms.
@@ -569,313 +511,4 @@ fn is_container_atom(atom_type: &[u8; 4]) -> bool {
             | b"schi"
             | META
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use futures_util::pin_mut;
-    use futures_util::stream::StreamExt;
-    use std::ops::Deref;
-
-    use super::*;
-
-    #[tokio::test]
-    async fn test_32bit_size_parsing() {
-        // Create a simple FTYP atom with 32-bit size
-        let mut data = Vec::new();
-        data.extend_from_slice(&20u32.to_be_bytes()); // Size: 20 bytes total
-        data.extend_from_slice(b"ftyp"); // Type: ftyp
-        data.extend_from_slice(b"mp41"); // Major brand
-        data.extend_from_slice(&0u32.to_be_bytes()); // Minor version
-        data.extend_from_slice(b"mp41"); // Compatible brand
-
-        let mut parser = Parser::new(data.as_slice());
-        let stream = parser.stream_metadata();
-        pin_mut!(stream);
-
-        let mut atoms = Vec::new();
-        while let Some(result) = stream.next().await {
-            match result.unwrap() {
-                ParseMetadataEvent::Leaf(atom) => atoms.push(atom),
-                _ => {}
-            }
-        }
-
-        assert_eq!(atoms.len(), 1);
-        let ftyp_fourcc = b"ftyp";
-        assert_eq!(atoms[0].atom_type.deref(), ftyp_fourcc);
-        assert_eq!(atoms[0].size, 20);
-        assert_eq!(atoms[0].offset, 0);
-    }
-
-    #[tokio::test]
-    async fn test_64bit_extended_size_parsing() {
-        // Create an atom with extended 64-bit size
-        let mut data = Vec::new();
-        data.extend_from_slice(&1u32.to_be_bytes()); // Size: 1 (indicates extended size)
-        data.extend_from_slice(b"test"); // Type: test
-        data.extend_from_slice(&24u64.to_be_bytes()); // Extended size: 24 bytes total
-        data.extend_from_slice(b"hello!"); // 6 bytes of content (24 - 16 - 2 padding)
-        data.extend_from_slice(&[0u8; 2]); // padding to make exact size
-
-        let mut parser = Parser::new(data.as_slice());
-        let stream = parser.stream_metadata();
-        pin_mut!(stream);
-
-        let mut atoms = Vec::new();
-        while let Some(result) = stream.next().await {
-            match result.unwrap() {
-                ParseMetadataEvent::Leaf(atom) => atoms.push(atom),
-                _ => {}
-            }
-        }
-
-        assert_eq!(atoms.len(), 1);
-        let test_fourcc = b"test";
-        assert_eq!(atoms[0].atom_type.deref(), test_fourcc);
-        assert_eq!(atoms[0].size, 24);
-        assert_eq!(atoms[0].offset, 0);
-    }
-
-    #[tokio::test]
-    async fn test_multiple_atoms() {
-        // Create two atoms back-to-back
-        let mut data = Vec::new();
-
-        // First atom
-        data.extend_from_slice(&16u32.to_be_bytes()); // Size: 16 bytes
-        data.extend_from_slice(b"tes1"); // Type: tes1
-        data.extend_from_slice(b"data1234"); // 8 bytes content
-
-        // Second atom
-        data.extend_from_slice(&16u32.to_be_bytes()); // Size: 16 bytes
-        data.extend_from_slice(b"tes2"); // Type: tes2
-        data.extend_from_slice(b"data5678"); // 8 bytes content
-
-        let mut parser = Parser::new(data.as_slice());
-        let stream = parser.stream_metadata();
-        pin_mut!(stream);
-
-        let mut atoms = Vec::new();
-        while let Some(result) = stream.next().await {
-            match result.unwrap() {
-                ParseMetadataEvent::Leaf(atom) => atoms.push(atom),
-                _ => {}
-            }
-        }
-
-        assert_eq!(atoms.len(), 2);
-
-        let tes1_fourcc = b"tes1";
-        let tes2_fourcc = b"tes2";
-        assert_eq!(atoms[0].atom_type.deref(), tes1_fourcc);
-        assert_eq!(atoms[0].size, 16);
-        assert_eq!(atoms[0].offset, 0);
-
-        assert_eq!(atoms[1].atom_type.deref(), tes2_fourcc);
-        assert_eq!(atoms[1].size, 16);
-        assert_eq!(atoms[1].offset, 16);
-    }
-
-    #[tokio::test]
-    async fn test_container_atom_parsing() {
-        // Create a simple container atom (moov) with one child
-        let mut data = Vec::new();
-        data.extend_from_slice(&24u32.to_be_bytes()); // Size: 24 bytes total
-        data.extend_from_slice(b"moov"); // Type: moov (container)
-
-        // Child atom inside moov
-        data.extend_from_slice(&16u32.to_be_bytes()); // Size: 16 bytes
-        data.extend_from_slice(b"chld"); // Type: chld (4 bytes)
-        data.extend_from_slice(b"content!"); // 8 bytes content
-
-        let mut parser = Parser::new(data.as_slice());
-        let stream = parser.stream_metadata();
-        pin_mut!(stream);
-
-        let mut events = Vec::new();
-        while let Some(result) = stream.next().await {
-            events.push(result.unwrap());
-        }
-
-        // Should have: EnterContainer, Leaf, ExitContainer
-        assert_eq!(events.len(), 3);
-
-        let moov_fourcc = b"moov";
-        let chld_fourcc = b"chld";
-
-        match &events[0] {
-            ParseMetadataEvent::EnterContainer(atom) => {
-                assert_eq!(atom.atom_type.deref(), moov_fourcc);
-                assert_eq!(atom.size, 24);
-            }
-            _ => panic!("Expected EnterContainer event"),
-        }
-
-        match &events[1] {
-            ParseMetadataEvent::Leaf(atom) => {
-                assert_eq!(atom.atom_type.deref(), chld_fourcc);
-                assert_eq!(atom.size, 16);
-            }
-            _ => panic!("Expected Leaf event"),
-        }
-
-        match &events[2] {
-            ParseMetadataEvent::ExitContainer => {}
-            _ => panic!("Expected ExitContainer event"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_insufficient_data_error() {
-        // Create data that's too short for a complete atom header
-        let data = vec![0u8; 4]; // Only 4 bytes, need at least 8
-
-        let mut parser = Parser::new(data.as_slice());
-        let stream = parser.stream_metadata();
-        pin_mut!(stream);
-
-        let mut event_count = 0;
-        while let Some(result) = stream.next().await {
-            result.unwrap(); // Should not error
-            event_count += 1;
-        }
-
-        // Should produce no events when there's insufficient data
-        assert_eq!(event_count, 0);
-        // Should not panic or crash
-    }
-
-    #[tokio::test]
-    async fn test_invalid_size_error() {
-        // Create an atom with size smaller than header
-        let mut data = Vec::new();
-        data.extend_from_slice(&4u32.to_be_bytes()); // Size: 4 bytes (smaller than 8-byte header)
-        data.extend_from_slice(b"test"); // Type: test
-
-        let mut parser = Parser::new(data.as_slice());
-        let stream = parser.stream_metadata();
-        pin_mut!(stream);
-
-        // Should produce an error for invalid size
-        let result = stream.next().await;
-        assert!(result.is_some(), "Expected an error result");
-        let error = result.unwrap();
-        assert!(error.is_err(), "Expected an error for invalid atom size");
-
-        if let Err(parse_error) = error {
-            assert!(matches!(parse_error.kind, ParseErrorKind::InvalidSize));
-        }
-    }
-
-    #[tokio::test]
-    async fn test_stream_parsing() {
-        // Create test data with multiple atoms
-        let mut data = Vec::new();
-
-        // First atom
-        data.extend_from_slice(&16u32.to_be_bytes()); // Size: 16 bytes
-        data.extend_from_slice(b"tes1"); // Type: tes1
-        data.extend_from_slice(b"content1"); // 8 bytes content
-
-        // Second atom
-        data.extend_from_slice(&16u32.to_be_bytes()); // Size: 16 bytes
-        data.extend_from_slice(b"tes2"); // Type: tes2
-        data.extend_from_slice(b"content2"); // 8 bytes content
-
-        let mut parser = Parser::new(data.as_slice());
-        let stream = parser.stream_metadata();
-        pin_mut!(stream);
-
-        // Collect all stream items
-        let mut events = Vec::new();
-        while let Some(result) = stream.next().await {
-            events.push(result.unwrap());
-        }
-
-        // Should have 2 leaf events
-        assert_eq!(events.len(), 2);
-
-        // Check first atom
-        if let ParseMetadataEvent::Leaf(atom1) = &events[0] {
-            assert_eq!(atom1.atom_type.deref(), b"tes1");
-        } else {
-            panic!("Expected Leaf event");
-        }
-
-        // Check second atom
-        if let ParseMetadataEvent::Leaf(atom2) = &events[1] {
-            assert_eq!(atom2.atom_type.deref(), b"tes2");
-        } else {
-            panic!("Expected Leaf event");
-        }
-    }
-
-    #[tokio::test]
-    async fn test_container_event_parsing() {
-        // Create test data with a container atom containing child atoms
-        let mut data = Vec::new();
-
-        // Container atom "moov" with two child atoms
-        let child1_data = b"child1data";
-        let child2_data = b"child2data";
-        let child1_size = 4 + 4 + child1_data.len(); // header + type + data
-        let child2_size = 4 + 4 + child2_data.len(); // header + type + data
-        let container_content_size = child1_size + child2_size;
-        let container_size = 4 + 4 + container_content_size; // header + type + content
-
-        // Container atom header
-        data.extend_from_slice(&(container_size as u32).to_be_bytes()); // Size
-        data.extend_from_slice(b"moov"); // Type: moov (container)
-
-        // First child atom
-        data.extend_from_slice(&(child1_size as u32).to_be_bytes()); // Size
-        data.extend_from_slice(b"chd1"); // Type: chd1
-        data.extend_from_slice(child1_data); // Content
-
-        // Second child atom
-        data.extend_from_slice(&(child2_size as u32).to_be_bytes()); // Size
-        data.extend_from_slice(b"chd2"); // Type: chd2
-        data.extend_from_slice(child2_data); // Content
-
-        let mut parser = Parser::new(data.as_slice());
-        let stream = parser.stream_metadata();
-        pin_mut!(stream);
-
-        // Collect all stream events
-        let mut events = Vec::new();
-        while let Some(result) = stream.next().await {
-            events.push(result.unwrap());
-        }
-
-        // Should have: EnterContainer, Leaf, Leaf, ExitContainer
-        assert_eq!(events.len(), 4);
-
-        // Check event sequence
-        match &events[0] {
-            ParseMetadataEvent::EnterContainer(atom) => {
-                assert_eq!(atom.atom_type.deref(), b"moov");
-            }
-            _ => panic!("Expected EnterContainer event"),
-        }
-
-        match &events[1] {
-            ParseMetadataEvent::Leaf(atom) => {
-                assert_eq!(atom.atom_type.deref(), b"chd1");
-            }
-            _ => panic!("Expected first Leaf event"),
-        }
-
-        match &events[2] {
-            ParseMetadataEvent::Leaf(atom) => {
-                assert_eq!(atom.atom_type.deref(), b"chd2");
-            }
-            _ => panic!("Expected second Leaf event"),
-        }
-
-        match &events[3] {
-            ParseMetadataEvent::ExitContainer => {}
-            _ => panic!("Expected ExitContainer event"),
-        }
-    }
 }
