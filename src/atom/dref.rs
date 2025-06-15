@@ -92,6 +92,58 @@ impl Parse for DataReferenceAtom {
     }
 }
 
+impl From<DataReferenceAtom> for Vec<u8> {
+    fn from(atom: DataReferenceAtom) -> Self {
+        let mut data = Vec::new();
+
+        // Version (1 byte)
+        data.push(atom.version);
+
+        // Flags (3 bytes)
+        data.extend_from_slice(&atom.flags);
+
+        // Entry count (4 bytes, big-endian)
+        data.extend_from_slice(&atom.entry_count.to_be_bytes());
+
+        // Entries
+        for entry in atom.entries {
+            let mut entry_data = Vec::new();
+
+            // Entry version and flags (4 bytes)
+            entry_data.push(entry.version);
+            entry_data.extend_from_slice(&entry.flags);
+
+            // Entry data based on type
+            let (entry_type, entry_payload) = match entry.inner {
+                DataReferenceEntryInner::Url(url) => (entry_types::URL, url.into_bytes()),
+                DataReferenceEntryInner::Urn(urn) => (entry_types::URN, urn.into_bytes()),
+                DataReferenceEntryInner::Alias(alias_data) => (entry_types::ALIS, alias_data),
+                DataReferenceEntryInner::Unknown(unknown_data) => {
+                    // For unknown types, we can't determine the original type,
+                    // so we'll use a generic approach
+                    (b"unkn", unknown_data)
+                }
+            };
+
+            entry_data.extend_from_slice(&entry_payload);
+
+            // Calculate total entry size (4 + 4 + entry_data.len())
+            let entry_size = 8 + entry_data.len();
+
+            // Write entry size (4 bytes, big-endian)
+            data.extend_from_slice(&(entry_size as u32).to_be_bytes());
+
+            // Write entry type (4 bytes)
+            data.extend_from_slice(entry_type);
+
+            // Write entry data (version + flags + payload)
+            data.extend_from_slice(&entry_data);
+        }
+
+        data
+    }
+}
+
 fn parse_dref_data<R: Read>(mut reader: R) -> Result<DataReferenceAtom, anyhow::Error> {
     // Read version and flags (4 bytes)
     let mut version_flags = [0u8; 4];

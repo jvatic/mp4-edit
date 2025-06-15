@@ -63,6 +63,33 @@ impl Parse for SampleToChunkAtom {
     }
 }
 
+impl From<SampleToChunkAtom> for Vec<u8> {
+    fn from(atom: SampleToChunkAtom) -> Self {
+        let mut data = Vec::new();
+
+        // Version (1 byte)
+        data.push(atom.version);
+
+        // Flags (3 bytes)
+        data.extend_from_slice(&atom.flags);
+
+        // Entry count (4 bytes, big-endian)
+        data.extend_from_slice(&(atom.entries.len() as u32).to_be_bytes());
+
+        // Entries
+        for entry in atom.entries.iter() {
+            // First chunk (4 bytes, big-endian)
+            data.extend_from_slice(&entry.first_chunk.to_be_bytes());
+            // Samples per chunk (4 bytes, big-endian)
+            data.extend_from_slice(&entry.samples_per_chunk.to_be_bytes());
+            // Sample description index (4 bytes, big-endian)
+            data.extend_from_slice(&entry.sample_description_index.to_be_bytes());
+        }
+
+        data
+    }
+}
+
 fn parse_stsc_data<R: Read>(mut reader: R) -> Result<SampleToChunkAtom, anyhow::Error> {
     // Read version and flags (4 bytes)
     let mut version_flags = [0u8; 4];

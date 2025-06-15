@@ -33,6 +33,28 @@ impl Parse for GenericMediaHeaderAtom {
     }
 }
 
+impl From<GenericMediaHeaderAtom> for Vec<u8> {
+    fn from(atom: GenericMediaHeaderAtom) -> Self {
+        let mut data = Vec::with_capacity(12);
+
+        // Version (1 byte)
+        data.push(atom.version);
+
+        // Flags (3 bytes)
+        data.extend_from_slice(&atom.flags);
+
+        // Graphics mode (2 bytes, big-endian)
+        data.extend_from_slice(&atom.graphics_mode.to_be_bytes());
+
+        // RGB color values (6 bytes total, 2 bytes each, big-endian)
+        for color in atom.opcolor {
+            data.extend_from_slice(&color.to_be_bytes());
+        }
+
+        data
+    }
+}
+
 fn parse_gmhd_data<R: Read>(mut reader: R) -> Result<GenericMediaHeaderAtom, anyhow::Error> {
     // Read version and flags (4 bytes)
     let mut version_flags = [0u8; 4];

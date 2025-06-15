@@ -172,6 +172,97 @@ impl Parse for SampleDescriptionTableAtom {
     }
 }
 
+impl From<SampleDescriptionTableAtom> for Vec<u8> {
+    fn from(atom: SampleDescriptionTableAtom) -> Self {
+        let mut data = Vec::new();
+
+        // Version (1 byte)
+        data.push(atom.version);
+
+        // Flags (3 bytes)
+        data.extend_from_slice(&atom.flags);
+
+        // Entry count (4 bytes, big-endian)
+        data.extend_from_slice(&(atom.entries.len() as u32).to_be_bytes());
+
+        // Sample entries
+        for entry in atom.entries {
+            let mut entry_data = Vec::new();
+
+            // Reserved (6 bytes) - must be zero
+            entry_data.extend_from_slice(&[0u8; 6]);
+
+            // Data reference index (2 bytes, big-endian)
+            entry_data.extend_from_slice(&entry.data_reference_index.to_be_bytes());
+
+            // Entry-specific data based on type
+            match entry.data {
+                SampleEntryData::Video(video) => {
+                    // Video sample entry structure
+                    entry_data.extend_from_slice(&video.version.to_be_bytes());
+                    entry_data.extend_from_slice(&video.revision_level.to_be_bytes());
+                    entry_data.extend_from_slice(&video.vendor);
+                    entry_data.extend_from_slice(&video.temporal_quality.to_be_bytes());
+                    entry_data.extend_from_slice(&video.spatial_quality.to_be_bytes());
+                    entry_data.extend_from_slice(&video.width.to_be_bytes());
+                    entry_data.extend_from_slice(&video.height.to_be_bytes());
+                    entry_data.extend_from_slice(
+                        &((video.horizresolution * 65536.0) as u32).to_be_bytes(),
+                    );
+                    entry_data.extend_from_slice(
+                        &((video.vertresolution * 65536.0) as u32).to_be_bytes(),
+                    );
+                    entry_data.extend_from_slice(&video.entry_data_size.to_be_bytes());
+                    entry_data.extend_from_slice(&video.frame_count.to_be_bytes());
+
+                    // Compressor name (32 bytes, Pascal string)
+                    let mut compressor_bytes = [0u8; 32];
+                    let name_bytes = video.compressor_name.as_bytes();
+                    let len = name_bytes.len().min(31);
+                    compressor_bytes[0] = len as u8;
+                    compressor_bytes[1..=len].copy_from_slice(&name_bytes[..len]);
+                    entry_data.extend_from_slice(&compressor_bytes);
+
+                    entry_data.extend_from_slice(&video.depth.to_be_bytes());
+                    entry_data.extend_from_slice(&video.color_table_id.to_be_bytes());
+                    entry_data.extend_from_slice(&video.extensions);
+                }
+                SampleEntryData::Audio(audio) => {
+                    // Audio sample entry structure
+                    entry_data.extend_from_slice(&audio.version.to_be_bytes());
+                    entry_data.extend_from_slice(&audio.revision_level.to_be_bytes());
+                    entry_data.extend_from_slice(&audio.vendor);
+                    entry_data.extend_from_slice(&audio.channel_count.to_be_bytes());
+                    entry_data.extend_from_slice(&audio.sample_size.to_be_bytes());
+                    entry_data.extend_from_slice(&audio.compression_id.to_be_bytes());
+                    entry_data.extend_from_slice(&audio.packet_size.to_be_bytes());
+                    entry_data
+                        .extend_from_slice(&((audio.sample_rate * 65536.0) as u32).to_be_bytes());
+                    entry_data.extend_from_slice(&audio.extensions);
+                }
+                SampleEntryData::Other(other_data) => {
+                    // Other sample entry data
+                    entry_data.extend_from_slice(&other_data);
+                }
+            }
+
+            // Calculate total entry size (4 + 4 + entry_data.len())
+            let entry_size = 8 + entry_data.len();
+
+            // Write entry size (4 bytes, big-endian)
+            data.extend_from_slice(&(entry_size as u32).to_be_bytes());
+
+            // Write entry type (4 bytes)
+            data.extend_from_slice(entry.entry_type.as_bytes());
+
+            // Write entry data
+            data.extend_from_slice(&entry_data);
+        }
+
+        data
+    }
+}
+
 fn parse_stsd_data<R: Read>(mut reader: R) -> Result<SampleDescriptionTableAtom, anyhow::Error> {
     // Read version and flags (4 bytes)
     let mut version_flags = [0u8; 4];

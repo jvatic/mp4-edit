@@ -75,3 +75,22 @@ fn parse_ftyp_data<R: Read>(mut reader: R) -> Result<FileTypeAtom, anyhow::Error
         compatible_brands,
     })
 }
+
+impl From<FileTypeAtom> for Vec<u8> {
+    fn from(atom: FileTypeAtom) -> Self {
+        let mut data = Vec::new();
+
+        // Major brand (4 bytes)
+        data.extend_from_slice(&atom.major_brand.0);
+
+        // Minor version (4 bytes, big-endian)
+        data.extend_from_slice(&atom.minor_version.to_be_bytes());
+
+        // Compatible brands (4 bytes each)
+        for brand in atom.compatible_brands {
+            data.extend_from_slice(&brand.0);
+        }
+
+        data
+    }
+}

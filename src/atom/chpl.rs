@@ -63,6 +63,33 @@ impl Parse for ChapterListAtom {
     }
 }
 
+impl From<ChapterListAtom> for Vec<u8> {
+    fn from(atom: ChapterListAtom) -> Self {
+        let mut data = Vec::new();
+
+        // Version (1 byte)
+        data.push(atom.version);
+
+        // Flags (3 bytes)
+        data.extend_from_slice(&atom.flags);
+
+        // Reserved field (8 bytes) - should be zero
+        data.extend_from_slice(&[0u8; 8]);
+
+        // Chapter entries
+        for chapter in atom.chapters.iter() {
+            // Start time (8 bytes, big-endian)
+            data.extend_from_slice(&chapter.start_time.to_be_bytes());
+
+            // Title as UTF-8 string with null terminator
+            data.extend_from_slice(chapter.title.as_bytes());
+            data.push(0x00); // Null terminator
+        }
+
+        data
+    }
+}
+
 fn parse_chpl_data<R: Read>(mut reader: R) -> Result<ChapterListAtom, anyhow::Error> {
     // Read version and flags (4 bytes)
     let mut version_flags = [0u8; 4];

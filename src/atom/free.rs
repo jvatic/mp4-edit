@@ -53,3 +53,9 @@ impl Parse for FreeAtom {
         })
     }
 }
+
+impl From<FreeAtom> for Vec<u8> {
+    fn from(atom: FreeAtom) -> Self {
+        vec![0u8; atom.data_size]
+    }
+}

@@ -84,11 +84,15 @@ pub enum ParseMetadataEvent {
     ExitContainer,
 }
 
-pub struct MediaChunk {
-    data: Vec<u8>,
+pub struct Sample {
+    pub data: Vec<u8>,
+    pub duration: u32,
+    pub description_index: u32,
+    pub sample_number: u32,
+    pub timestamp: u64,
 }
 
-impl MediaChunk {
+impl Sample {
     pub fn into_bytes(self) -> Vec<u8> {
         self.data
     }
@@ -134,16 +138,161 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
         self.parse_metadata_stream(None)
     }
 
-    pub fn stream_media_chunks<'a>(
+    /// Streams individual samples from the MP4 file with full metadata.
+    ///
+    /// # Returns
+    ///
+    /// A stream of `Result<Sample, ParseError>` where each `Sample` contains:
+    /// - `data`: The raw sample data bytes
+    /// - `size`: Size of the sample in bytes
+    /// - `duration`: Duration of the sample in timescale units
+    /// - `description_index`: Index into the sample description table (1-based)
+    /// - `sample_number`: Sequential sample number (0-based)
+    /// - `timestamp`: Cumulative timestamp in timescale units
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use futures_util::stream::StreamExt;
+    /// # async fn example() -> Result<(), BoxedError> {
+    /// let mut parser = Parser::new(reader);
+    /// // ... parse metadata atoms to get required atoms ...
+    ///
+    /// let sample_stream = parser.stream_samples(
+    ///     sample_sizes,
+    ///     sample_durations,
+    ///     sample_descriptions,
+    ///     chunk_offsets,
+    ///     sample_to_chunk
+    /// );
+    ///
+    /// // Process each sample individually
+    /// pin_mut!(sample_stream);
+    /// while let Some(sample_result) = sample_stream.next().await {
+    ///     let sample = sample_result?;
+    ///     println!("Sample {}: {} bytes, duration {}",
+    ///         sample.sample_number, sample.size, sample.duration);
+    ///     // Process sample.data...
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn stream_samples<'a>(
         &'a mut self,
+        sample_sizes: SampleSizeAtom,
+        sample_durations: TimeToSampleAtom,
         chunk_offsets: ChunkOffsetAtom,
-    ) -> impl Stream<Item = Result<MediaChunk, ParseError>> + 'a {
+        sample_to_chunk: SampleToChunkAtom,
+    ) -> impl Stream<Item = Result<Sample, ParseError>> + 'a {
         if !matches!(self.state, ParserState::MetaData) {
             panic!("parser in an invalid state");
         }
         self.state = ParserState::MediaData;
         async_stream::stream! {
-            yield Ok(MediaChunk {data: Vec::new()});
+            let mdat_atom = self.parse_next_atom().await?;
+            if mdat_atom.atom_type != MDAT {
+                panic!("expected mdat to be the next atom");
+            }
+
+            let sample_count = sample_sizes.sample_count;
+            let chunk_offsets = chunk_offsets.chunk_offsets.into_inner();
+
+            // Calculate individual sample sizes
+            let sample_sizes_vec: Vec<u32> = if sample_sizes.sample_size != 0 {
+                vec![sample_sizes.sample_size; sample_count as usize]
+            } else {
+                sample_sizes.entry_sizes.to_vec()
+            };
+
+            // Expand time-to-sample entries into per-sample durations
+            let mut sample_durations_vec = Vec::with_capacity(sample_count as usize);
+            for entry in sample_durations.entries.iter() {
+                for _ in 0..entry.sample_count {
+                    sample_durations_vec.push(entry.sample_duration);
+                }
+            }
+
+            // Build chunk-to-samples mapping
+            let mut chunk_samples: Vec<Vec<(u32, u32)>> = vec![Vec::new(); chunk_offsets.len()];
+            let mut current_sample = 0u32;
+
+            for (i, entry) in sample_to_chunk.entries.iter().enumerate() {
+                let first_chunk = (entry.first_chunk - 1) as usize; // Convert to 0-based
+                let samples_per_chunk = entry.samples_per_chunk;
+                let description_index = entry.sample_description_index;
+
+                // Determine the last chunk that uses this entry
+                let last_chunk = if i + 1 < sample_to_chunk.entries.len() {
+                    (sample_to_chunk.entries[i + 1].first_chunk - 2) as usize // -1 for 0-based, -1 for exclusive
+                } else {
+                    chunk_offsets.len() - 1
+                };
+
+                for chunk_idx in first_chunk..=last_chunk {
+                    if chunk_idx >= chunk_samples.len() {
+                        break;
+                    }
+                    for _ in 0..samples_per_chunk {
+                        if current_sample >= sample_count {
+                            break;
+                        }
+                        chunk_samples[chunk_idx].push((current_sample, description_index));
+                        current_sample += 1;
+                    }
+                    if current_sample >= sample_count {
+                        break;
+                    }
+                }
+            }
+
+            // Process chunks in order and yield samples
+            let mut timestamp = 0u64;
+            for (chunk_idx, chunk_sample_list) in chunk_samples.iter().enumerate() {
+                if chunk_sample_list.is_empty() {
+                    continue;
+                }
+
+                // Calculate chunk size
+                let chunk_start = chunk_offsets[chunk_idx];
+                let chunk_end = if chunk_idx + 1 < chunk_offsets.len() {
+                    chunk_offsets[chunk_idx + 1]
+                } else {
+                    mdat_atom.offset + mdat_atom.size
+                };
+                let chunk_size = chunk_end - chunk_start;
+
+                // Read entire chunk
+                let chunk_data = self.read_data(chunk_size as usize).await?;
+
+                // Parse samples from chunk
+                let mut offset_in_chunk = 0usize;
+                for &(sample_number, description_index) in chunk_sample_list {
+                    let sample_size = sample_sizes_vec[sample_number as usize];
+                    let sample_duration = sample_durations_vec[sample_number as usize];
+
+                    if offset_in_chunk + sample_size as usize > chunk_data.len() {
+                        yield Err(ParseError {
+                            kind: ParseErrorKind::InsufficientData,
+                            location: Some((self.current_offset, sample_size as usize)),
+                            source: None,
+                        });
+                        return;
+                    }
+
+                    let sample_data = chunk_data[offset_in_chunk..offset_in_chunk + sample_size as usize].to_vec();
+
+                    yield Ok(Sample {
+                        data: sample_data,
+                        duration: sample_duration,
+                        description_index,
+                        sample_number,
+                        timestamp,
+                    });
+
+                    timestamp += sample_duration as u64;
+                    offset_in_chunk += sample_size as usize;
+                }
+            }
         }
     }
 

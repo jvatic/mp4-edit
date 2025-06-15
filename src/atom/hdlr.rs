@@ -269,3 +269,39 @@ mod tests {
         assert_eq!(result, "");
     }
 }
+
+impl From<HandlerReferenceAtom> for Vec<u8> {
+    fn from(atom: HandlerReferenceAtom) -> Self {
+        let mut data = Vec::new();
+
+        // Version and flags (4 bytes)
+        let version_flags = (atom.version as u32) << 24
+            | (atom.flags[0] as u32) << 16
+            | (atom.flags[1] as u32) << 8
+            | (atom.flags[2] as u32);
+        data.extend_from_slice(&version_flags.to_be_bytes());
+
+        // Component type (4 bytes)
+        data.extend_from_slice(&atom.component_type);
+
+        // Handler type (4 bytes)
+        data.extend_from_slice(&atom.handler_type.to_bytes());
+
+        // Component manufacturer (4 bytes)
+        data.extend_from_slice(&atom.component_manufacturer);
+
+        // Component flags (4 bytes)
+        data.extend_from_slice(&atom.component_flags.to_be_bytes());
+
+        // Component flags mask (4 bytes)
+        data.extend_from_slice(&atom.component_flags_mask.to_be_bytes());
+
+        // Name (null-terminated string)
+        if !atom.name.is_empty() {
+            data.extend_from_slice(atom.name.as_bytes());
+        }
+        data.push(0); // Null terminator
+
+        data
+    }
+}

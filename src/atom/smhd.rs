@@ -79,3 +79,25 @@ fn parse_smhd_data<R: Read>(mut reader: R) -> Result<SoundMediaHeaderAtom, anyho
         reserved,
     })
 }
+
+impl From<SoundMediaHeaderAtom> for Vec<u8> {
+    fn from(atom: SoundMediaHeaderAtom) -> Self {
+        let mut data = Vec::new();
+
+        // Version and flags (4 bytes)
+        let version_flags = (atom.version as u32) << 24
+            | (atom.flags[0] as u32) << 16
+            | (atom.flags[1] as u32) << 8
+            | (atom.flags[2] as u32);
+        data.extend_from_slice(&version_flags.to_be_bytes());
+
+        // Balance (fixed-point 8.8 format, 2 bytes)
+        let balance_fixed = (atom.balance * 256.0) as i16;
+        data.extend_from_slice(&balance_fixed.to_be_bytes());
+
+        // Reserved (2 bytes)
+        data.extend_from_slice(&atom.reserved.to_be_bytes());
+
+        data
+    }
+}

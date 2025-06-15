@@ -52,6 +52,70 @@ impl Parse for SampleGroupDescriptionAtom {
     }
 }
 
+impl From<SampleGroupDescriptionAtom> for Vec<u8> {
+    fn from(atom: SampleGroupDescriptionAtom) -> Self {
+        let mut data = Vec::new();
+
+        // Version (1 byte)
+        data.push(atom.version);
+
+        // Flags (3 bytes)
+        data.extend_from_slice(&atom.flags);
+
+        // Grouping type (4 bytes)
+        data.extend_from_slice(&atom.grouping_type.0);
+
+        // Version-dependent fields
+        match atom.version {
+            0 => {
+                // No additional fields
+            }
+            1 => {
+                // Default length (4 bytes)
+                if let Some(default_length) = atom.default_length {
+                    data.extend_from_slice(&default_length.to_be_bytes());
+                } else {
+                    data.extend_from_slice(&0u32.to_be_bytes());
+                }
+            }
+            _ => {
+                // Version 2+: Default sample description index (4 bytes)
+                if let Some(default_index) = atom.default_sample_description_index {
+                    data.extend_from_slice(&default_index.to_be_bytes());
+                } else {
+                    data.extend_from_slice(&0u32.to_be_bytes());
+                }
+            }
+        }
+
+        // Entry count (4 bytes, big-endian)
+        data.extend_from_slice(&(atom.entries.len() as u32).to_be_bytes());
+
+        // Entries
+        for entry in atom.entries {
+            // For version 1, if default_length is 0, write description_length for each entry
+            if atom.version == 1 {
+                if let Some(default_length) = atom.default_length {
+                    if default_length == 0 {
+                        if let Some(desc_length) = entry.description_length {
+                            data.extend_from_slice(&desc_length.to_be_bytes());
+                        } else {
+                            data.extend_from_slice(
+                                &(entry.description_data.len() as u32).to_be_bytes(),
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Description data
+            data.extend_from_slice(&entry.description_data);
+        }
+
+        data
+    }
+}
+
 fn parse_sgpd_data(data: &[u8]) -> Result<SampleGroupDescriptionAtom, anyhow::Error> {
     let mut cursor = Cursor::new(data);
     let mut buffer = [0u8; 4];

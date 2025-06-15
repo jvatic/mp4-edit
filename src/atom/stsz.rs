@@ -138,3 +138,28 @@ impl fmt::Display for SampleSizeAtom {
         }
     }
 }
+
+impl From<SampleSizeAtom> for Vec<u8> {
+    fn from(atom: SampleSizeAtom) -> Self {
+        let mut data = Vec::new();
+
+        // Version and flags (4 bytes total)
+        let version_flags = (atom.version as u32) << 24 | (atom.flags & 0x00FFFFFF);
+        data.extend_from_slice(&version_flags.to_be_bytes());
+
+        // Sample size (4 bytes)
+        data.extend_from_slice(&atom.sample_size.to_be_bytes());
+
+        // Sample count (4 bytes)
+        data.extend_from_slice(&atom.sample_count.to_be_bytes());
+
+        // If sample_size is 0, write the sample size table
+        if atom.sample_size == 0 {
+            for size in atom.entry_sizes.iter() {
+                data.extend_from_slice(&size.to_be_bytes());
+            }
+        }
+
+        data
+    }
+}
