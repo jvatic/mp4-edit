@@ -277,13 +277,13 @@ impl From<ItemListAtom> for Vec<u8> {
             let item_size = 8 + item_data.len();
             data.extend_from_slice(&(item_size as u32).to_be_bytes());
 
-            // Convert item_type string to 4 bytes
-            let type_bytes = item.item_type.as_bytes();
+            // Convert item_type string to 4 bytes using Mac Roman encoding
+            let type_bytes = convert_utf8_to_mac_roman(&item.item_type);
             if type_bytes.len() >= 4 {
                 data.extend_from_slice(&type_bytes[..4]);
             } else {
                 let mut padded = [0u8; 4];
-                padded[..type_bytes.len()].copy_from_slice(type_bytes);
+                padded[..type_bytes.len()].copy_from_slice(&type_bytes);
                 data.extend_from_slice(&padded);
             }
 
@@ -552,6 +552,22 @@ fn convert_mac_roman_to_utf8(bytes: &[u8]) -> String {
             // For other bytes, treat as ASCII if valid, otherwise use replacement char
             b if b.is_ascii() => result.push(b as char),
             _ => result.push('�'),
+        }
+    }
+    result
+}
+
+fn convert_utf8_to_mac_roman(text: &str) -> Vec<u8> {
+    let mut result = Vec::new();
+    for ch in text.chars() {
+        match ch {
+            '©' => result.push(0xA9), // Copyright symbol
+            '®' => result.push(0xAE), // Registered trademark symbol
+            '™' => result.push(0x99), // Trademark symbol
+            // For ASCII characters, use their byte value
+            c if c.is_ascii() => result.push(c as u8),
+            // For non-ASCII characters that don't have Mac Roman equivalents, skip them
+            _ => {}
         }
     }
     result
@@ -922,6 +938,67 @@ mod tests {
             Err(e) => {
                 panic!("Failed to parse hexdump data: {}", e);
             }
+        }
+    }
+
+    #[test]
+    fn test_mac_roman_round_trip() {
+        // Test round-trip encoding/decoding of Mac Roman characters in item types
+        let original_ilst = ItemListAtom {
+            items: MetadataItems(vec![
+                MetadataItem {
+                    item_type: "©nam".to_string(), // Mac Roman copyright symbol
+                    value: MetadataValue::Text("Test Song".to_string()),
+                    metadata: ItemMetadata {
+                        type_flags: 1,
+                        country: 0,
+                        language: 0,
+                    },
+                },
+                MetadataItem {
+                    item_type: "®pub".to_string(), // Mac Roman registered trademark symbol
+                    value: MetadataValue::Text("Test Publisher".to_string()),
+                    metadata: ItemMetadata {
+                        type_flags: 1,
+                        country: 0,
+                        language: 0,
+                    },
+                },
+            ]),
+            raw_items: RawMetadataItems(vec![]),
+        };
+
+        // Convert to bytes
+        let encoded_bytes: Vec<u8> = original_ilst.into();
+
+        // Parse back from bytes
+        let cursor = std::io::Cursor::new(&encoded_bytes);
+        let parsed_ilst = parse_ilst_data(cursor).expect("Failed to parse encoded data");
+
+        // Verify round-trip worked correctly
+        assert_eq!(
+            parsed_ilst.items.len(),
+            2,
+            "Should have 2 items after round-trip"
+        );
+
+        // Check first item (©nam)
+        let nam_item = &parsed_ilst.items[0];
+        assert_eq!(nam_item.item_type, "©nam", "First item type should be ©nam");
+        match &nam_item.value {
+            MetadataValue::Text(text) => assert_eq!(text, "Test Song"),
+            _ => panic!("Expected text value for ©nam item"),
+        }
+
+        // Check second item (®pub)
+        let pub_item = &parsed_ilst.items[1];
+        assert_eq!(
+            pub_item.item_type, "®pub",
+            "Second item type should be ®pub"
+        );
+        match &pub_item.value {
+            MetadataValue::Text(text) => assert_eq!(text, "Test Publisher"),
+            _ => panic!("Expected text value for ®pub item"),
         }
     }
 }
