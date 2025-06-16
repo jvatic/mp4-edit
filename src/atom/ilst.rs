@@ -795,7 +795,7 @@ mod tests {
                                 !text.contains("�"),
                                 "Text should not contain corruption artifacts"
                             );
-                            assert!(text.len() > 0, "Text should not be empty");
+                            assert!(!text.is_empty(), "Text should not be empty");
                         }
                     }
                 }
@@ -931,7 +931,7 @@ mod tests {
             Ok(ilst) => {
                 // Should have parsed at least some items (regular or raw)
                 assert!(
-                    ilst.items.len() >= 1 || ilst.raw_items.len() >= 1,
+                    !ilst.items.is_empty() || !ilst.raw_items.is_empty(),
                     "Should have parsed at least 1 item (regular or raw)"
                 );
             }

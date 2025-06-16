@@ -202,7 +202,7 @@ impl AacSamplePredictor {
 
             self.size_patterns
                 .entry(encrypted)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(original);
         }
 
@@ -289,7 +289,7 @@ impl AacSamplePredictor {
             .iter()
             .zip(ground_truth.iter())
         {
-            let error = (*predicted as i32 - actual as i32).abs() as u32;
+            let error = (*predicted as i32 - actual as i32).unsigned_abs();
             total_error += error as i64;
             max_error = max_error.max(error);
 
@@ -384,7 +384,7 @@ impl AacSamplePredictor {
         }
 
         // Validate AAC frame size range
-        if original < 100 || original > 4000 {
+        if !(100..=4000).contains(&original) {
             return Err(PredictionError::InvalidAacSize { size: original });
         }
 
@@ -399,7 +399,7 @@ impl AacSamplePredictor {
 
             self.transition_patterns
                 .entry(enc_delta)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(orig_delta);
         }
     }
@@ -453,7 +453,7 @@ impl AacSamplePredictor {
                 let variance_sum: f64 = profile
                     .common_padding_values
                     .iter()
-                    .map(|&padding| {
+                    .map(|&_padding| {
                         let original = profile.avg_original_size; // Approximation
                         let diff = original - mean;
                         diff * diff
@@ -594,14 +594,14 @@ impl AacSamplePredictor {
     }
 
     fn is_plausible_aac_size(&self, size: u32) -> bool {
-        size >= 100 && size <= 4000 && size > 0
+        (100..=4000).contains(&size) && size > 0
     }
 
     fn is_typical_aac_frame_size(&self, size: u32) -> bool {
         // Common AAC VBR frame size ranges
-        (size >= 200 && size <= 800) || // Typical music
-        (size >= 100 && size <= 300) || // Low bitrate/simple content
-        (size >= 800 && size <= 1500) // High bitrate/complex content
+        (200..=800).contains(&size) || // Typical music
+        (100..=300).contains(&size) || // Low bitrate/simple content
+        (800..=1500).contains(&size) // High bitrate/complex content
     }
 
     fn most_frequent(values: &[u32]) -> u32 {

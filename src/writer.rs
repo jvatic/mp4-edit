@@ -6,7 +6,7 @@ use thiserror::Error;
 use crate::Atom;
 
 #[derive(Debug, Error)]
-#[error("{kind}{}", self.source.as_ref().map(|e| format!(" ({e})")).unwrap_or(String::new()))]
+#[error("{kind}{}", self.source.as_ref().map(|e| format!(" ({e})")).unwrap_or_default())]
 pub struct WriteError {
     /// The kind of error that occurred during writing.
     kind: WriteErrorKind,
