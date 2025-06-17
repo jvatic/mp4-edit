@@ -7,7 +7,6 @@ pub mod gmhd;
 pub mod hdlr;
 pub mod ilst;
 pub mod mdhd;
-pub mod meta;
 pub mod mvhd;
 pub mod sbgp;
 pub mod sgpd;
@@ -20,6 +19,25 @@ pub mod stts;
 pub mod tkhd;
 pub mod tref;
 mod util;
+
+pub mod containers {
+    pub const MOOV: &[u8; 4] = b"moov";
+    pub const MFRA: &[u8; 4] = b"mfra";
+    pub const UDTA: &[u8; 4] = b"udta";
+    pub const TRAK: &[u8; 4] = b"trak";
+    pub const EDTS: &[u8; 4] = b"edts";
+    pub const MDIA: &[u8; 4] = b"mdia";
+    pub const MINF: &[u8; 4] = b"minf";
+    pub const DINF: &[u8; 4] = b"dinf";
+    pub const STBL: &[u8; 4] = b"stbl";
+    pub const MOOF: &[u8; 4] = b"moof";
+    pub const TRAF: &[u8; 4] = b"traf";
+    pub const SINF: &[u8; 4] = b"sinf";
+    pub const SCHI: &[u8; 4] = b"schi";
+
+    pub const META: &[u8; 4] = b"meta";
+    pub const META_VERSION_FLAGS_SIZE: usize = 4;
+}
 
 pub use self::{
     chpl::ChapterListAtom, dref::DataReferenceAtom, elst::EditListAtom, free::FreeAtom,
@@ -46,6 +64,33 @@ pub struct Atom {
     pub size: u64,
     pub data: Option<AtomData>,
     pub children: Vec<Atom>,
+}
+
+impl Atom {
+    /// Recursively retains only the atoms that satisfy the predicate,
+    /// one level of depth at a time (least to most nested).
+    pub fn children_flat_retain_mut<P>(&mut self, mut pred: P)
+    where
+        P: FnMut(&mut Atom) -> bool,
+    {
+        let mut current_level = vec![self];
+
+        while !current_level.is_empty() {
+            let mut next_level = Vec::new();
+
+            for atom in current_level {
+                // Apply retain to this atom's children
+                atom.children.retain_mut(|child| pred(child));
+
+                // Collect remaining children for next level processing
+                for child in &mut atom.children {
+                    next_level.push(child);
+                }
+            }
+
+            current_level = next_level;
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

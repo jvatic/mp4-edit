@@ -1,14 +1,20 @@
+use anyhow::anyhow;
 use derive_more::Display;
 use futures_io::AsyncRead;
 use futures_util::io::{AsyncReadExt, Cursor};
-use futures_util::stream::Stream;
 use std::future::Future;
 use std::ops::Deref;
 use thiserror::Error;
 
+use crate::atom::containers::{
+    DINF, EDTS, MDIA, MFRA, MINF, MOOF, MOOV, SCHI, SINF, STBL, TRAF, TRAK, UDTA,
+};
+use crate::atom::stsc::SampleToChunkEntry;
+use crate::atom::stts::TimeToSampleEntry;
 use crate::{
     atom::{
         chpl::{ChapterListAtom, CHPL},
+        containers::{META, META_VERSION_FLAGS_SIZE},
         dref::{DataReferenceAtom, DREF},
         elst::{EditListAtom, ELST},
         free::{FreeAtom, FREE, SKIP},
@@ -17,7 +23,6 @@ use crate::{
         hdlr::{HandlerReferenceAtom, HDLR},
         ilst::{ItemListAtom, ILST},
         mdhd::{MediaHeaderAtom, MDHD},
-        meta::{META, META_VERSION_FLAGS_SIZE},
         mvhd::{MovieHeaderAtom, MVHD},
         sbgp::{SampleToGroupAtom, SBGP},
         sgpd::{SampleGroupDescriptionAtom, SGPD},
@@ -92,236 +97,18 @@ impl Sample {
     }
 }
 
-pub struct Parser<R> {
+pub struct Mp4Reader<R> {
     reader: R,
-    state: ParserState,
     current_offset: usize,
     peek_buffer: Vec<u8>,
 }
 
-enum ParserState {
-    NotStarted,
-    MetaData,
-    MediaData,
-}
-
-struct ParsedAtom {
-    atom_type: FourCC,
-    size: u64,
-    offset: u64,
-    content_size: usize,
-}
-
-impl<R: AsyncRead + Unpin + Send> Parser<R> {
-    pub fn new(reader: R) -> Self {
-        Parser {
-            reader: reader,
-            state: ParserState::NotStarted,
+impl<R: AsyncRead + Unpin + Send> Mp4Reader<R> {
+    fn new(reader: R) -> Self {
+        Self {
+            reader,
             current_offset: 0,
             peek_buffer: Vec::new(),
-        }
-    }
-
-    pub async fn parse_metadata<'a>(&'a mut self) -> Result<Vec<Atom>, ParseError> {
-        if !matches!(self.state, ParserState::NotStarted) {
-            panic!("parser in an invalid state");
-        }
-        self.state = ParserState::MetaData;
-        self.parse_metadata_inner(None).await
-    }
-
-    async fn parse_metadata_inner<'a>(
-        &'a mut self,
-        length_limit: Option<usize>,
-    ) -> Result<Vec<Atom>, ParseError> {
-        let start_offset = self.current_offset;
-
-        let mut top_level_atoms = Vec::new();
-
-        loop {
-            // ensure we're respecting container bounds
-            if length_limit.is_some_and(|limit| self.current_offset - start_offset >= limit) {
-                break;
-            }
-
-            // only parse as far as the mdat atom (we're assuming mdat is the last atom)
-            let next_atom_type = match self.peek_next_atom_type().await {
-                Ok(next_atom_type) => Ok(next_atom_type),
-                Err(err) => {
-                    if matches!(
-                        err.kind,
-                        ParseErrorKind::Eof | ParseErrorKind::InvalidHeader
-                    ) {
-                        // end of stream, this means there's no mdat atom
-                        // TODO: rewrite the tests to always include an mdat atom so we can get rid of this check
-                        break;
-                    }
-                    Err(err)
-                }
-            }?;
-            if next_atom_type == MDAT {
-                break;
-            }
-
-            let parsed_atom = self.parse_next_atom().await?;
-            if is_container_atom(&parsed_atom.atom_type) {
-                // META containers have additional header data
-                let (size, data) = if parsed_atom.atom_type.deref() == META {
-                    // Handle META version and flags as RawData
-                    let version_flags = self.read_data(META_VERSION_FLAGS_SIZE).await?;
-                    (
-                        parsed_atom.content_size - META_VERSION_FLAGS_SIZE,
-                        Some(AtomData::RawData(RawData(version_flags))),
-                    )
-                } else {
-                    (parsed_atom.content_size, None)
-                };
-
-                let container_atom = Atom {
-                    atom_type: parsed_atom.atom_type,
-                    size: parsed_atom.size,
-                    offset: parsed_atom.offset,
-                    data,
-                    children: Box::pin(self.parse_metadata_inner(Some(size))).await?,
-                };
-
-                top_level_atoms.push(container_atom);
-            } else {
-                // Yield leaf atoms
-                let atom_type = parsed_atom.atom_type;
-                let offset = parsed_atom.offset;
-                let size = parsed_atom.size;
-                let atom_data = self.parse_atom_data(parsed_atom).await?;
-                let atom = Atom {
-                    atom_type,
-                    offset,
-                    size,
-                    data: Some(atom_data),
-                    children: Vec::new(),
-                };
-                top_level_atoms.push(atom);
-            }
-        }
-
-        Ok(top_level_atoms)
-    }
-
-    pub fn stream_samples<'a>(
-        &'a mut self,
-        sample_sizes: SampleSizeAtom,
-        sample_durations: TimeToSampleAtom,
-        chunk_offsets: ChunkOffsetAtom,
-        sample_to_chunk: SampleToChunkAtom,
-    ) -> impl Stream<Item = Result<Sample, ParseError>> + 'a {
-        if !matches!(self.state, ParserState::MetaData) {
-            panic!("parser in an invalid state");
-        }
-        self.state = ParserState::MediaData;
-        async_stream::stream! {
-            let mdat_atom = self.parse_next_atom().await?;
-            if mdat_atom.atom_type != MDAT {
-                panic!("expected mdat to be the next atom");
-            }
-
-            let sample_count = sample_sizes.sample_count;
-            let chunk_offsets = chunk_offsets.chunk_offsets.into_inner();
-
-            // Calculate individual sample sizes
-            let sample_sizes_vec: Vec<u32> = if sample_sizes.sample_size != 0 {
-                vec![sample_sizes.sample_size; sample_count as usize]
-            } else {
-                sample_sizes.entry_sizes.to_vec()
-            };
-
-            // Expand time-to-sample entries into per-sample durations
-            let mut sample_durations_vec = Vec::with_capacity(sample_count as usize);
-            for entry in sample_durations.entries.iter() {
-                for _ in 0..entry.sample_count {
-                    sample_durations_vec.push(entry.sample_duration);
-                }
-            }
-
-            // Build chunk-to-samples mapping
-            let mut chunk_samples: Vec<Vec<(u32, u32)>> = vec![Vec::new(); chunk_offsets.len()];
-            let mut current_sample = 0u32;
-
-            for (i, entry) in sample_to_chunk.entries.iter().enumerate() {
-                let first_chunk = (entry.first_chunk - 1) as usize; // Convert to 0-based
-                let samples_per_chunk = entry.samples_per_chunk;
-                let description_index = entry.sample_description_index;
-
-                // Determine the last chunk that uses this entry
-                let last_chunk = if i + 1 < sample_to_chunk.entries.len() {
-                    (sample_to_chunk.entries[i + 1].first_chunk - 2) as usize // -1 for 0-based, -1 for exclusive
-                } else {
-                    chunk_offsets.len() - 1
-                };
-
-                for chunk_idx in first_chunk..=last_chunk {
-                    if chunk_idx >= chunk_samples.len() {
-                        break;
-                    }
-                    for _ in 0..samples_per_chunk {
-                        if current_sample >= sample_count {
-                            break;
-                        }
-                        chunk_samples[chunk_idx].push((current_sample, description_index));
-                        current_sample += 1;
-                    }
-                    if current_sample >= sample_count {
-                        break;
-                    }
-                }
-            }
-
-            // Process chunks in order and yield samples
-            let mut timestamp = 0u64;
-            for (chunk_idx, chunk_sample_list) in chunk_samples.iter().enumerate() {
-                if chunk_sample_list.is_empty() {
-                    continue;
-                }
-
-                // Calculate chunk size
-                let chunk_start = chunk_offsets[chunk_idx];
-                let chunk_end = if chunk_idx + 1 < chunk_offsets.len() {
-                    chunk_offsets[chunk_idx + 1]
-                } else {
-                    mdat_atom.offset + mdat_atom.size
-                };
-                let chunk_size = chunk_end - chunk_start;
-
-                // Read entire chunk
-                let chunk_data = self.read_data(chunk_size as usize).await?;
-
-                // Parse samples from chunk
-                let mut offset_in_chunk = 0usize;
-                for &(sample_number, description_index) in chunk_sample_list {
-                    let sample_size = sample_sizes_vec[sample_number as usize];
-                    let sample_duration = sample_durations_vec[sample_number as usize];
-
-                    if offset_in_chunk + sample_size as usize > chunk_data.len() {
-                        yield Err(ParseError {
-                            kind: ParseErrorKind::InsufficientData,
-                            location: Some((self.current_offset, sample_size as usize)),
-                            source: None,
-                        });
-                        return;
-                    }
-
-                    let sample_data = chunk_data[offset_in_chunk..offset_in_chunk + sample_size as usize].to_vec();
-
-                    yield Ok(Sample {
-                        data: sample_data,
-                        duration: sample_duration,
-                        description_index,
-                        sample_number,
-                        timestamp,
-                    });
-
-                    timestamp += sample_duration as u64;
-                    offset_in_chunk += sample_size as usize;
-                }
-            }
         }
     }
 
@@ -361,27 +148,117 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
         self.read_exact(&mut data).await?;
         Ok(data)
     }
+}
 
-    async fn peek_next_atom_type(&mut self) -> Result<FourCC, ParseError> {
-        let mut header = [0u8; 8];
-        self.peek_exact(&mut header).await?;
-        let atom_type: [u8; 4] = header[4..].try_into().unwrap();
-        if atom_type == [0u8; 4] {
-            return Err(ParseError {
-                kind: ParseErrorKind::InvalidHeader,
-                location: Some((self.current_offset, 8)),
-                source: None,
-            });
+pub struct Parser<R> {
+    reader: Mp4Reader<R>,
+    mdat: Option<ParsedAtom>,
+}
+
+struct ParsedAtom {
+    atom_type: FourCC,
+    size: u64,
+    offset: u64,
+    content_size: usize,
+}
+
+impl<R: AsyncRead + Unpin + Send> Parser<R> {
+    pub fn new(reader: R) -> Self {
+        Parser {
+            reader: Mp4Reader::new(reader),
+            mdat: None,
         }
-        Ok(FourCC(atom_type))
+    }
+
+    pub async fn parse_metadata(mut self) -> Result<(Mp4Reader<R>, Metadata), ParseError> {
+        let atoms = self.parse_metadata_inner(None).await?;
+        Ok((self.reader, Metadata::new(atoms, self.mdat)))
+    }
+
+    async fn parse_metadata_inner(
+        &mut self,
+        length_limit: Option<usize>,
+    ) -> Result<Vec<Atom>, ParseError> {
+        let start_offset = self.reader.current_offset;
+
+        let mut top_level_atoms = Vec::new();
+
+        loop {
+            // ensure we're respecting container bounds
+            if length_limit.is_some_and(|limit| self.reader.current_offset - start_offset >= limit)
+            {
+                break;
+            }
+
+            let parsed_atom = match self.parse_next_atom().await {
+                Ok(parsed_atom) => Ok(parsed_atom),
+                Err(err) => {
+                    if matches!(
+                        err.kind,
+                        ParseErrorKind::Eof | ParseErrorKind::InvalidHeader
+                    ) {
+                        // end of stream, this means there's no mdat atom
+                        // TODO: rewrite the tests to always include an mdat atom so we can get rid of this check
+                        break;
+                    }
+                    Err(err)
+                }
+            }?;
+
+            // only parse as far as the mdat atom (we're assuming mdat is the last atom)
+            if parsed_atom.atom_type == MDAT {
+                self.mdat = Some(parsed_atom);
+                break;
+            }
+
+            if is_container_atom(&parsed_atom.atom_type) {
+                // META containers have additional header data
+                let (size, data) = if parsed_atom.atom_type.deref() == META {
+                    // Handle META version and flags as RawData
+                    let version_flags = self.reader.read_data(META_VERSION_FLAGS_SIZE).await?;
+                    (
+                        parsed_atom.content_size - META_VERSION_FLAGS_SIZE,
+                        Some(AtomData::RawData(RawData(version_flags))),
+                    )
+                } else {
+                    (parsed_atom.content_size, None)
+                };
+
+                let container_atom = Atom {
+                    atom_type: parsed_atom.atom_type,
+                    size: parsed_atom.size,
+                    offset: parsed_atom.offset,
+                    data,
+                    children: Box::pin(self.parse_metadata_inner(Some(size))).await?,
+                };
+
+                top_level_atoms.push(container_atom);
+            } else {
+                // Yield leaf atoms
+                let atom_type = parsed_atom.atom_type;
+                let offset = parsed_atom.offset;
+                let size = parsed_atom.size;
+                let atom_data = self.parse_atom_data(parsed_atom).await?;
+                let atom = Atom {
+                    atom_type,
+                    offset,
+                    size,
+                    data: Some(atom_data),
+                    children: Vec::new(),
+                };
+                top_level_atoms.push(atom);
+            }
+        }
+
+        Ok(top_level_atoms)
     }
 
     async fn parse_next_atom(&mut self) -> Result<ParsedAtom, ParseError> {
-        let atom_offset = self.current_offset as u64;
+        let atom_offset = self.reader.current_offset as u64;
 
         // Try to read the atom header (size and type)
         let mut header = [0u8; 8];
-        self.read_exact(&mut header).await?;
+        self.reader.read_exact(&mut header).await?;
 
         let size = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as u64;
         let atom_type: [u8; 4] = header[4..8].try_into().unwrap();
@@ -390,7 +267,7 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
         let (header_size, data_size) = if size == 1 {
             // Extended size format
             let mut extended_size = [0u8; 8];
-            self.read_exact(&mut extended_size).await?;
+            self.reader.read_exact(&mut extended_size).await?;
             let full_size = u64::from_be_bytes(extended_size);
             if full_size < 16 {
                 return Err(ParseError {
@@ -431,7 +308,7 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
     }
 
     async fn parse_atom_data(&mut self, parsed_atom: ParsedAtom) -> Result<AtomData, ParseError> {
-        let content_data = self.read_data(parsed_atom.content_size).await?;
+        let content_data = self.reader.read_data(parsed_atom.content_size).await?;
         let cursor = Cursor::new(content_data);
         let atom_type = parsed_atom.atom_type;
         let atom_data = match atom_type.deref() {
@@ -510,19 +387,298 @@ fn is_container_atom(atom_type: &[u8; 4]) -> bool {
     // Common container types in MP4
     matches!(
         atom_type,
-        b"moov"
-            | b"mfra"
-            | b"udta"
-            | b"trak"
-            | b"edts"
-            | b"mdia"
-            | b"minf"
-            | b"dinf"
-            | b"stbl"
-            | b"moof"
-            | b"traf"
-            | b"sinf"
-            | b"schi"
+        MOOV | MFRA
+            | UDTA
+            | TRAK
+            | EDTS
+            | MDIA
+            | MINF
+            | DINF
+            | STBL
+            | MOOF
+            | TRAF
+            | SINF
+            | SCHI
             | META
     )
+}
+
+pub struct Metadata {
+    atoms: Vec<Atom>,
+    mdat: Option<ParsedAtom>,
+}
+
+impl Metadata {
+    fn new(atoms: Vec<Atom>, mdat: Option<ParsedAtom>) -> Self {
+        Self { atoms, mdat }
+    }
+
+    /// Transforms into (reader, current_offset, atoms)
+    pub fn into_atoms(self) -> Vec<Atom> {
+        self.atoms
+    }
+
+    /// Iterates over the metadata atoms
+    pub fn atoms_iter(&self) -> impl Iterator<Item = &Atom> {
+        self.atoms.iter()
+    }
+
+    /// Mutably iterates over the metadata atoms
+    pub fn atoms_iter_mut(&mut self) -> impl Iterator<Item = &mut Atom> {
+        self.atoms.iter_mut()
+    }
+
+    /// Retains only the metadata atoms that satisfy the predicate
+    /// (applies to top level and nested atoms)
+    pub fn atoms_flat_retain_mut<P>(mut self, mut pred: P) -> Self
+    where
+        P: FnMut(&mut Atom) -> bool,
+    {
+        self.atoms.retain_mut(|a| pred(a));
+        for atom in self.atoms.iter_mut() {
+            atom.children_flat_retain_mut(|a| pred(a));
+        }
+        self
+    }
+
+    /// Mutates the FTYP atom
+    pub fn file_type_mut<F>(mut self, mut f: F) -> Self
+    where
+        F: FnMut(&mut FileTypeAtom),
+    {
+        self.atoms
+            .iter_mut()
+            .filter(|a| a.atom_type == FTYP)
+            .for_each(|a| {
+                if let Some(AtomData::FileType(data)) = a.data.as_mut() {
+                    f(data);
+                }
+            });
+        self
+    }
+
+    /// Iterate through TRAK atoms
+    pub fn tracks_iter(&self) -> impl Iterator<Item = TrakAtomRef> {
+        self.atoms
+            .iter()
+            .filter(|a| a.atom_type == MOOV)
+            .flat_map(|a| a.children.iter().filter(|a| a.atom_type == TRAK))
+            .map(TrakAtomRef)
+    }
+
+    /// Retains only the TRAK atoms specified by the predicate
+    pub fn tracks_retain<P>(mut self, mut pred: P) -> Self
+    where
+        P: FnMut(TrakAtomRef) -> bool,
+    {
+        self.atoms
+            .iter_mut()
+            .filter(|a| a.atom_type == MOOV)
+            .for_each(|a| {
+                a.children
+                    .retain(|a| a.atom_type != TRAK || pred(TrakAtomRef(a)));
+            });
+        self
+    }
+
+    pub fn chunks<R: AsyncRead + Unpin + Send>(&mut self) -> Result<ChunkParser, ParseError> {
+        let mdat = self.mdat.take().ok_or_else(|| ParseError {
+            kind: ParseErrorKind::InsufficientData,
+            location: None,
+            source: Some(
+                anyhow!("mdat atom is missing or has already been consumed").into_boxed_dyn_error(),
+            ),
+        })?;
+
+        let mut parser = ChunkParser {
+            mdat,
+            tracks: Vec::new(),
+            chunk_offsets: Vec::new(),
+            sample_to_chunk: Vec::new(),
+            sample_sizes: Vec::new(),
+            time_to_sample: Vec::new(),
+        };
+
+        for trak in self.tracks_iter() {
+            if let Some((trak, stco, stsc, stsz, stts)) = (|| {
+                let mdia = trak.media()?;
+                let minf = mdia.media_information()?;
+                let stbl = minf.sample_table()?;
+                let chunk_offset = stbl.chunk_offset()?;
+                let sample_entries = stbl.sample_to_chunk()?.entries.inner();
+                let sample_sizes = stbl.sample_size()?.entry_sizes.inner();
+                let time_to_sample = stbl.time_to_sample()?.entries.inner();
+                Some((
+                    trak,
+                    chunk_offset.chunk_offsets.inner(),
+                    sample_entries,
+                    sample_sizes,
+                    time_to_sample,
+                ))
+            })() {
+                parser.tracks.push(trak);
+                parser.chunk_offsets.push(stco);
+                parser.sample_to_chunk.push(stsc);
+                parser.sample_sizes.push(stsz);
+                parser.time_to_sample.push(stts);
+            }
+        }
+
+        Ok(parser)
+    }
+}
+
+pub struct TrakAtomRef<'a>(&'a Atom);
+
+impl<'a> TrakAtomRef<'a> {
+    pub fn children(&self) -> impl Iterator<Item = &'a Atom> {
+        self.0.children.iter()
+    }
+
+    /// Finds the TKHD atom
+    pub fn header(&self) -> Option<&'a TrackHeaderAtom> {
+        let atom = self.0.children.iter().find(|a| a.atom_type == TKHD)?;
+        match atom.data.as_ref()? {
+            AtomData::TrackHeader(data) => Some(data),
+            _ => None,
+        }
+    }
+
+    pub fn media(&self) -> Option<MdiaAtomRef<'a>> {
+        let atom = self.0.children.iter().find(|a| a.atom_type == MDIA)?;
+        Some(MdiaAtomRef(atom))
+    }
+}
+
+pub struct MdiaAtomRef<'a>(&'a Atom);
+
+impl<'a> MdiaAtomRef<'a> {
+    pub fn children(&self) -> impl Iterator<Item = &'a Atom> {
+        self.0.children.iter()
+    }
+
+    /// Finds the MDHD atom
+    pub fn header(&self) -> Option<&'a MediaHeaderAtom> {
+        let atom = self.0.children.iter().find(|a| a.atom_type == MDHD)?;
+        match atom.data.as_ref()? {
+            AtomData::MediaHeader(data) => Some(data),
+            _ => None,
+        }
+    }
+
+    /// Finds the HDLR atom
+    pub fn handler_reference(&self) -> Option<&'a HandlerReferenceAtom> {
+        let atom = self.0.children.iter().find(|a| a.atom_type == HDLR)?;
+        match atom.data.as_ref()? {
+            AtomData::HandlerReference(data) => Some(data),
+            _ => None,
+        }
+    }
+
+    /// Finds the MINF atom
+    pub fn media_information(&self) -> Option<MinfAtomRef<'a>> {
+        let atom = self.0.children.iter().find(|a| a.atom_type == MINF)?;
+        Some(MinfAtomRef(atom))
+    }
+}
+
+pub struct MinfAtomRef<'a>(&'a Atom);
+
+impl<'a> MinfAtomRef<'a> {
+    pub fn children(&self) -> impl Iterator<Item = &'a Atom> {
+        self.0.children.iter()
+    }
+
+    /// Finds the STBL atom
+    pub fn sample_table(&self) -> Option<StblAtomRef<'a>> {
+        let atom = self.0.children.iter().find(|a| a.atom_type == STBL)?;
+        Some(StblAtomRef(atom))
+    }
+}
+
+pub struct StblAtomRef<'a>(&'a Atom);
+
+impl<'a> StblAtomRef<'a> {
+    pub fn children(&self) -> impl Iterator<Item = &'a Atom> {
+        self.0.children.iter()
+    }
+
+    /// Finds the STSD atom
+    pub fn sample_description(&self) -> Option<&'a SampleDescriptionTableAtom> {
+        let atom = self.0.children.iter().find(|a| a.atom_type == STSD)?;
+        match atom.data.as_ref()? {
+            AtomData::SampleDescriptionTable(data) => Some(data),
+            _ => None,
+        }
+    }
+
+    /// Finds the STTS atom
+    pub fn time_to_sample(&self) -> Option<&'a TimeToSampleAtom> {
+        let atom = self.0.children.iter().find(|a| a.atom_type == STTS)?;
+        match atom.data.as_ref()? {
+            AtomData::TimeToSample(data) => Some(data),
+            _ => None,
+        }
+    }
+
+    /// Finds the STSC atom
+    pub fn sample_to_chunk(&self) -> Option<&'a SampleToChunkAtom> {
+        let atom = self.0.children.iter().find(|a| a.atom_type == STSC)?;
+        match atom.data.as_ref()? {
+            AtomData::SampleToChunk(data) => Some(data),
+            _ => None,
+        }
+    }
+
+    /// Finds the STSZ atom
+    pub fn sample_size(&self) -> Option<&'a SampleSizeAtom> {
+        let atom = self.0.children.iter().find(|a| a.atom_type == STSZ)?;
+        match atom.data.as_ref()? {
+            AtomData::SampleSize(data) => Some(data),
+            _ => None,
+        }
+    }
+
+    /// Finds the STCO atom
+    pub fn chunk_offset(&self) -> Option<&'a ChunkOffsetAtom> {
+        let atom = self.0.children.iter().find(|a| a.atom_type == STCO)?;
+        match atom.data.as_ref()? {
+            AtomData::ChunkOffset(data) => Some(data),
+            _ => None,
+        }
+    }
+}
+
+pub struct Chunk<'a> {
+    /// Reference to the track the sample is in
+    trak: TrakAtomRef<'a>,
+    /// Slice of sample sizes within this chunk
+    sample_sizes: &'a [u32],
+    /// [TimeToSampleEntry]s indexed reletive to `sample_sizes`
+    time_to_sample: &'a [TimeToSampleEntry],
+    /// Bytes in the chunk
+    data: Vec<u8>,
+}
+
+pub struct ChunkParser<'a> {
+    mdat: ParsedAtom,
+    /// Reference to each track's metadata
+    tracks: Vec<TrakAtomRef<'a>>,
+    /// Chunk offsets for each track
+    chunk_offsets: Vec<&'a [u64]>,
+    /// [SampleToChunkEntry]s for each track
+    sample_to_chunk: Vec<&'a [SampleToChunkEntry]>,
+    /// Sample sizes for each track
+    sample_sizes: Vec<&'a [u32]>,
+    /// [TimeToSampleEntry]s for each track
+    time_to_sample: Vec<&'a [TimeToSampleEntry]>,
+}
+
+impl<'a> ChunkParser<'a> {
+    pub async fn read_next_chunk<R: AsyncRead + Unpin + Send>(
+        &mut self,
+        reader: &mut Mp4Reader<R>,
+    ) -> Option<Chunk<'a>> {
+        todo!()
+    }
 }

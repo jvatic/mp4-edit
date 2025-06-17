@@ -19,6 +19,12 @@ pub const STSZ: &[u8; 4] = b"stsz";
 #[derive(Clone, Deref)]
 pub struct SampleEntrySizes(Vec<u32>);
 
+impl SampleEntrySizes {
+    pub fn inner(&self) -> &[u32] {
+        &self.0
+    }
+}
+
 impl fmt::Debug for SampleEntrySizes {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.0.len() <= 10 {
