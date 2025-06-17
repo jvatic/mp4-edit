@@ -16,6 +16,12 @@ pub const STSC: &[u8; 4] = b"stsc";
 #[derive(Clone, Deref)]
 pub struct SampleToChunkEntries(Vec<SampleToChunkEntry>);
 
+impl SampleToChunkEntries {
+    pub fn inner(&self) -> &[SampleToChunkEntry] {
+        &self.0
+    }
+}
+
 impl fmt::Debug for SampleToChunkEntries {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.0.len() <= 10 {

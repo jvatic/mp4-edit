@@ -1,6 +1,4 @@
 use anyhow::Context;
-use futures_util::pin_mut;
-use futures_util::stream::StreamExt;
 use std::env;
 use tokio::{
     fs,
@@ -146,7 +144,7 @@ fn process_atom(
 
 /// Print atoms directly from hierarchical stream
 async fn print_atoms_from_stream<R: futures_io::AsyncRead + Unpin + Send>(
-    mut parser: Parser<R>,
+    parser: Parser<R>,
 ) -> anyhow::Result<usize> {
     let mut atom_count = 0;
     let mut first_atom = true;
@@ -158,15 +156,15 @@ async fn print_atoms_from_stream<R: futures_io::AsyncRead + Unpin + Send>(
     let mut chunk_offsets = None;
     let mut sample_to_chunk = None;
 
-    let atoms = parser.parse_metadata().await?;
-    for atom in atoms {
+    let metadata = parser.parse_metadata().await?.1;
+    for atom in metadata.atoms_iter() {
         if first_atom {
             print_table_header();
             first_atom = false;
         }
 
         process_atom(
-            &atom,
+            atom,
             0,
             &mut atom_count,
             &mut movie_header,
@@ -178,41 +176,41 @@ async fn print_atoms_from_stream<R: futures_io::AsyncRead + Unpin + Send>(
         );
     }
 
-    if movie_header.is_some()
-        && sample_sizes.is_some()
-        && sample_durations.is_some()
-        && chunk_offsets.is_some()
-        && sample_to_chunk.is_some()
-    {
-        let movie_header = movie_header.unwrap();
-        let stream = parser.stream_samples(
-            sample_sizes.unwrap(),
-            sample_durations.unwrap(),
-            chunk_offsets.unwrap(),
-            sample_to_chunk.unwrap(),
-        );
-        pin_mut!(stream);
+    // if movie_header.is_some()
+    //     && sample_sizes.is_some()
+    //     && sample_durations.is_some()
+    //     && chunk_offsets.is_some()
+    //     && sample_to_chunk.is_some()
+    // {
+    //     let movie_header = movie_header.unwrap();
+    //     let stream = parser.stream_samples(
+    //         sample_sizes.unwrap(),
+    //         sample_durations.unwrap(),
+    //         chunk_offsets.unwrap(),
+    //         sample_to_chunk.unwrap(),
+    //     );
+    //     pin_mut!(stream);
 
-        let timescale = movie_header.timescale;
+    //     let timescale = movie_header.timescale;
 
-        let mut i = -1;
-        while let Some(sample) = stream
-            .next()
-            .await
-            .transpose()
-            .context("Failed to parse chunk stream item")?
-        {
-            i += 1;
-            if i > 5 {
-                break;
-            }
-            println!(
-                "Sample: {:?} duration={}",
-                sample.data.len(),
-                (sample.duration as f64) / (timescale as f64),
-            );
-        }
-    }
+    //     let mut i = -1;
+    //     while let Some(sample) = stream
+    //         .next()
+    //         .await
+    //         .transpose()
+    //         .context("Failed to parse chunk stream item")?
+    //     {
+    //         i += 1;
+    //         if i > 5 {
+    //             break;
+    //         }
+    //         println!(
+    //             "Sample: {:?} duration={}",
+    //             sample.data.len(),
+    //             (sample.duration as f64) / (timescale as f64),
+    //         );
+    //     }
+    // }
 
     if !first_atom {
         print_table_footer();

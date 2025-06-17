@@ -16,6 +16,12 @@ pub const STTS: &[u8; 4] = b"stts";
 #[derive(Clone, Deref)]
 pub struct TimeToSampleEntries(Vec<TimeToSampleEntry>);
 
+impl TimeToSampleEntries {
+    pub fn inner(&self) -> &[TimeToSampleEntry] {
+        &self.0
+    }
+}
+
 impl fmt::Debug for TimeToSampleEntries {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.0.len() <= 10 {

@@ -1,12 +1,21 @@
 use anyhow::Context;
-use std::env;
+use std::{env, ops::Deref};
 use tokio::{
     fs,
     io::{self, AsyncRead},
 };
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use mp4_parser::{Mp4Writer, Parser};
+use mp4_parser::{
+    atom::{
+        containers::{DINF, EDTS, META},
+        hdlr::{HandlerType, HDLR},
+        ilst::ILST,
+        tref::TREF,
+        FourCC,
+    },
+    Mp4Writer, Parser,
+};
 
 async fn open_input(input_name: &str) -> anyhow::Result<Box<dyn AsyncRead + Unpin + Send>> {
     if input_name == "-" {
@@ -45,14 +54,49 @@ async fn main() -> anyhow::Result<()> {
 
     // Open input file and create parser
     let input_file = open_input(input_name).await?;
-    let mut parser = Parser::new(input_file.compat());
+    let parser = Parser::new(input_file.compat());
 
     // Parse metadata atoms from input
     println!("📖 Reading metadata atoms...");
-    let atoms = parser
+    let (_, metadata) = parser
         .parse_metadata()
         .await
         .context("Failed to parse metadata from input file")?;
+    let atoms = metadata
+        .file_type_mut(|ftyp| {
+            ftyp.major_brand = FourCC::from(*b"M4B ");
+            ftyp.minor_version = 0x00000200;
+            ftyp.compatible_brands = vec![
+                FourCC::from(*b"isom"),
+                FourCC::from(*b"M4B "),
+                FourCC::from(*b"M4A "),
+                FourCC::from(*b"mp42"),
+            ]
+        })
+        .tracks_retain(|trak| {
+            trak.media()
+                .and_then(|m| {
+                    m.handler_reference()
+                        .map(|hr| matches!(hr.handler_type, HandlerType::Audio))
+                })
+                .unwrap_or(false)
+        })
+        .atoms_flat_retain_mut(|atom| match atom.atom_type.deref() {
+            DINF | TREF | EDTS => false,
+            META => {
+                atom.children_flat_retain_mut(|atom| match atom.atom_type.deref() {
+                    HDLR => false,
+                    ILST => {
+                        // TODO: edit tags
+                        true
+                    }
+                    _ => true,
+                });
+                true
+            }
+            _ => true,
+        })
+        .into_atoms();
 
     println!("✅ Found {} metadata atoms", atoms.len());
 

@@ -21,6 +21,10 @@ impl ChunkOffsets {
     pub fn into_inner(self) -> Vec<u64> {
         self.0
     }
+
+    pub fn inner(&self) -> &[u64] {
+        &self.0
+    }
 }
 
 impl fmt::Debug for ChunkOffsets {
