@@ -6,9 +6,7 @@ use tokio::{
 };
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
-use mp4_parser::atom::{
-    ChunkOffsetAtom, MovieHeaderAtom, SampleSizeAtom, SampleToChunkAtom, TimeToSampleAtom,
-};
+use mp4_parser::atom::hdlr::HandlerType;
 use mp4_parser::{Atom, AtomData, Parser};
 
 /// Format file size in human-readable format
@@ -88,57 +86,13 @@ fn print_table_footer() {
 }
 
 /// Process atom recursively, handling data extraction and printing
-fn process_atom(
-    atom: &Atom,
-    indent: usize,
-    atom_count: &mut usize,
-    movie_header: &mut Option<MovieHeaderAtom>,
-    track_id: &mut Option<u32>,
-    sample_sizes: &mut Option<SampleSizeAtom>,
-    sample_durations: &mut Option<TimeToSampleAtom>,
-    chunk_offsets: &mut Option<ChunkOffsetAtom>,
-    sample_to_chunk: &mut Option<SampleToChunkAtom>,
-) {
+fn process_atom(atom: &Atom, indent: usize, atom_count: &mut usize) {
     print_atom(atom, indent);
     *atom_count += 1;
 
-    // Extract data from atom
-    if let Some(data) = &atom.data {
-        if let AtomData::TrackHeader(h) = data {
-            *track_id = Some(h.track_id);
-        }
-
-        // take sample metadata for track 1
-        if matches!(track_id, Some(1)) {
-            use AtomData::*;
-            match data {
-                SampleSize(data) => *sample_sizes = Some(data.clone()),
-                TimeToSample(data) => *sample_durations = Some(data.clone()),
-                ChunkOffset(data) => *chunk_offsets = Some(data.clone()),
-                SampleToChunk(data) => *sample_to_chunk = Some(data.clone()),
-                _ => {}
-            }
-        } else if movie_header.is_none() {
-            use AtomData::*;
-            if let MovieHeader(data) = data {
-                *movie_header = Some(data.clone());
-            }
-        }
-    }
-
     // Process children recursively
     for child in &atom.children {
-        process_atom(
-            child,
-            indent + 1,
-            atom_count,
-            movie_header,
-            track_id,
-            sample_sizes,
-            sample_durations,
-            chunk_offsets,
-            sample_to_chunk,
-        );
+        process_atom(child, indent + 1, atom_count);
     }
 }
 
@@ -149,68 +103,32 @@ async fn print_atoms_from_stream<R: futures_io::AsyncRead + Unpin + Send>(
     let mut atom_count = 0;
     let mut first_atom = true;
 
-    let mut movie_header = None;
-    let mut track_id = None;
-    let mut sample_sizes = None;
-    let mut sample_durations = None;
-    let mut chunk_offsets = None;
-    let mut sample_to_chunk = None;
-
-    let metadata = parser.parse_metadata().await?.1;
+    let (mut reader, metadata) = parser.parse_metadata().await?;
     for atom in metadata.atoms_iter() {
         if first_atom {
             print_table_header();
             first_atom = false;
         }
 
-        process_atom(
-            atom,
-            0,
-            &mut atom_count,
-            &mut movie_header,
-            &mut track_id,
-            &mut sample_sizes,
-            &mut sample_durations,
-            &mut chunk_offsets,
-            &mut sample_to_chunk,
-        );
+        process_atom(atom, 0, &mut atom_count);
     }
 
-    // if movie_header.is_some()
-    //     && sample_sizes.is_some()
-    //     && sample_durations.is_some()
-    //     && chunk_offsets.is_some()
-    //     && sample_to_chunk.is_some()
-    // {
-    //     let movie_header = movie_header.unwrap();
-    //     let stream = parser.stream_samples(
-    //         sample_sizes.unwrap(),
-    //         sample_durations.unwrap(),
-    //         chunk_offsets.unwrap(),
-    //         sample_to_chunk.unwrap(),
-    //     );
-    //     pin_mut!(stream);
+    let mut metadata = metadata.tracks_retain(|trak| {
+        trak.media()
+            .and_then(|m| {
+                m.handler_reference()
+                    .map(|hr| matches!(hr.handler_type, HandlerType::Audio))
+            })
+            .unwrap_or(false)
+    });
 
-    //     let timescale = movie_header.timescale;
+    let mut chunk_parser = metadata.chunks()?;
 
-    //     let mut i = -1;
-    //     while let Some(sample) = stream
-    //         .next()
-    //         .await
-    //         .transpose()
-    //         .context("Failed to parse chunk stream item")?
-    //     {
-    //         i += 1;
-    //         if i > 5 {
-    //             break;
-    //         }
-    //         println!(
-    //             "Sample: {:?} duration={}",
-    //             sample.data.len(),
-    //             (sample.duration as f64) / (timescale as f64),
-    //         );
-    //     }
-    // }
+    // parse the first few chunks
+    for _ in 0..10 {
+        let chunk = chunk_parser.read_next_chunk(&mut reader).await?;
+        println!("Parsed chunk: {chunk:?}");
+    }
 
     if !first_atom {
         print_table_footer();

@@ -2,6 +2,7 @@ use anyhow::anyhow;
 use derive_more::Display;
 use futures_io::AsyncRead;
 use futures_util::io::{AsyncReadExt, Cursor};
+use std::fmt;
 use std::future::Future;
 use std::ops::Deref;
 use thiserror::Error;
@@ -11,6 +12,7 @@ use crate::atom::containers::{
 };
 use crate::atom::stsc::SampleToChunkEntry;
 use crate::atom::stts::TimeToSampleEntry;
+use crate::atom::util::DebugEllipsis;
 use crate::{
     atom::{
         chpl::{ChapterListAtom, CHPL},
@@ -159,7 +161,7 @@ struct ParsedAtom {
     atom_type: FourCC,
     size: u64,
     offset: u64,
-    content_size: usize,
+    content_size: u64,
 }
 
 impl<R: AsyncRead + Unpin + Send> Parser<R> {
@@ -217,7 +219,7 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
                     // Handle META version and flags as RawData
                     let version_flags = self.reader.read_data(META_VERSION_FLAGS_SIZE).await?;
                     (
-                        parsed_atom.content_size - META_VERSION_FLAGS_SIZE,
+                        parsed_atom.content_size - (META_VERSION_FLAGS_SIZE as u64),
                         Some(AtomData::RawData(RawData(version_flags))),
                     )
                 } else {
@@ -229,7 +231,7 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
                     size: parsed_atom.size,
                     offset: parsed_atom.offset,
                     data,
-                    children: Box::pin(self.parse_metadata_inner(Some(size))).await?,
+                    children: Box::pin(self.parse_metadata_inner(Some(size as usize))).await?,
                 };
 
                 top_level_atoms.push(container_atom);
@@ -303,12 +305,15 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
             atom_type,
             size: total_size,
             offset: atom_offset,
-            content_size: data_size as usize,
+            content_size: data_size,
         })
     }
 
     async fn parse_atom_data(&mut self, parsed_atom: ParsedAtom) -> Result<AtomData, ParseError> {
-        let content_data = self.reader.read_data(parsed_atom.content_size).await?;
+        let content_data = self
+            .reader
+            .read_data(parsed_atom.content_size as usize)
+            .await?;
         let cursor = Cursor::new(content_data);
         let atom_type = parsed_atom.atom_type;
         let atom_data = match atom_type.deref() {
@@ -481,7 +486,7 @@ impl Metadata {
         self
     }
 
-    pub fn chunks<R: AsyncRead + Unpin + Send>(&mut self) -> Result<ChunkParser, ParseError> {
+    pub fn chunks(&mut self) -> Result<ChunkParser, ParseError> {
         let mdat = self.mdat.take().ok_or_else(|| ParseError {
             kind: ParseErrorKind::InsufficientData,
             location: None,
@@ -528,7 +533,16 @@ impl Metadata {
     }
 }
 
+#[derive(Copy)]
 pub struct TrakAtomRef<'a>(&'a Atom);
+
+impl<'a> fmt::Debug for TrakAtomRef<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TrakAtomRef")
+            .field("track_id", &self.header().unwrap().track_id)
+            .finish()
+    }
+}
 
 impl<'a> TrakAtomRef<'a> {
     pub fn children(&self) -> impl Iterator<Item = &'a Atom> {
@@ -547,6 +561,12 @@ impl<'a> TrakAtomRef<'a> {
     pub fn media(&self) -> Option<MdiaAtomRef<'a>> {
         let atom = self.0.children.iter().find(|a| a.atom_type == MDIA)?;
         Some(MdiaAtomRef(atom))
+    }
+}
+
+impl<'a> Clone for TrakAtomRef<'a> {
+    fn clone(&self) -> Self {
+        TrakAtomRef(self.0)
     }
 }
 
@@ -660,6 +680,23 @@ pub struct Chunk<'a> {
     data: Vec<u8>,
 }
 
+impl<'a> fmt::Debug for Chunk<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Chunk")
+            .field("trak", &self.trak)
+            .field(
+                "sample_sizes",
+                &DebugEllipsis(Some(self.sample_sizes.len())),
+            )
+            .field(
+                "time_to_sample",
+                &DebugEllipsis(Some(self.time_to_sample.len())),
+            )
+            .field("data", &DebugEllipsis(Some(self.data.len())))
+            .finish()
+    }
+}
+
 pub struct ChunkParser<'a> {
     mdat: ParsedAtom,
     /// Reference to each track's metadata
@@ -678,7 +715,130 @@ impl<'a> ChunkParser<'a> {
     pub async fn read_next_chunk<R: AsyncRead + Unpin + Send>(
         &mut self,
         reader: &mut Mp4Reader<R>,
-    ) -> Option<Chunk<'a>> {
-        todo!()
+    ) -> Result<Option<Chunk<'a>>, ParseError> {
+        let current_offset = reader.current_offset as u64;
+
+        // First, check if there's a chunk starting at the current offset
+        for track_idx in 0..self.tracks.len() {
+            let chunk_offsets = self.chunk_offsets[track_idx];
+
+            if let Some(chunk_idx) = chunk_offsets
+                .iter()
+                .position(|&offset| offset == current_offset)
+            {
+                // Found a chunk at current offset, read it
+                return self
+                    .read_chunk_at_index(reader, track_idx, chunk_idx)
+                    .await
+                    .map(Some);
+            }
+        }
+
+        // No chunk at current offset, find the next one
+        let mut next_offset = None;
+        let mut next_track_idx = 0;
+        let mut next_chunk_idx = 0;
+
+        for track_idx in 0..self.tracks.len() {
+            let chunk_offsets = self.chunk_offsets[track_idx];
+
+            for (chunk_idx, &offset) in chunk_offsets.iter().enumerate() {
+                if offset > current_offset {
+                    if next_offset.is_none() || offset < next_offset.unwrap() {
+                        next_offset = Some(offset);
+                        next_track_idx = track_idx;
+                        next_chunk_idx = chunk_idx;
+                    }
+                }
+            }
+        }
+
+        if let Some(offset) = next_offset {
+            // Skip to the next chunk
+            let bytes_to_skip = offset - current_offset;
+            if bytes_to_skip > 0 {
+                let mut buffer = vec![0u8; bytes_to_skip as usize];
+                reader.read_exact(&mut buffer).await?;
+            }
+
+            // Read the chunk
+            self.read_chunk_at_index(reader, next_track_idx, next_chunk_idx)
+                .await
+                .map(Some)
+        } else {
+            // No more chunks
+            Ok(None)
+        }
+    }
+
+    async fn read_chunk_at_index<R: AsyncRead + Unpin + Send>(
+        &self,
+        reader: &mut Mp4Reader<R>,
+        track_idx: usize,
+        chunk_idx: usize,
+    ) -> Result<Chunk<'a>, ParseError> {
+        let sample_to_chunk = self.sample_to_chunk[track_idx];
+        let sample_sizes = self.sample_sizes[track_idx];
+        let time_to_sample = self.time_to_sample[track_idx];
+
+        // Find how many samples are in this chunk and calculate sample indices
+        let mut samples_in_chunk = 0;
+        let mut sample_start_idx = 0;
+
+        // Find the appropriate sample-to-chunk entry for this chunk
+        for (entry_idx, entry) in sample_to_chunk.iter().enumerate() {
+            let first_chunk = entry.first_chunk - 1; // Convert to 0-based
+
+            if chunk_idx >= first_chunk as usize {
+                samples_in_chunk = entry.samples_per_chunk;
+
+                // Calculate how many samples came before this chunk
+                sample_start_idx = 0;
+                for prev_entry_idx in 0..entry_idx {
+                    let prev_entry = &sample_to_chunk[prev_entry_idx];
+                    let prev_first_chunk = prev_entry.first_chunk - 1;
+                    let next_first_chunk = if prev_entry_idx + 1 < sample_to_chunk.len() {
+                        sample_to_chunk[prev_entry_idx + 1].first_chunk - 1
+                    } else {
+                        self.chunk_offsets[track_idx].len() as u32
+                    };
+
+                    let chunks_with_this_sample_count = next_first_chunk - prev_first_chunk;
+                    sample_start_idx +=
+                        chunks_with_this_sample_count * prev_entry.samples_per_chunk;
+                }
+
+                // Add samples from chunks in current entry before this chunk
+                let chunks_before_current = chunk_idx as u32 - first_chunk;
+                sample_start_idx += chunks_before_current * entry.samples_per_chunk;
+            }
+        }
+
+        // Calculate total chunk size
+        let mut chunk_size = 0;
+        for i in 0..samples_in_chunk {
+            let sample_idx = sample_start_idx + i;
+            if sample_idx < sample_sizes.len() as u32 {
+                chunk_size += sample_sizes[sample_idx as usize];
+            }
+        }
+
+        // Read the chunk data
+        let data = reader.read_data(chunk_size as usize).await?;
+
+        // Get the sample sizes slice for this chunk
+        let end_idx = std::cmp::min(
+            (sample_start_idx + samples_in_chunk) as usize,
+            sample_sizes.len(),
+        );
+        let chunk_sample_sizes = &sample_sizes[sample_start_idx as usize..end_idx];
+
+        // Create the chunk
+        Ok(Chunk {
+            trak: self.tracks[track_idx],
+            sample_sizes: chunk_sample_sizes,
+            time_to_sample, // For now, pass all time-to-sample entries
+            data,
+        })
     }
 }

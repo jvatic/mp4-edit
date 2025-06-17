@@ -18,7 +18,7 @@ pub mod stsz;
 pub mod stts;
 pub mod tkhd;
 pub mod tref;
-mod util;
+pub(crate) mod util;
 
 pub mod containers {
     pub const MOOV: &[u8; 4] = b"moov";
