@@ -1,12 +1,15 @@
 use anyhow::Context;
-use std::env;
+use std::{env, ops::Deref};
 use tokio::{
     fs,
     io::{self, AsyncRead},
 };
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
-use mp4_parser::atom::hdlr::HandlerType;
+use mp4_parser::atom::{
+    hdlr::HandlerType,
+    stsd::{BtrtExtension, Extension, SampleEntryData, SampleEntryType, STSD},
+};
 use mp4_parser::{Atom, AtomData, Parser};
 
 /// Format file size in human-readable format
@@ -103,7 +106,36 @@ async fn print_atoms_from_stream<R: futures_io::AsyncRead + Unpin + Send>(
     let mut atom_count = 0;
     let mut first_atom = true;
 
-    let (mut reader, metadata) = parser.parse_metadata().await?;
+    let (_reader, metadata) = parser.parse_metadata().await?;
+
+    let mut track_bitrate = Vec::with_capacity(1);
+    for trak in metadata.tracks_iter() {
+        let num_bits = trak
+            .media()
+            .and_then(|m| m.media_information())
+            .and_then(|m| m.sample_table())
+            .and_then(|st| st.sample_size())
+            .and_then(|s| Some(s.entry_sizes.iter().sum::<u32>()))
+            .unwrap_or_default()
+            * 8;
+
+        let duration_secds = trak
+            .media()
+            .and_then(|m| m.header())
+            .and_then(|mdhd| Some((mdhd.duration as f64) / (mdhd.timescale as f64)))
+            .unwrap_or_default();
+
+        let bitrate = (num_bits as f64) / duration_secds;
+        println!(
+            "trak({track_id}) bitrate: {bitrate}",
+            track_id = trak
+                .header()
+                .and_then(|tkhd| Some(tkhd.track_id))
+                .unwrap_or_default()
+        );
+        track_bitrate.push(bitrate.round() as u32);
+    }
+
     for atom in metadata.atoms_iter() {
         if first_atom {
             print_table_header();
@@ -111,23 +143,6 @@ async fn print_atoms_from_stream<R: futures_io::AsyncRead + Unpin + Send>(
         }
 
         process_atom(atom, 0, &mut atom_count);
-    }
-
-    let mut metadata = metadata.tracks_retain(|trak| {
-        trak.media()
-            .and_then(|m| {
-                m.handler_reference()
-                    .map(|hr| matches!(hr.handler_type, HandlerType::Audio))
-            })
-            .unwrap_or(false)
-    });
-
-    let mut chunk_parser = metadata.chunks()?;
-
-    // parse the first few chunks
-    for _ in 0..10 {
-        let chunk = chunk_parser.read_next_chunk(&mut reader).await?;
-        println!("Parsed chunk: {chunk:?}");
     }
 
     if !first_atom {

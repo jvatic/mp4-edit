@@ -25,6 +25,12 @@ impl SampleEntrySizes {
     }
 }
 
+impl From<Vec<u32>> for SampleEntrySizes {
+    fn from(value: Vec<u32>) -> Self {
+        SampleEntrySizes(value)
+    }
+}
+
 impl fmt::Debug for SampleEntrySizes {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.0.len() <= 10 {
@@ -34,6 +40,23 @@ impl fmt::Debug for SampleEntrySizes {
             .entries(self.0.iter().take(10))
             .entry(&DebugEllipsis(Some(self.0.len() - 10)))
             .finish()
+    }
+}
+
+impl SampleEntrySizes {
+    /// Create a new SampleEntrySizes from a vector of sample sizes
+    pub fn new(sizes: Vec<u32>) -> Self {
+        Self(sizes)
+    }
+
+    /// Create a new SampleEntrySizes from a vector of sample sizes
+    pub fn from_vec(sizes: Vec<u32>) -> Self {
+        Self(sizes)
+    }
+
+    /// Convert to the inner Vec<u32>
+    pub fn to_vec(&self) -> Vec<u32> {
+        self.0.clone()
     }
 }
 
