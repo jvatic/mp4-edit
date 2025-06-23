@@ -85,20 +85,6 @@ pub enum ParseErrorKind {
     InsufficientData,
 }
 
-pub struct Sample {
-    pub data: Vec<u8>,
-    pub duration: u32,
-    pub description_index: u32,
-    pub sample_number: u32,
-    pub timestamp: u64,
-}
-
-impl Sample {
-    pub fn into_bytes(self) -> Vec<u8> {
-        self.data
-    }
-}
-
 pub struct Mp4Reader<R> {
     reader: R,
     current_offset: usize,
@@ -446,22 +432,6 @@ impl Metadata {
         self
     }
 
-    /// Mutates the FTYP atom
-    pub fn file_type_mut<F>(mut self, mut f: F) -> Self
-    where
-        F: FnMut(&mut FileTypeAtom),
-    {
-        self.atoms
-            .iter_mut()
-            .filter(|a| a.atom_type == FTYP)
-            .for_each(|a| {
-                if let Some(AtomData::FileType(data)) = a.data.as_mut() {
-                    f(data);
-                }
-            });
-        self
-    }
-
     /// Iterate through TRAK atoms
     pub fn tracks_iter(&self) -> impl Iterator<Item = TrakAtomRef> {
         self.atoms
@@ -533,7 +503,6 @@ impl Metadata {
     }
 }
 
-#[derive(Copy)]
 pub struct TrakAtomRef<'a>(&'a Atom);
 
 impl<'a> fmt::Debug for TrakAtomRef<'a> {
@@ -561,12 +530,6 @@ impl<'a> TrakAtomRef<'a> {
     pub fn media(&self) -> Option<MdiaAtomRef<'a>> {
         let atom = self.0.children.iter().find(|a| a.atom_type == MDIA)?;
         Some(MdiaAtomRef(atom))
-    }
-}
-
-impl<'a> Clone for TrakAtomRef<'a> {
-    fn clone(&self) -> Self {
-        TrakAtomRef(self.0)
     }
 }
 
@@ -666,34 +629,6 @@ impl<'a> StblAtomRef<'a> {
             AtomData::ChunkOffset(data) => Some(data),
             _ => None,
         }
-    }
-}
-
-pub struct Chunk<'a> {
-    /// Reference to the track the sample is in
-    trak: TrakAtomRef<'a>,
-    /// Slice of sample sizes within this chunk
-    sample_sizes: &'a [u32],
-    /// [TimeToSampleEntry]s indexed reletive to `sample_sizes`
-    time_to_sample: &'a [TimeToSampleEntry],
-    /// Bytes in the chunk
-    data: Vec<u8>,
-}
-
-impl<'a> fmt::Debug for Chunk<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Chunk")
-            .field("trak", &self.trak)
-            .field(
-                "sample_sizes",
-                &DebugEllipsis(Some(self.sample_sizes.len())),
-            )
-            .field(
-                "time_to_sample",
-                &DebugEllipsis(Some(self.time_to_sample.len())),
-            )
-            .field("data", &DebugEllipsis(Some(self.data.len())))
-            .finish()
     }
 }
 
@@ -833,12 +768,93 @@ impl<'a> ChunkParser<'a> {
         );
         let chunk_sample_sizes = &sample_sizes[sample_start_idx as usize..end_idx];
 
+        // Get the sample durations slice for this chunk
+        let sample_durations: Vec<u32> = time_to_sample
+            .iter()
+            .flat_map(|entry| {
+                std::iter::repeat(entry.sample_duration).take(entry.sample_count as usize)
+            })
+            .skip(sample_start_idx as usize)
+            .take(chunk_sample_sizes.len())
+            .collect();
+        assert_eq!(chunk_sample_sizes.len(), sample_durations.len());
+
         // Create the chunk
         Ok(Chunk {
-            trak: self.tracks[track_idx],
+            trak: TrakAtomRef(self.tracks[track_idx].0),
             sample_sizes: chunk_sample_sizes,
-            time_to_sample, // For now, pass all time-to-sample entries
+            sample_durations,
             data,
         })
+    }
+}
+
+impl<'a> fmt::Debug for Chunk<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Chunk")
+            .field("trak", &self.trak)
+            .field(
+                "sample_sizes",
+                &DebugEllipsis(Some(self.sample_sizes.len())),
+            )
+            .field(
+                "time_to_sample",
+                &DebugEllipsis(Some(self.sample_durations.len())),
+            )
+            .field("data", &DebugEllipsis(Some(self.data.len())))
+            .finish()
+    }
+}
+
+pub struct Chunk<'a> {
+    /// Reference to the track the sample is in
+    trak: TrakAtomRef<'a>,
+    /// Slice of sample sizes within this chunk
+    sample_sizes: &'a [u32],
+    /// Timescale duration of each sample indexed reletive to `sample_sizes`
+    sample_durations: Vec<u32>,
+    /// Bytes in the chunk
+    data: Vec<u8>,
+}
+
+impl<'a> Chunk<'a> {
+    pub fn samples(&'a self) -> impl Iterator<Item = Sample<'a>> {
+        let timescale = self
+            .trak
+            .media()
+            .and_then(|h| h.header())
+            .and_then(|h| Some(h.timescale))
+            .expect("trak.mdia.mvhd is missing");
+        self.sample_sizes
+            .iter()
+            .zip(self.sample_durations.iter())
+            .scan(0usize, move |offset, (size, duration)| {
+                let sample_offset = *offset;
+                *offset += *size as usize;
+                let data = &self.data[sample_offset..sample_offset + (*size as usize)];
+                Some(Sample {
+                    size: *size,
+                    duration: *duration,
+                    timescale,
+                    data,
+                })
+            })
+    }
+}
+
+pub struct Sample<'a> {
+    pub size: u32,
+    pub duration: u32,
+    pub timescale: u32,
+    pub data: &'a [u8],
+}
+
+impl<'a> fmt::Debug for Sample<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Sample")
+            .field("size", &self.size)
+            .field("duration", &self.duration)
+            .field("timescale", &self.timescale)
+            .finish_non_exhaustive()
     }
 }

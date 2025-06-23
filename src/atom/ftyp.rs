@@ -21,6 +21,16 @@ pub struct FileTypeAtom {
     pub compatible_brands: Vec<FourCC>,
 }
 
+impl Default for FileTypeAtom {
+    fn default() -> Self {
+        Self {
+            major_brand: FourCC(*b"isom"),
+            minor_version: 512,
+            compatible_brands: vec![FourCC::from(*b"isom")],
+        }
+    }
+}
+
 impl Parse for FileTypeAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,

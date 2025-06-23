@@ -27,6 +27,12 @@ impl ChunkOffsets {
     }
 }
 
+impl From<Vec<u64>> for ChunkOffsets {
+    fn from(value: Vec<u64>) -> Self {
+        Self(value)
+    }
+}
+
 impl fmt::Debug for ChunkOffsets {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.0.len() <= 10 {
