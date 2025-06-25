@@ -177,18 +177,25 @@ impl From<Extension> for Vec<u8> {
         use Extension::*;
         match value {
             Esds(esds) => {
-                let esds: Vec<u8> = esds.into();
-                data.extend_from_slice(&esds);
+                let esds_data: Vec<u8> = esds.into();
+                let size = (esds_data.len() as u32).to_be_bytes();
+                eprintln!("esds size_usize={} size_hex={:?}", esds_data.len(), &size);
+                data.extend_from_slice(&size);
+                data.extend_from_slice(b"esds");
+                data.extend_from_slice(&esds_data);
             }
             Btrt(btrt) => {
-                let btrt: Vec<u8> = btrt.into();
-                data.extend_from_slice(&btrt);
+                let btrt_data: Vec<u8> = btrt.into();
+                let size = (btrt_data.len() as u32).to_be_bytes();
+                data.extend_from_slice(&size);
+                data.extend_from_slice(b"btrt");
+                data.extend_from_slice(&btrt_data);
             }
             Unknown {
                 atom_type,
                 data: ext_data,
             } => {
-                let size = ext_data.len().to_be_bytes();
+                let size = (ext_data.len() as u32).to_be_bytes();
                 data.extend_from_slice(&size);
                 data.extend_from_slice(atom_type.deref());
                 data.extend_from_slice(&ext_data);
@@ -600,6 +607,10 @@ fn parse_extensions(extensions: &[u8]) -> Result<Vec<Extension>, anyhow::Error> 
             extensions[offset + 3],
         ]);
 
+        if size < 8 {
+            return Err(anyhow!("invalid size found at offset={offset}: {size}"));
+        }
+
         let atom_type = FourCC([
             extensions[offset + 4],
             extensions[offset + 5],
@@ -620,14 +631,14 @@ fn parse_extensions(extensions: &[u8]) -> Result<Vec<Extension>, anyhow::Error> 
 
         // Parse specific extension based on type
         match atom_type.deref() {
-            b"esds" => {
-                parsed_extensions.push(Extension::Esds(parse_esds(payload).context("parse esds")?));
-            }
-            b"btrt" => {
-                parsed_extensions.push(Extension::Btrt(
-                    BtrtExtension::from_bytes(payload).context("parse btrt")?,
-                ));
-            }
+            // b"esds" => {
+            //     parsed_extensions.push(Extension::Esds(parse_esds(payload).context("parse esds")?));
+            // }
+            // b"btrt" => {
+            //     parsed_extensions.push(Extension::Btrt(
+            //         BtrtExtension::from_bytes(payload).context("parse btrt")?,
+            //     ));
+            // }
             _ => {
                 // Unknown extension, store as raw data
                 parsed_extensions.push(Extension::Unknown {
@@ -675,5 +686,33 @@ mod tests {
         let empty_bytes = [0u8; 32];
         let empty_result = parse_pascal_string(&empty_bytes);
         assert_eq!(empty_result, "");
+    }
+
+    #[test]
+    fn test_parse_extensions_round_trip() {
+        let extension_data: Vec<u8> = vec![
+            0, 0, 0, 51, 101, 115, 100, 115, 0, 0, 0, 0, 3, 128, 128, 128, 34, 0, 1, 0, 4, 128,
+            128, 128, 20, 64, 21, 0, 0, 0, 0, 0, 245, 74, 0, 0, 245, 74, 5, 128, 128, 128, 2, 19,
+            144, 6, 128, 128, 128, 1, 2, 0, 0, 0, 20, 98, 116, 114, 116, 0, 0, 0, 0, 0, 0, 245, 74,
+            0, 0, 245, 74,
+        ];
+        let result = parse_extensions(&extension_data);
+        assert!(result.is_ok(), "extensions should parse");
+        let result = result.unwrap();
+
+        let round_trip_data: Vec<u8> = result
+            .clone()
+            .into_iter()
+            .map(|ext| {
+                let data: Vec<u8> = ext.into();
+                data
+            })
+            .flatten()
+            .collect();
+
+        assert_eq!(
+            round_trip_data, extension_data,
+            "expected round trip data to equal input data ({result:?})"
+        );
     }
 }

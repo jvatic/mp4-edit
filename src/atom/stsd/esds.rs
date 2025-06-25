@@ -3,6 +3,8 @@ use thiserror::Error;
 #[derive(Debug, Clone)]
 pub struct EsdsExtension {
     pub es_id: u16,
+    pub version: u8,
+    pub flags: u32,
     pub stream_priority: Option<u8>,
     pub decoder_config: Option<EsdsDecoderConfig>,
     pub sl_config: Option<EsdsSlConfig>,
@@ -110,7 +112,9 @@ pub fn parse_esds(data: &[u8]) -> Result<EsdsExtension, ParseError> {
     // Parse ES_Descriptor
     let (es_descriptor, _) = parse_descriptor(&data[offset..])?;
 
-    if let Descriptor::Es(es_desc) = es_descriptor {
+    if let Descriptor::Es(mut es_desc) = es_descriptor {
+        es_desc.version = version;
+        es_desc.flags = flags;
         Ok(es_desc)
     } else {
         Err(ParseError::InvalidDescriptor)
@@ -253,6 +257,8 @@ fn parse_es_descriptor(data: &[u8]) -> Result<Descriptor, ParseError> {
 
     Ok(Descriptor::Es(EsdsExtension {
         es_id,
+        version: 0,
+        flags: 0,
         stream_priority,
         decoder_config,
         sl_config,
