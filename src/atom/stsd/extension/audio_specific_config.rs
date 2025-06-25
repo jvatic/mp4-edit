@@ -1,0 +1,270 @@
+use std::convert::TryFrom;
+
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum ParseError {
+    #[error("too short")]
+    TooShort,
+    #[error("invalid audio object type")]
+    InvalidAot(u8),
+    #[error("invalid sampling frequency index")]
+    InvalidSfIndex(u8),
+    #[error("invalid channel configuration")]
+    InvalidChannel(u8),
+}
+
+/// AAC profile (“Audio Object Type”)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioObjectType {
+    AacMain, // 1
+    AacLc,   // 2
+    AacSsr,  // 3
+    AacLtp,  // 4
+    Sbr,     // 5
+    // … up to 31
+    Unknown(u8),
+}
+
+impl TryFrom<u8> for AudioObjectType {
+    type Error = ParseError;
+    fn try_from(v: u8) -> Result<Self, Self::Error> {
+        let aot = match v {
+            1 => AudioObjectType::AacMain,
+            2 => AudioObjectType::AacLc,
+            3 => AudioObjectType::AacSsr,
+            4 => AudioObjectType::AacLtp,
+            5 => AudioObjectType::Sbr,
+            6..=31 => AudioObjectType::Unknown(v),
+            other => return Err(ParseError::InvalidAot(other)),
+        };
+        Ok(aot)
+    }
+}
+
+impl From<AudioObjectType> for u8 {
+    fn from(aot: AudioObjectType) -> u8 {
+        match aot {
+            AudioObjectType::AacMain => 1,
+            AudioObjectType::AacLc => 2,
+            AudioObjectType::AacSsr => 3,
+            AudioObjectType::AacLtp => 4,
+            AudioObjectType::Sbr => 5,
+            AudioObjectType::Unknown(v) => v.min(31),
+        }
+    }
+}
+
+/// Sampling frequency, either indexed or explicit
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SamplingFrequency {
+    F96000,
+    F88200,
+    F64000,
+    F48000,
+    F44100,
+    F32000,
+    F24000,
+    F22050,
+    F16000,
+    F12000,
+    F11025,
+    F8000,
+    F7350,
+    Explicit(u32),
+}
+
+// extract index 0–12 or 15
+impl SamplingFrequency {
+    pub fn index(&self) -> u8 {
+        match *self {
+            SamplingFrequency::F96000 => 0,
+            SamplingFrequency::F88200 => 1,
+            SamplingFrequency::F64000 => 2,
+            SamplingFrequency::F48000 => 3,
+            SamplingFrequency::F44100 => 4,
+            SamplingFrequency::F32000 => 5,
+            SamplingFrequency::F24000 => 6,
+            SamplingFrequency::F22050 => 7,
+            SamplingFrequency::F16000 => 8,
+            SamplingFrequency::F12000 => 9,
+            SamplingFrequency::F11025 => 10,
+            SamplingFrequency::F8000 => 11,
+            SamplingFrequency::F7350 => 12,
+            SamplingFrequency::Explicit(_) => 15,
+        }
+    }
+
+    pub fn as_hz(&self) -> u32 {
+        match *self {
+            SamplingFrequency::F96000 => 96_000,
+            SamplingFrequency::F88200 => 88_200,
+            SamplingFrequency::F64000 => 64_000,
+            SamplingFrequency::F48000 => 48_000,
+            SamplingFrequency::F44100 => 44_100,
+            SamplingFrequency::F32000 => 32_000,
+            SamplingFrequency::F24000 => 24_000,
+            SamplingFrequency::F22050 => 22_050,
+            SamplingFrequency::F16000 => 16_000,
+            SamplingFrequency::F12000 => 12_000,
+            SamplingFrequency::F11025 => 11_025,
+            SamplingFrequency::F8000 => 8_000,
+            SamplingFrequency::F7350 => 7_350,
+            SamplingFrequency::Explicit(v) => v,
+        }
+    }
+}
+
+impl TryFrom<u8> for SamplingFrequency {
+    type Error = ParseError;
+    fn try_from(idx: u8) -> Result<Self, Self::Error> {
+        let sf = match idx {
+            0 => SamplingFrequency::F96000,
+            1 => SamplingFrequency::F88200,
+            2 => SamplingFrequency::F64000,
+            3 => SamplingFrequency::F48000,
+            4 => SamplingFrequency::F44100,
+            5 => SamplingFrequency::F32000,
+            6 => SamplingFrequency::F24000,
+            7 => SamplingFrequency::F22050,
+            8 => SamplingFrequency::F16000,
+            9 => SamplingFrequency::F12000,
+            10 => SamplingFrequency::F11025,
+            11 => SamplingFrequency::F8000,
+            12 => SamplingFrequency::F7350,
+            15 => SamplingFrequency::Explicit(0), // placeholder
+            other => return Err(ParseError::InvalidSfIndex(other)),
+        };
+        Ok(sf)
+    }
+}
+
+/// Number of channels
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelConfiguration {
+    Mono,
+    Stereo,
+    Three,
+    Four,
+    Five,
+    FiveOne,
+    SevenOne,
+}
+
+impl TryFrom<u8> for ChannelConfiguration {
+    type Error = ParseError;
+    fn try_from(v: u8) -> Result<Self, Self::Error> {
+        let cfg = match v {
+            1 => ChannelConfiguration::Mono,
+            2 => ChannelConfiguration::Stereo,
+            3 => ChannelConfiguration::Three,
+            4 => ChannelConfiguration::Four,
+            5 => ChannelConfiguration::Five,
+            6 => ChannelConfiguration::FiveOne,
+            7 => ChannelConfiguration::SevenOne,
+            other => return Err(ParseError::InvalidChannel(other)),
+        };
+        Ok(cfg)
+    }
+}
+
+impl From<ChannelConfiguration> for u8 {
+    fn from(ch: ChannelConfiguration) -> u8 {
+        match ch {
+            ChannelConfiguration::Mono => 1,
+            ChannelConfiguration::Stereo => 2,
+            ChannelConfiguration::Three => 3,
+            ChannelConfiguration::Four => 4,
+            ChannelConfiguration::Five => 5,
+            ChannelConfiguration::FiveOne => 6,
+            ChannelConfiguration::SevenOne => 7,
+        }
+    }
+}
+
+/// The parsed AAC AudioSpecificConfig
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioSpecificConfig {
+    pub audio_object_type: AudioObjectType,
+    pub sampling_frequency: SamplingFrequency,
+    pub channel_configuration: ChannelConfiguration,
+    pub bytes_read: usize, // 2 or 5
+}
+
+impl AudioSpecificConfig {
+    /// Parse the 2- or 5-byte config
+    pub fn parse(data: &[u8]) -> Result<Self, ParseError> {
+        if data.len() < 2 {
+            return Err(ParseError::TooShort);
+        }
+        let b0 = data[0];
+        let b1 = data[1];
+        let aot = AudioObjectType::try_from(b0 >> 3)?;
+        let idx = ((b0 & 0b0000_0111) << 1) | ((b1 & 0b1000_0000) >> 7);
+        let mut sf = SamplingFrequency::try_from(idx)?;
+        let ch = ChannelConfiguration::try_from((b1 & 0b0111_1000) >> 3)?;
+
+        let (bytes_read, sampling_frequency) = if idx == 15 {
+            if data.len() < 5 {
+                return Err(ParseError::TooShort);
+            }
+            let explicit = ((data[2] as u32) << 16) | ((data[3] as u32) << 8) | (data[4] as u32);
+            sf = SamplingFrequency::Explicit(explicit);
+            (5, sf)
+        } else {
+            (2, sf)
+        };
+
+        Ok(AudioSpecificConfig {
+            audio_object_type: aot,
+            sampling_frequency,
+            channel_configuration: ch,
+            bytes_read,
+        })
+    }
+
+    /// Serialize back to bytes
+    pub fn serialize(&self) -> Vec<u8> {
+        // first byte: [aot(5) | sf_idx(3 high bits)]
+        let aot_u8: u8 = self.audio_object_type.into();
+        let sf_idx = self.sampling_frequency.index();
+        let b0 = (aot_u8 << 3) | ((sf_idx >> 1) & 0b0000_0111);
+
+        // second byte: [sf_idx(low bit) | ch(4 bits) | 0b000]
+        let ch_u8: u8 = self.channel_configuration.into();
+        let b1 = ((sf_idx & 0b1) << 7) | (ch_u8 << 3);
+
+        let mut out = vec![b0, b1];
+        if let SamplingFrequency::Explicit(freq) = self.sampling_frequency {
+            // append 24-bit big-endian explicit freq
+            out.push(((freq >> 16) & 0xFF) as u8);
+            out.push(((freq >> 8) & 0xFF) as u8);
+            out.push((freq & 0xFF) as u8);
+        }
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn round_trip_indexed() {
+        let data = [0x13, 0x10];
+        let cfg = AudioSpecificConfig::parse(&data).unwrap();
+        assert_eq!(cfg.bytes_read, 2);
+        let ser = cfg.serialize();
+        assert_eq!(ser, data);
+    }
+
+    #[test]
+    fn round_trip_explicit() {
+        let mut data = vec![0x2F, 0x88];
+        data.extend(&[0x01, 0xE2, 0x40]);
+        let cfg = AudioSpecificConfig::parse(&data).unwrap();
+        assert_eq!(cfg.bytes_read, 5);
+        let ser = cfg.serialize();
+        assert_eq!(ser, data);
+    }
+}

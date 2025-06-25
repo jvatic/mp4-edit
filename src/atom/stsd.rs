@@ -1,25 +1,18 @@
 use anyhow::{anyhow, Context};
 use derive_more::Display;
 use futures_io::AsyncRead;
-use std::{
-    io::{Cursor, Read},
-    ops::Deref,
-};
+use std::io::{Cursor, Read};
 
-pub use crate::atom::stsd::{
-    btrt::BtrtExtension,
-    esds::{EsdsDecoderConfig, EsdsExtension, EsdsSlConfig},
-};
+pub use crate::atom::stsd::extension::{BtrtExtension, EsdsExtension, StsdExtension};
 use crate::{
     atom::{
-        stsd::esds::parse_esds,
+        stsd::extension::parse_stsd_extensions,
         util::{async_to_sync_read, FourCC},
     },
     parser::Parse,
 };
 
-mod btrt;
-mod esds;
+mod extension;
 
 pub const STSD: &[u8; 4] = b"stsd";
 
@@ -138,7 +131,7 @@ pub struct VideoSampleEntry {
     /// Color table ID (usually -1)
     pub color_table_id: i16,
     /// Extension data (codec-specific atoms)
-    pub extensions: Vec<Extension>,
+    pub extensions: Vec<StsdExtension>,
 }
 
 #[derive(Debug, Clone)]
@@ -160,50 +153,7 @@ pub struct AudioSampleEntry {
     /// Sample rate (16.16 fixed point)
     pub sample_rate: f32,
     /// Extension data (codec-specific atoms)
-    pub extensions: Vec<Extension>,
-}
-
-#[derive(Debug, Clone)]
-pub enum Extension {
-    Esds(EsdsExtension),
-    Btrt(BtrtExtension),
-    Unknown { atom_type: FourCC, data: Vec<u8> },
-}
-
-impl From<Extension> for Vec<u8> {
-    fn from(value: Extension) -> Self {
-        let mut data = Vec::new();
-
-        use Extension::*;
-        match value {
-            Esds(esds) => {
-                let esds_data: Vec<u8> = esds.into();
-                let size = (esds_data.len() as u32).to_be_bytes();
-                eprintln!("esds size_usize={} size_hex={:?}", esds_data.len(), &size);
-                data.extend_from_slice(&size);
-                data.extend_from_slice(b"esds");
-                data.extend_from_slice(&esds_data);
-            }
-            Btrt(btrt) => {
-                let btrt_data: Vec<u8> = btrt.into();
-                let size = (btrt_data.len() as u32).to_be_bytes();
-                data.extend_from_slice(&size);
-                data.extend_from_slice(b"btrt");
-                data.extend_from_slice(&btrt_data);
-            }
-            Unknown {
-                atom_type,
-                data: ext_data,
-            } => {
-                let size = (ext_data.len() as u32).to_be_bytes();
-                data.extend_from_slice(&size);
-                data.extend_from_slice(atom_type.deref());
-                data.extend_from_slice(&ext_data);
-            }
-        }
-
-        data
-    }
+    pub extensions: Vec<StsdExtension>,
 }
 
 #[derive(Debug, Clone)]
@@ -282,7 +232,7 @@ impl From<SampleDescriptionTableAtom> for Vec<u8> {
                     entry_data.extend_from_slice(&video.depth.to_be_bytes());
                     entry_data.extend_from_slice(&video.color_table_id.to_be_bytes());
                     video.extensions.into_iter().for_each(|ext| {
-                        let ext_data: Vec<u8> = ext.into();
+                        let ext_data: Vec<u8> = ext.try_into().unwrap();
                         entry_data.extend_from_slice(&ext_data);
                     });
                 }
@@ -507,7 +457,9 @@ fn parse_video_sample_entry(data: &[u8]) -> Result<VideoSampleEntry, anyhow::Err
         .read_to_end(&mut extension_data)
         .context("read extensions")?;
 
-    let extensions = parse_extensions(&extension_data).context("parse extensions")?;
+    let extensions = parse_stsd_extensions(&extension_data)
+        .context("parse extensions")?
+        .extensions;
 
     Ok(VideoSampleEntry {
         version,
@@ -575,7 +527,9 @@ fn parse_audio_sample_entry(data: &[u8]) -> Result<AudioSampleEntry, anyhow::Err
         .read_to_end(&mut extension_data)
         .context("read extensions")?;
 
-    let extensions = parse_extensions(&extension_data).context("parse extensions")?;
+    let extensions = parse_stsd_extensions(&extension_data)
+        .context("parse extensions")?
+        .extensions;
 
     Ok(AudioSampleEntry {
         version,
@@ -588,70 +542,6 @@ fn parse_audio_sample_entry(data: &[u8]) -> Result<AudioSampleEntry, anyhow::Err
         sample_rate,
         extensions,
     })
-}
-
-fn parse_extensions(extensions: &[u8]) -> Result<Vec<Extension>, anyhow::Error> {
-    let mut offset = 0;
-    let mut parsed_extensions = Vec::new();
-
-    while offset < extensions.len() {
-        if offset + 8 > extensions.len() {
-            break; // Not enough data for atom header
-        }
-
-        // Parse atom header
-        let size = u32::from_be_bytes([
-            extensions[offset],
-            extensions[offset + 1],
-            extensions[offset + 2],
-            extensions[offset + 3],
-        ]);
-
-        if size < 8 {
-            return Err(anyhow!("invalid size found at offset={offset}: {size}"));
-        }
-
-        let atom_type = FourCC([
-            extensions[offset + 4],
-            extensions[offset + 5],
-            extensions[offset + 6],
-            extensions[offset + 7],
-        ]);
-
-        // Calculate payload size (total size minus 8-byte header)
-        let payload_size = size.saturating_sub(8) as usize;
-        let payload_start = offset + 8;
-        let payload_end = payload_start + payload_size;
-
-        if payload_end > extensions.len() {
-            break; // Not enough data for complete atom
-        }
-
-        let payload = &extensions[payload_start..payload_end];
-
-        // Parse specific extension based on type
-        match atom_type.deref() {
-            // b"esds" => {
-            //     parsed_extensions.push(Extension::Esds(parse_esds(payload).context("parse esds")?));
-            // }
-            // b"btrt" => {
-            //     parsed_extensions.push(Extension::Btrt(
-            //         BtrtExtension::from_bytes(payload).context("parse btrt")?,
-            //     ));
-            // }
-            _ => {
-                // Unknown extension, store as raw data
-                parsed_extensions.push(Extension::Unknown {
-                    atom_type,
-                    data: payload.to_vec(),
-                });
-            }
-        }
-
-        offset += size as usize;
-    }
-
-    Ok(parsed_extensions)
 }
 
 fn parse_pascal_string(bytes: &[u8; 32]) -> String {
@@ -671,6 +561,8 @@ fn parse_pascal_string(bytes: &[u8; 32]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::atom::stsd::extension::parse_stsd_extensions;
+
     use super::*;
 
     #[test]
@@ -696,9 +588,9 @@ mod tests {
             144, 6, 128, 128, 128, 1, 2, 0, 0, 0, 20, 98, 116, 114, 116, 0, 0, 0, 0, 0, 0, 245, 74,
             0, 0, 245, 74,
         ];
-        let result = parse_extensions(&extension_data);
+        let result = parse_stsd_extensions(&extension_data);
         assert!(result.is_ok(), "extensions should parse");
-        let result = result.unwrap();
+        let result = result.unwrap().extensions;
 
         let round_trip_data: Vec<u8> = result
             .clone()

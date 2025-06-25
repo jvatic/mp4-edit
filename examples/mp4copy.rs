@@ -15,7 +15,7 @@ use mp4_parser::{
         hdlr::{HandlerType, HDLR},
         ilst::ILST,
         stco_co64::{ChunkOffsets, STCO},
-        stsd::{BtrtExtension, Extension, SampleEntryData, SampleEntryType},
+        stsd::{BtrtExtension, SampleEntryData, SampleEntryType, StsdExtension},
         stsz::SampleEntrySizes,
         tref::TREF,
         FileTypeAtom, FourCC, FreeAtom,
@@ -248,17 +248,20 @@ async fn main() -> anyhow::Result<()> {
                 if let SampleEntryData::Audio(audio) = &mut entry.data {
                     // audio.sample_rate = 22050.0;
                     audio.extensions.retain_mut(|ext| match ext {
-                        Extension::Esds(esds) => {
-                            esds.decoder_config.as_mut().map(|c| {
-                                c.avg_bitrate = bitrate;
-                                c.max_bitrate = bitrate;
-                            });
+                        StsdExtension::Esds(esds) => {
+                            esds.es_descriptor
+                                .decoder_config_descriptor
+                                .as_mut()
+                                .map(|c| {
+                                    c.avg_bitrate = bitrate;
+                                    c.max_bitrate = bitrate;
+                                });
                             true
                         }
-                        Extension::Btrt(_) => false,
-                        Extension::Unknown { .. } => false,
+                        StsdExtension::Btrt(_) => false,
+                        StsdExtension::Unknown { .. } => false,
                     });
-                    audio.extensions.push(Extension::Btrt(BtrtExtension {
+                    audio.extensions.push(StsdExtension::Btrt(BtrtExtension {
                         buffer_size_db: 0,
                         avg_bitrate: bitrate,
                         max_bitrate: bitrate,

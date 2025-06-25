@@ -8,7 +8,7 @@ use tokio_util::compat::TokioAsyncReadCompatExt;
 
 use mp4_parser::atom::{
     hdlr::HandlerType,
-    stsd::{BtrtExtension, Extension, SampleEntryData, SampleEntryType, STSD},
+    stsd::{BtrtExtension, SampleEntryData, SampleEntryType, StsdExtension, STSD},
 };
 use mp4_parser::{Atom, AtomData, Parser};
 
