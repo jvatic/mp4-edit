@@ -74,28 +74,6 @@ async fn main() -> anyhow::Result<()> {
             .unwrap_or(false)
     });
 
-    // Calculate bitrate for each track (should only be 1 audio track)
-    let mut track_bitrate = Vec::with_capacity(metadata.tracks_iter().count());
-    for trak in metadata.tracks_iter() {
-        let num_bits = trak
-            .media()
-            .and_then(|m| m.media_information())
-            .and_then(|m| m.sample_table())
-            .and_then(|st| st.sample_size())
-            .and_then(|s| Some(s.entry_sizes.iter().sum::<u32>()))
-            .unwrap_or_default()
-            * 8;
-
-        let duration_secds = trak
-            .media()
-            .and_then(|m| m.header())
-            .and_then(|mdhd| Some((mdhd.duration as f64) / (mdhd.timescale as f64)))
-            .unwrap_or_default();
-
-        let bitrate = (num_bits as f64) / duration_secds;
-        track_bitrate.push(bitrate.round() as u32);
-    }
-
     let num_samples = metadata.tracks_iter().fold(0, |n, trak| {
         n + trak
             .media()
@@ -110,64 +88,25 @@ async fn main() -> anyhow::Result<()> {
 
     let mut moov_size = 0;
     let mut track_idx = 0;
-    let mut metadata = metadata
-        .atoms_flat_retain_mut(|atom| match atom.atom_type.deref() {
-            FTYP | DINF | TREF | EDTS => false,
-            MOOV => {
-                moov_size = atom.size;
-                true
-            },
-            META => {
-                atom.children_flat_retain_mut(|atom| match atom.atom_type.deref() {
-                    HDLR => false,
-                    ILST => {
-                        // TODO: edit tags
-                        true
-                    }
-                    _ => true,
-                });
-                true
-            }
-            _ => true,
-        } && match &mut atom.data {
-            // Edit stsd atom
-            Some(AtomData::SampleDescriptionTable(stsd)) => {
-                stsd.entries.retain_mut(|entry| {
-                    if !matches!(entry.data, SampleEntryData::Audio(_)) {
-                        return false;
-                    }
-
-                    let bitrate = track_bitrate[track_idx];
-
-                    entry.entry_type = SampleEntryType::Mp4a;
-                    if let SampleEntryData::Audio(audio) = &mut entry.data {
-                        audio.sample_rate = 22050.0;
-                        audio.extensions.retain_mut(|ext| match ext {
-                            Extension::Esds(esds) => {
-                                esds.decoder_config.as_mut().map(|c| {
-                                    c.avg_bitrate = bitrate;
-                                    c.max_bitrate = bitrate;
-                                });
-                                true
-                            }
-                            Extension::Btrt(_) => false,
-                            Extension::Unknown { .. } => false,
-                        });
-                        audio.extensions.push(Extension::Btrt(BtrtExtension {
-                            buffer_size_db: 0,
-                            avg_bitrate: bitrate,
-                            max_bitrate: bitrate,
-                        }))
-                    }
-
+    let mut metadata = metadata.atoms_flat_retain_mut(|atom| match atom.atom_type.deref() {
+        FTYP | DINF | TREF | EDTS => false,
+        MOOV => {
+            moov_size = atom.size;
+            true
+        }
+        META => {
+            atom.children_flat_retain_mut(|atom| match atom.atom_type.deref() {
+                HDLR => false,
+                ILST => {
+                    // TODO: edit tags
                     true
-                });
-                track_idx += 1;
-
-                true
-            },
-            _ => true,
-        });
+                }
+                _ => true,
+            });
+            true
+        }
+        _ => true,
+    });
 
     // Open output file for writing
     let output_file = create_output_file(output_name).await?;
@@ -278,8 +217,66 @@ async fn main() -> anyhow::Result<()> {
         chunk_idx += 1;
     }
 
+    // Calculate bitrate (AAXC file is wrong)
+    let mut track_bitrate = Vec::with_capacity(metadata.tracks_iter().count());
+    for trak in metadata.tracks_iter() {
+        let num_bits = sample_sizes.iter().sum::<u32>() * 8;
+
+        let duration_secds = trak
+            .media()
+            .and_then(|m| m.header())
+            .and_then(|mdhd| Some((mdhd.duration as f64) / (mdhd.timescale as f64)))
+            .unwrap_or_default();
+
+        let bitrate = (num_bits as f64) / duration_secds;
+        track_bitrate.push(bitrate.round() as u32);
+    }
+
+    // Update metadata atoms
+    let mut track_idx = 0;
+    let metadata = metadata.atoms_flat_retain_mut(|atom| match &mut atom.data {
+        // Edit stsd atom
+        Some(AtomData::SampleDescriptionTable(stsd)) => {
+            stsd.entries.retain_mut(|entry| {
+                if !matches!(entry.data, SampleEntryData::Audio(_)) {
+                    return false;
+                }
+
+                let bitrate = track_bitrate[track_idx];
+
+                entry.entry_type = SampleEntryType::Mp4a;
+                if let SampleEntryData::Audio(audio) = &mut entry.data {
+                    // audio.sample_rate = 22050.0;
+                    audio.extensions.retain_mut(|ext| match ext {
+                        Extension::Esds(esds) => {
+                            esds.decoder_config.as_mut().map(|c| {
+                                c.avg_bitrate = bitrate;
+                                c.max_bitrate = bitrate;
+                            });
+                            true
+                        }
+                        Extension::Btrt(_) => false,
+                        Extension::Unknown { .. } => false,
+                    });
+                    audio.extensions.push(Extension::Btrt(BtrtExtension {
+                        buffer_size_db: 0,
+                        avg_bitrate: bitrate,
+                        max_bitrate: bitrate,
+                    }))
+                }
+
+                true
+            });
+            track_idx += 1;
+
+            true
+        }
+        _ => true,
+    });
+
     // Write correct mdat header
-    let mdat_size = mp4_writer.current_offset() - mdat_offset;
+    let mdat_header_size = 8;
+    let mdat_size = mp4_writer.current_offset() - mdat_offset - mdat_header_size;
     output_writer
         .seek(SeekFrom::Start(mdat_offset as u64))
         .await
