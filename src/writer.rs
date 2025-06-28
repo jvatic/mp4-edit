@@ -48,11 +48,6 @@ impl Mp4Writer {
             source: Some(Box::new(e)),
         })?;
 
-        writer.flush().await.map_err(|e| WriteError {
-            kind: WriteErrorKind::Io,
-            source: Some(Box::new(e)),
-        })?;
-
         self.offset += bytes.len();
 
         Ok(())
@@ -64,11 +59,6 @@ impl Mp4Writer {
         data: &[u8],
     ) -> Result<(), WriteError> {
         writer.write_all(data).await.map_err(|e| WriteError {
-            kind: WriteErrorKind::Io,
-            source: Some(Box::new(e)),
-        })?;
-
-        writer.flush().await.map_err(|e| WriteError {
             kind: WriteErrorKind::Io,
             source: Some(Box::new(e)),
         })?;
