@@ -3,7 +3,9 @@ use derive_more::Display;
 use futures_io::AsyncRead;
 use std::io::{Cursor, Read};
 
-pub use crate::atom::stsd::extension::{BtrtExtension, EsdsExtension, StsdExtension};
+pub use crate::atom::stsd::extension::{
+    BtrtExtension, DecoderSpecificInfo, EsdsExtension, StsdExtension,
+};
 use crate::{
     atom::{
         stsd::extension::parse_stsd_extensions,

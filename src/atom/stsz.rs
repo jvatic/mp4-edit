@@ -122,13 +122,11 @@ fn parse_stsz_data<R: Read>(mut reader: R) -> Result<SampleSizeAtom, anyhow::Err
 
     if sample_size == 0 {
         // Variable sample sizes - read the table
-        let expected_table_size = sample_count as usize * 4; // 4 bytes per entry
         let remaining_bytes = &buf[12..];
 
-        if remaining_bytes.len() != expected_table_size {
+        if remaining_bytes.len() % 4 > 0 {
             return Err(anyhow!(
-                "Invalid stsz atom: expected {} bytes for sample size table, got {}",
-                expected_table_size,
+                "Invalid stsz atom: {} is not aligned to 4 bytes",
                 remaining_bytes.len()
             ));
         }

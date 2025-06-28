@@ -17,6 +17,10 @@ pub const STTS: &[u8; 4] = b"stts";
 pub struct TimeToSampleEntries(Vec<TimeToSampleEntry>);
 
 impl TimeToSampleEntries {
+    pub fn new(inner: Vec<TimeToSampleEntry>) -> Self {
+        Self(inner)
+    }
+
     pub fn inner(&self) -> &[TimeToSampleEntry] {
         &self.0
     }
