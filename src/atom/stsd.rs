@@ -234,7 +234,7 @@ impl From<SampleDescriptionTableAtom> for Vec<u8> {
                     entry_data.extend_from_slice(&video.depth.to_be_bytes());
                     entry_data.extend_from_slice(&video.color_table_id.to_be_bytes());
                     video.extensions.into_iter().for_each(|ext| {
-                        let ext_data: Vec<u8> = ext.try_into().unwrap();
+                        let ext_data: Vec<u8> = ext.into();
                         entry_data.extend_from_slice(&ext_data);
                     });
                 }
@@ -597,11 +597,10 @@ mod tests {
         let round_trip_data: Vec<u8> = result
             .clone()
             .into_iter()
-            .map(|ext| {
+            .flat_map(|ext| {
                 let data: Vec<u8> = ext.into();
                 data
             })
-            .flatten()
             .collect();
 
         assert_eq!(

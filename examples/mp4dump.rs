@@ -1,15 +1,11 @@
 use anyhow::Context;
-use std::{env, ops::Deref};
+use std::env;
 use tokio::{
     fs,
     io::{self, AsyncRead},
 };
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
-use mp4_parser::atom::{
-    hdlr::HandlerType,
-    stsd::{BtrtExtension, SampleEntryData, SampleEntryType, StsdExtension, STSD},
-};
 use mp4_parser::{Atom, AtomData, Parser};
 
 /// Format file size in human-readable format
@@ -114,23 +110,20 @@ async fn print_atoms_from_stream<R: futures_io::AsyncRead + Unpin + Send>(
             .media()
             .and_then(|m| m.media_information())
             .and_then(|m| m.sample_table())
-            .and_then(|st| st.sample_size())
-            .and_then(|s| Some(s.entry_sizes.iter().sum::<u32>()))
+            .and_then(|st| st.sample_size()).map(|s| s.entry_sizes.iter().sum::<u32>())
             .unwrap_or_default()
             * 8;
 
         let duration_secds = trak
             .media()
-            .and_then(|m| m.header())
-            .and_then(|mdhd| Some((mdhd.duration as f64) / (mdhd.timescale as f64)))
+            .and_then(|m| m.header()).map(|mdhd| (mdhd.duration as f64) / (mdhd.timescale as f64))
             .unwrap_or_default();
 
         let bitrate = (num_bits as f64) / duration_secds;
         println!(
             "trak({track_id}) bitrate: {bitrate}",
             track_id = trak
-                .header()
-                .and_then(|tkhd| Some(tkhd.track_id))
+                .header().map(|tkhd| tkhd.track_id)
                 .unwrap_or_default()
         );
         track_bitrate.push(bitrate.round() as u32);
