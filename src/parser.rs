@@ -465,7 +465,7 @@ impl Metadata {
     }
 
     pub fn chunks(&mut self) -> Result<ChunkParser, ParseError> {
-        let mdat = self.mdat.take().ok_or_else(|| ParseError {
+        let _ = self.mdat.take().ok_or_else(|| ParseError {
             kind: ParseErrorKind::InsufficientData,
             location: None,
             source: Some(
@@ -474,7 +474,6 @@ impl Metadata {
         })?;
 
         let mut parser = ChunkParser {
-            mdat,
             tracks: Vec::new(),
             chunk_offsets: Vec::new(),
             sample_to_chunk: Vec::new(),
@@ -757,7 +756,6 @@ impl<'a> StblAtomRefMut<'a> {
 }
 
 pub struct ChunkParser<'a> {
-    mdat: ParsedAtom,
     /// Reference to each track's metadata
     tracks: Vec<TrakAtomRef<'a>>,
     /// Chunk offsets for each track
@@ -802,7 +800,9 @@ impl<'a> ChunkParser<'a> {
             let chunk_offsets = self.chunk_offsets[track_idx];
 
             for (chunk_idx, &offset) in chunk_offsets.iter().enumerate() {
-                if offset > current_offset && (next_offset.is_none() || offset < next_offset.unwrap()) {
+                if offset > current_offset
+                    && (next_offset.is_none() || offset < next_offset.unwrap())
+                {
                     next_offset = Some(offset);
                     next_track_idx = track_idx;
                     next_chunk_idx = chunk_idx;
@@ -947,7 +947,8 @@ impl<'a> Chunk<'a> {
         let timescale = self
             .trak
             .media()
-            .and_then(|h| h.header()).map(|h| h.timescale)
+            .and_then(|h| h.header())
+            .map(|h| h.timescale)
             .expect("trak.mdia.mvhd is missing");
         self.sample_sizes
             .iter()
