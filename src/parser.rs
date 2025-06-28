@@ -802,12 +802,10 @@ impl<'a> ChunkParser<'a> {
             let chunk_offsets = self.chunk_offsets[track_idx];
 
             for (chunk_idx, &offset) in chunk_offsets.iter().enumerate() {
-                if offset > current_offset {
-                    if next_offset.is_none() || offset < next_offset.unwrap() {
-                        next_offset = Some(offset);
-                        next_track_idx = track_idx;
-                        next_chunk_idx = chunk_idx;
-                    }
+                if offset > current_offset && (next_offset.is_none() || offset < next_offset.unwrap()) {
+                    next_offset = Some(offset);
+                    next_track_idx = track_idx;
+                    next_chunk_idx = chunk_idx;
                 }
             }
         }
@@ -896,7 +894,7 @@ impl<'a> ChunkParser<'a> {
         let sample_durations: Vec<u32> = time_to_sample
             .iter()
             .flat_map(|entry| {
-                std::iter::repeat(entry.sample_duration).take(entry.sample_count as usize)
+                std::iter::repeat_n(entry.sample_duration, entry.sample_count as usize)
             })
             .skip(sample_start_idx as usize)
             .take(chunk_sample_sizes.len())
@@ -949,8 +947,7 @@ impl<'a> Chunk<'a> {
         let timescale = self
             .trak
             .media()
-            .and_then(|h| h.header())
-            .and_then(|h| Some(h.timescale))
+            .and_then(|h| h.header()).map(|h| h.timescale)
             .expect("trak.mdia.mvhd is missing");
         self.sample_sizes
             .iter()

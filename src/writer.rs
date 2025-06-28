@@ -25,6 +25,12 @@ pub struct Mp4Writer {
     offset: usize,
 }
 
+impl Default for Mp4Writer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Mp4Writer {
     pub fn new() -> Self {
         Self { offset: 0 }

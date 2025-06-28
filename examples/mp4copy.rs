@@ -4,7 +4,7 @@ use futures_util::{
     AsyncSeekExt, AsyncWriteExt,
 };
 use progress_bar::pb::ProgressBar;
-use std::{collections::HashMap, env, io::SeekFrom, ops::Deref};
+use std::{env, io::SeekFrom, ops::Deref};
 use tokio::{
     fs,
     io::{self, AsyncRead},
@@ -14,7 +14,7 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use mp4_parser::{
     atom::{
         chpl::CHPL,
-        containers::{DINF, EDTS, META, MOOV},
+        containers::{EDTS, META, MOOV},
         free::FREE,
         ftyp::FTYP,
         gmhd::GMHD,
@@ -22,12 +22,11 @@ use mp4_parser::{
         ilst::ILST,
         sbgp::SBGP,
         sgpd::SGPD,
-        stco_co64::{ChunkOffsets, STCO},
+        stco_co64::ChunkOffsets,
         stsd::{
             BtrtExtension, DecoderSpecificInfo, SampleEntryData, SampleEntryType, StsdExtension,
         },
         stsz::SampleEntrySizes,
-        stts::{TimeToSampleEntries, TimeToSampleEntry},
         tref::TREF,
         FileTypeAtom, FourCC, FreeAtom,
     },
@@ -81,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
     let metadata = metadata.tracks_retain(|trak| {
         trak.media()
             .and_then(|mdia| mdia.handler_reference())
-            .and_then(|hdlr| Some(matches!(hdlr.handler_type, HandlerType::Audio)))
+            .map(|hdlr| matches!(hdlr.handler_type, HandlerType::Audio))
             .unwrap_or_default()
     });
 
@@ -91,7 +90,7 @@ async fn main() -> anyhow::Result<()> {
             .and_then(|m| m.media_information())
             .and_then(|m| m.sample_table())
             .and_then(|st| st.sample_size())
-            .and_then(|s| Some(s.sample_count))
+            .map(|s| s.sample_count)
             .unwrap_or_default()
     });
 
@@ -151,7 +150,7 @@ async fn main() -> anyhow::Result<()> {
     // Write FREE atom to reserve enough space for MOOV
     // (we shouldn't need more space than in the input file, but add padding just in case)
     let free_offset = mp4_writer.current_offset();
-    let free_content_size = (moov_size as usize); // + (400 << 10);
+    let free_content_size = moov_size as usize; // + (400 << 10);
     let free_atom_bytes = Mp4Writer::serialize_atom(&Atom {
         atom_type: FourCC::from(*b"free"),
         offset: 0,
@@ -204,7 +203,7 @@ async fn main() -> anyhow::Result<()> {
             sample_sizes[chunk.trak_idx].push(sample.size);
 
             mp4_writer
-                .write_raw(&mut output_writer, &sample.data)
+                .write_raw(&mut output_writer, sample.data)
                 .await
                 .context(format!(
                     "error writing sample {i:02} data in chunk {chunk_idx:02}"
@@ -229,7 +228,7 @@ async fn main() -> anyhow::Result<()> {
         let duration_secds = trak
             .media()
             .and_then(|m| m.header())
-            .and_then(|mdhd| Some((mdhd.duration as f64) / (mdhd.timescale as f64)))
+            .map(|mdhd| (mdhd.duration as f64) / (mdhd.timescale as f64))
             .unwrap_or_default();
 
         let bitrate = (num_bits as f64) / duration_secds;
@@ -269,18 +268,17 @@ async fn main() -> anyhow::Result<()> {
                             let mut sample_frequency = None;
                             audio.extensions.retain_mut(|ext| match ext {
                                 StsdExtension::Esds(esds) => {
-                                    esds.es_descriptor.decoder_config_descriptor.as_mut().map(
-                                        |c| {
-                                            c.avg_bitrate = bitrate;
-                                            c.max_bitrate = bitrate;
-                                            if let Some(DecoderSpecificInfo::Audio(a)) =
-                                                c.decoder_specific_info.as_ref()
-                                            {
-                                                sample_frequency =
-                                                    Some(a.sampling_frequency.as_hz());
-                                            }
-                                        },
-                                    );
+                                    if let Some(c) =
+                                        esds.es_descriptor.decoder_config_descriptor.as_mut()
+                                    {
+                                        c.avg_bitrate = bitrate;
+                                        c.max_bitrate = bitrate;
+                                        if let Some(DecoderSpecificInfo::Audio(a)) =
+                                            c.decoder_specific_info.as_ref()
+                                        {
+                                            sample_frequency = Some(a.sampling_frequency.as_hz());
+                                        }
+                                    };
                                     true
                                 }
                                 StsdExtension::Btrt(_) => false,
