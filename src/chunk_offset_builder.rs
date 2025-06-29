@@ -6,15 +6,16 @@ pub struct ChunkInfo {
     pub samples_per_chunk: u32,
     pub chunk_size: u64,
     pub sample_indices: Vec<usize>,
+    pub sample_sizes: Vec<u32>,
 }
 
-pub struct ChunkOffsetBuilder {
-    stsc: SampleToChunkAtom,
-    stsz: SampleSizeAtom,
+pub struct ChunkOffsetBuilder<'a> {
+    stsc: &'a SampleToChunkAtom,
+    stsz: &'a SampleSizeAtom,
 }
 
-impl ChunkOffsetBuilder {
-    pub fn new(stsc: SampleToChunkAtom, stsz: SampleSizeAtom) -> Self {
+impl<'a> ChunkOffsetBuilder<'a> {
+    pub fn new(stsc: &'a SampleToChunkAtom, stsz: &'a SampleSizeAtom) -> Self {
         Self { stsc, stsz }
     }
 
@@ -48,18 +49,24 @@ impl ChunkOffsetBuilder {
                 (entry.first_chunk..next_first_chunk).scan(
                     start_sample_index,
                     |sample_index, chunk_num| {
-                        let (sample_indices, chunk_size) = self
+                        let (sample_indices, sample_sizes, chunk_size) = self
                             .stsz
                             .sample_sizes()
                             .enumerate()
                             .skip(*sample_index as usize)
                             .take(entry.samples_per_chunk as usize)
                             .fold(
-                                (Vec::with_capacity(entry.samples_per_chunk as usize), 0u64),
-                                |(mut sample_indices, mut chunk_size), (i, size)| {
+                                (
+                                    Vec::with_capacity(entry.samples_per_chunk as usize),
+                                    Vec::with_capacity(entry.samples_per_chunk as usize),
+                                    0u64,
+                                ),
+                                |(mut sample_indices, mut sample_sizes, mut chunk_size),
+                                 (i, size)| {
                                     sample_indices.push(i);
+                                    sample_sizes.push(*size);
                                     chunk_size += *size as u64;
-                                    (sample_indices, chunk_size)
+                                    (sample_indices, sample_sizes, chunk_size)
                                 },
                             );
                         *sample_index += entry.samples_per_chunk;
@@ -69,6 +76,7 @@ impl ChunkOffsetBuilder {
                             samples_per_chunk: entry.samples_per_chunk,
                             chunk_size,
                             sample_indices,
+                            sample_sizes,
                         })
                     },
                 )
@@ -121,7 +129,7 @@ mod tests {
             entry_sizes: vec![100, 200, 150, 250, 300, 400, 500].into(),
         };
 
-        let builder = ChunkOffsetBuilder::new(stsc, stsz);
+        let builder = ChunkOffsetBuilder::new(&stsc, &stsz);
         let offsets = builder.build_chunk_offsets(0).collect::<Vec<_>>();
 
         // Expected:
@@ -164,7 +172,7 @@ mod tests {
             entry_sizes: vec![100, 200, 300, 400, 500].into(),
         };
 
-        let builder = ChunkOffsetBuilder::new(stsc, stsz);
+        let builder = ChunkOffsetBuilder::new(&stsc, &stsz);
         let chunk_info = builder.build_chunk_info().collect::<Vec<_>>();
 
         assert_eq!(chunk_info.len(), 3);
@@ -210,7 +218,7 @@ mod tests {
             entry_sizes: vec![].into(),
         };
 
-        let builder = ChunkOffsetBuilder::new(stsc, stsz);
+        let builder = ChunkOffsetBuilder::new(&stsc, &stsz);
         let chunk_info = builder.build_chunk_info().collect::<Vec<_>>();
 
         assert_eq!(chunk_info.len(), 0);

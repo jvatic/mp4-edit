@@ -245,12 +245,12 @@ async fn main() -> anyhow::Result<()> {
                 .and_then(|mdia| mdia.media_information())
                 .and_then(|minf| minf.sample_table());
             if let Some(mut stbl) = stbl {
-                if let Some(stsz) = stbl.sample_size() {
+                if let Some(stsz) = stbl.sample_size_mut() {
                     stsz.sample_count = sample_sizes[trak_idx].len() as u32;
                     stsz.entry_sizes = SampleEntrySizes::from(sample_sizes[trak_idx].clone());
                 }
 
-                if let Some(stco) = stbl.chunk_offset() {
+                if let Some(stco) = stbl.chunk_offset_mut() {
                     stco.chunk_offsets = ChunkOffsets::from(chunk_offsets[trak_idx].clone());
                 }
 

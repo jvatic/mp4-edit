@@ -13,6 +13,7 @@ use crate::atom::containers::{
 use crate::atom::stsc::SampleToChunkEntry;
 use crate::atom::stts::TimeToSampleEntry;
 use crate::atom::util::DebugEllipsis;
+use crate::chunk_offset_builder::{ChunkInfo, ChunkOffsetBuilder};
 use crate::{
     atom::{
         chpl::{ChapterListAtom, CHPL},
@@ -420,16 +421,6 @@ impl Metadata {
         Self { atoms, size, mdat }
     }
 
-    pub fn original_size(&self) -> usize {
-        self.size
-    }
-
-    pub fn original_mdat_content_offset(&self) -> usize {
-        let mdat = self.mdat.as_ref().unwrap();
-        let header_size = mdat.size - mdat.content_size;
-        (mdat.offset + header_size) as usize
-    }
-
     /// Transforms into (reader, current_offset, atoms)
     pub fn into_atoms(self) -> Vec<Atom> {
         self.atoms
@@ -525,6 +516,7 @@ impl Metadata {
             sample_to_chunk: Vec::new(),
             sample_sizes: Vec::new(),
             time_to_sample: Vec::new(),
+            chunk_info: Vec::new(),
         };
 
         for trak in self.tracks_iter() {
@@ -533,9 +525,9 @@ impl Metadata {
                 let minf = mdia.media_information()?;
                 let stbl = minf.sample_table()?;
                 let chunk_offset = stbl.chunk_offset()?;
-                let sample_entries = stbl.sample_to_chunk()?.entries.inner();
-                let sample_sizes = stbl.sample_size()?.entry_sizes.inner();
-                let time_to_sample = stbl.time_to_sample()?.entries.inner();
+                let sample_entries = stbl.sample_to_chunk()?;
+                let sample_sizes = stbl.sample_size()?;
+                let time_to_sample = stbl.time_to_sample()?;
                 Some((
                     trak,
                     chunk_offset.chunk_offsets.inner(),
@@ -544,11 +536,15 @@ impl Metadata {
                     time_to_sample,
                 ))
             })() {
+                let builder = ChunkOffsetBuilder::new(stsc, stsz);
                 parser.tracks.push(trak);
                 parser.chunk_offsets.push(stco);
-                parser.sample_to_chunk.push(stsc);
-                parser.sample_sizes.push(stsz);
-                parser.time_to_sample.push(stts);
+                parser.sample_to_chunk.push(stsc.entries.inner());
+                parser.sample_sizes.push(stsz.entry_sizes.inner());
+                parser.time_to_sample.push(stts.entries.inner());
+                parser
+                    .chunk_info
+                    .push(builder.build_chunk_info().collect::<Vec<_>>());
             }
         }
 
@@ -773,8 +769,16 @@ impl<'a> StblAtomRefMut<'a> {
         }
     }
 
+    pub fn sample_to_chunk(&self) -> Option<&SampleToChunkAtom> {
+        let atom = self.0.children.iter().find(|a| a.atom_type == STSC)?;
+        match atom.data.as_ref()? {
+            AtomData::SampleToChunk(data) => Some(data),
+            _ => None,
+        }
+    }
+
     /// Finds the STSC atom
-    pub fn sample_to_chunk(&mut self) -> Option<&mut SampleToChunkAtom> {
+    pub fn sample_to_chunk_mut(&mut self) -> Option<&mut SampleToChunkAtom> {
         let atom = self.0.children.iter_mut().find(|a| a.atom_type == STSC)?;
         match atom.data.as_mut()? {
             AtomData::SampleToChunk(data) => Some(data),
@@ -782,8 +786,16 @@ impl<'a> StblAtomRefMut<'a> {
         }
     }
 
+    pub fn sample_size(&self) -> Option<&SampleSizeAtom> {
+        let atom = self.0.children.iter().find(|a| a.atom_type == STSZ)?;
+        match atom.data.as_ref()? {
+            AtomData::SampleSize(data) => Some(data),
+            _ => None,
+        }
+    }
+
     /// Finds the STSZ atom
-    pub fn sample_size(&mut self) -> Option<&mut SampleSizeAtom> {
+    pub fn sample_size_mut(&mut self) -> Option<&mut SampleSizeAtom> {
         let atom = self.0.children.iter_mut().find(|a| a.atom_type == STSZ)?;
         match atom.data.as_mut()? {
             AtomData::SampleSize(data) => Some(data),
@@ -792,7 +804,7 @@ impl<'a> StblAtomRefMut<'a> {
     }
 
     /// Finds the STCO atom
-    pub fn chunk_offset(&mut self) -> Option<&mut ChunkOffsetAtom> {
+    pub fn chunk_offset_mut(&mut self) -> Option<&mut ChunkOffsetAtom> {
         let atom = self.0.children.iter_mut().find(|a| a.atom_type == STCO)?;
         match atom.data.as_mut()? {
             AtomData::ChunkOffset(data) => Some(data),
@@ -812,6 +824,8 @@ pub struct ChunkParser<'a> {
     sample_sizes: Vec<&'a [u32]>,
     /// [TimeToSampleEntry]s for each track
     time_to_sample: Vec<&'a [TimeToSampleEntry]>,
+    /// [ChunkInfo]s for each track
+    chunk_info: Vec<Vec<ChunkInfo>>,
 }
 
 impl<'a> ChunkParser<'a> {
@@ -821,23 +835,6 @@ impl<'a> ChunkParser<'a> {
     ) -> Result<Option<Chunk<'a>>, ParseError> {
         let current_offset = reader.current_offset as u64;
 
-        // First, check if there's a chunk starting at the current offset
-        for track_idx in 0..self.tracks.len() {
-            let chunk_offsets = self.chunk_offsets[track_idx];
-
-            if let Some(chunk_idx) = chunk_offsets
-                .iter()
-                .position(|&offset| offset == current_offset)
-            {
-                // Found a chunk at current offset, read it
-                return self
-                    .read_chunk_at_index(reader, track_idx, chunk_idx)
-                    .await
-                    .map(Some);
-            }
-        }
-
-        // No chunk at current offset, find the next one
         let mut next_offset = None;
         let mut next_track_idx = 0;
         let mut next_chunk_idx = 0;
@@ -846,12 +843,13 @@ impl<'a> ChunkParser<'a> {
             let chunk_offsets = self.chunk_offsets[track_idx];
 
             for (chunk_idx, &offset) in chunk_offsets.iter().enumerate() {
-                if offset > current_offset
+                if offset >= current_offset
                     && (next_offset.is_none() || offset < next_offset.unwrap())
                 {
                     next_offset = Some(offset);
                     next_track_idx = track_idx;
                     next_chunk_idx = chunk_idx;
+                    break;
                 }
             }
         }
@@ -860,8 +858,7 @@ impl<'a> ChunkParser<'a> {
             // Skip to the next chunk
             let bytes_to_skip = offset - current_offset;
             if bytes_to_skip > 0 {
-                let mut buffer = vec![0u8; bytes_to_skip as usize];
-                reader.read_exact(&mut buffer).await?;
+                reader.read_data(bytes_to_skip as usize).await?;
             }
 
             // Read the chunk
@@ -880,61 +877,39 @@ impl<'a> ChunkParser<'a> {
         track_idx: usize,
         chunk_idx: usize,
     ) -> Result<Chunk<'a>, ParseError> {
-        let sample_to_chunk = self.sample_to_chunk[track_idx];
-        let sample_sizes = self.sample_sizes[track_idx];
         let time_to_sample = self.time_to_sample[track_idx];
 
-        // Find how many samples are in this chunk and calculate sample indices
-        let mut samples_in_chunk = 0;
-        let mut sample_start_idx = 0;
+        let chunk_info = self.chunk_info[track_idx]
+            .iter()
+            .skip(chunk_idx)
+            .take(1)
+            .find(|_| true)
+            .ok_or_else(|| ParseError {
+                kind: ParseErrorKind::InsufficientData,
+                location: None,
+                source: Some(anyhow!("invalid chunk index: {chunk_idx}").into_boxed_dyn_error()),
+            })?;
 
-        // Find the appropriate sample-to-chunk entry for this chunk
-        for (entry_idx, entry) in sample_to_chunk.iter().enumerate() {
-            let first_chunk = entry.first_chunk - 1; // Convert to 0-based
-
-            if chunk_idx >= first_chunk as usize {
-                samples_in_chunk = entry.samples_per_chunk;
-
-                // Calculate how many samples came before this chunk
-                sample_start_idx = 0;
-                for prev_entry_idx in 0..entry_idx {
-                    let prev_entry = &sample_to_chunk[prev_entry_idx];
-                    let prev_first_chunk = prev_entry.first_chunk - 1;
-                    let next_first_chunk = if prev_entry_idx + 1 < sample_to_chunk.len() {
-                        sample_to_chunk[prev_entry_idx + 1].first_chunk - 1
-                    } else {
-                        self.chunk_offsets[track_idx].len() as u32
-                    };
-
-                    let chunks_with_this_sample_count = next_first_chunk - prev_first_chunk;
-                    sample_start_idx +=
-                        chunks_with_this_sample_count * prev_entry.samples_per_chunk;
-                }
-
-                // Add samples from chunks in current entry before this chunk
-                let chunks_before_current = chunk_idx as u32 - first_chunk;
-                sample_start_idx += chunks_before_current * entry.samples_per_chunk;
-            }
-        }
+        let sample_start_idx =
+            chunk_info
+                .sample_indices
+                .first()
+                .copied()
+                .ok_or_else(|| ParseError {
+                    kind: ParseErrorKind::InsufficientData,
+                    location: None,
+                    source: Some(
+                        anyhow!("no samples indicies in chunk at index {chunk_idx}")
+                            .into_boxed_dyn_error(),
+                    ),
+                })?;
 
         // Calculate total chunk size
-        let mut chunk_size = 0;
-        for i in 0..samples_in_chunk {
-            let sample_idx = sample_start_idx + i;
-            if sample_idx < sample_sizes.len() as u32 {
-                chunk_size += sample_sizes[sample_idx as usize];
-            }
-        }
+        let chunk_size = chunk_info.chunk_size;
+        let chunk_sample_sizes = chunk_info.sample_sizes.clone();
 
         // Read the chunk data
         let data = reader.read_data(chunk_size as usize).await?;
-
-        // Get the sample sizes slice for this chunk
-        let end_idx = std::cmp::min(
-            (sample_start_idx + samples_in_chunk) as usize,
-            sample_sizes.len(),
-        );
-        let chunk_sample_sizes = &sample_sizes[sample_start_idx as usize..end_idx];
 
         // Get the sample durations slice for this chunk
         let sample_durations: Vec<u32> = time_to_sample
@@ -981,7 +956,7 @@ pub struct Chunk<'a> {
     /// Reference to the track the sample is in
     pub trak: TrakAtomRef<'a>,
     /// Slice of sample sizes within this chunk
-    pub sample_sizes: &'a [u32],
+    pub sample_sizes: Vec<u32>,
     /// Timescale duration of each sample indexed reletive to `sample_sizes`
     pub sample_durations: Vec<u32>,
     /// Bytes in the chunk
