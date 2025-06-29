@@ -33,6 +33,12 @@ impl From<Vec<u64>> for ChunkOffsets {
     }
 }
 
+impl FromIterator<u64> for ChunkOffsets {
+    fn from_iter<T: IntoIterator<Item = u64>>(iter: T) -> Self {
+        Self(Vec::from_iter(iter))
+    }
+}
+
 impl fmt::Debug for ChunkOffsets {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.0.len() <= 10 {

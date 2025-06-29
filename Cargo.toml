@@ -11,6 +11,7 @@ anyhow = "1.0.98"
 async-stream = "0.3"
 cbc = "0.1.2"
 derive_more = { version = "2.0.1", features = ["full"] }
+either = "1.15.0"
 futures-io = "0.3"
 futures-util = { version = "0.3", features = ["io"] }
 hex = "0.4.3"

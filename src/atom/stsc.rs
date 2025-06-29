@@ -22,6 +22,12 @@ impl SampleToChunkEntries {
     }
 }
 
+impl From<Vec<SampleToChunkEntry>> for SampleToChunkEntries {
+    fn from(inner: Vec<SampleToChunkEntry>) -> Self {
+        Self(inner)
+    }
+}
+
 impl fmt::Debug for SampleToChunkEntries {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.0.len() <= 10 {

@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context};
 use derive_more::Deref;
+use either::Either;
 use futures_io::AsyncRead;
 use std::{
     fmt::{self},
@@ -78,6 +79,21 @@ pub struct SampleSizeAtom {
     /// If sample_size is 0, this contains the size of each sample, indexed by sample number.
     /// If sample_size is non-zero, this table is empty.
     pub entry_sizes: SampleEntrySizes,
+}
+
+impl SampleSizeAtom {
+    /// Returns an iterator over _all_ sample sizes.
+    ///
+    /// If `sample_size != 0` this will repeat that value
+    /// `sample_count` times; otherwise it will yield
+    /// the values from `entry_sizes`.
+    pub fn sample_sizes(&self) -> impl Iterator<Item = &u32> + '_ {
+        if self.sample_size != 0 {
+            Either::Left(std::iter::repeat_n(&self.sample_size, self.sample_count as usize))
+        } else {
+            Either::Right(self.entry_sizes.iter())
+        }
+    }
 }
 
 impl Parse for SampleSizeAtom {
