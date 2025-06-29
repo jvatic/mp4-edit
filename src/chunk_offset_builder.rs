@@ -20,9 +20,7 @@ impl<'a> ChunkOffsetBuilder<'a> {
     }
 
     /// Build chunk information including sizes and sample mappings
-    pub fn build_chunk_info(&self) -> impl Iterator<Item = ChunkInfo> + '_ {
-        let mut sample_index = 0u32;
-
+    pub fn build_chunk_info(&self) -> impl Iterator<Item = ChunkInfo> + 'a {
         self.stsc
             .entries
             .iter()
@@ -34,19 +32,19 @@ impl<'a> ChunkOffsetBuilder<'a> {
                     .map(Some)
                     .chain(std::iter::once(None)),
             )
-            .flat_map(move |(entry, next_entry)| {
+            .scan(0u32, |sample_index, (entry, next_entry)| {
                 let next_first_chunk = if let Some(next_entry) = next_entry {
                     next_entry.first_chunk
                 } else {
-                    let remaining_samples = self.stsz.sample_count - sample_index;
+                    let remaining_samples = self.stsz.sample_count - *sample_index;
                     entry.first_chunk + remaining_samples.div_ceil(entry.samples_per_chunk)
                 };
 
-                let start_sample_index = sample_index;
-                sample_index += (next_first_chunk - entry.first_chunk) * entry.samples_per_chunk;
+                let start_sample_index = *sample_index;
+                *sample_index += (next_first_chunk - entry.first_chunk) * entry.samples_per_chunk;
 
                 // Process all chunks for this entry
-                (entry.first_chunk..next_first_chunk).scan(
+                Some((entry.first_chunk..next_first_chunk).scan(
                     start_sample_index,
                     |sample_index, chunk_num| {
                         let (sample_indices, sample_sizes, chunk_size) = self
@@ -79,12 +77,13 @@ impl<'a> ChunkOffsetBuilder<'a> {
                             sample_sizes,
                         })
                     },
-                )
+                ))
             })
+            .flatten()
     }
 
     /// Build actual chunk offsets given a starting offset
-    pub fn build_chunk_offsets(&self, start_offset: u64) -> impl Iterator<Item = u64> + '_ {
+    pub fn build_chunk_offsets(&self, start_offset: u64) -> impl Iterator<Item = u64> + 'a {
         self.build_chunk_info()
             .scan(start_offset, |current_offset, chunk| {
                 let chunk_offset = *current_offset;

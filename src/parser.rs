@@ -2,6 +2,7 @@ use anyhow::anyhow;
 use derive_more::Display;
 use futures_io::AsyncRead;
 use futures_util::io::{AsyncReadExt, Cursor};
+use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
 use std::ops::Deref;
@@ -544,7 +545,7 @@ impl Metadata {
                 parser.time_to_sample.push(stts.entries.inner());
                 parser
                     .chunk_info
-                    .push(builder.build_chunk_info().collect::<Vec<_>>());
+                    .push(builder.build_chunk_info().collect::<VecDeque<_>>());
             }
         }
 
@@ -825,7 +826,7 @@ pub struct ChunkParser<'a> {
     /// [TimeToSampleEntry]s for each track
     time_to_sample: Vec<&'a [TimeToSampleEntry]>,
     /// [ChunkInfo]s for each track
-    chunk_info: Vec<Vec<ChunkInfo>>,
+    chunk_info: Vec<VecDeque<ChunkInfo>>,
 }
 
 impl<'a> ChunkParser<'a> {
@@ -840,16 +841,16 @@ impl<'a> ChunkParser<'a> {
         let mut next_chunk_idx = 0;
 
         for track_idx in 0..self.tracks.len() {
-            let chunk_offsets = self.chunk_offsets[track_idx];
-
-            for (chunk_idx, &offset) in chunk_offsets.iter().enumerate() {
+            let chunk_info = self.chunk_info[track_idx].front();
+            if let Some(chunk_info) = chunk_info {
+                let chunk_idx = chunk_info.chunk_number as usize - 1;
+                let offset = self.chunk_offsets[track_idx][chunk_idx];
                 if offset >= current_offset
-                    && (next_offset.is_none() || offset < next_offset.unwrap())
+                    && next_offset.is_none_or(|next_offset| offset < next_offset)
                 {
                     next_offset = Some(offset);
                     next_track_idx = track_idx;
                     next_chunk_idx = chunk_idx;
-                    break;
                 }
             }
         }
@@ -861,8 +862,10 @@ impl<'a> ChunkParser<'a> {
                 reader.read_data(bytes_to_skip as usize).await?;
             }
 
+            let chunk_info = self.chunk_info[next_track_idx].pop_front().unwrap();
+
             // Read the chunk
-            self.read_chunk_at_index(reader, next_track_idx, next_chunk_idx)
+            self.read_chunk(reader, next_track_idx, next_chunk_idx, chunk_info)
                 .await
                 .map(Some)
         } else {
@@ -871,24 +874,14 @@ impl<'a> ChunkParser<'a> {
         }
     }
 
-    async fn read_chunk_at_index<R: AsyncRead + Unpin + Send>(
+    async fn read_chunk<R: AsyncRead + Unpin + Send>(
         &self,
         reader: &mut Mp4Reader<R>,
         track_idx: usize,
         chunk_idx: usize,
+        chunk_info: ChunkInfo,
     ) -> Result<Chunk<'a>, ParseError> {
         let time_to_sample = self.time_to_sample[track_idx];
-
-        let chunk_info = self.chunk_info[track_idx]
-            .iter()
-            .skip(chunk_idx)
-            .take(1)
-            .find(|_| true)
-            .ok_or_else(|| ParseError {
-                kind: ParseErrorKind::InsufficientData,
-                location: None,
-                source: Some(anyhow!("invalid chunk index: {chunk_idx}").into_boxed_dyn_error()),
-            })?;
 
         let sample_start_idx =
             chunk_info
@@ -917,7 +910,7 @@ impl<'a> ChunkParser<'a> {
             .flat_map(|entry| {
                 std::iter::repeat_n(entry.sample_duration, entry.sample_count as usize)
             })
-            .skip(sample_start_idx as usize)
+            .skip(sample_start_idx)
             .take(chunk_sample_sizes.len())
             .collect();
         assert_eq!(chunk_sample_sizes.len(), sample_durations.len());
