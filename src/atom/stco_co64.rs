@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context};
-use derive_more::Deref;
+use derive_more::{Deref, DerefMut};
 use futures_io::AsyncRead;
 use std::{fmt, io::Read};
 
@@ -14,7 +14,7 @@ use crate::{
 pub const STCO: &[u8; 4] = b"stco";
 pub const CO64: &[u8; 4] = b"co64";
 
-#[derive(Clone, Deref)]
+#[derive(Clone, Deref, DerefMut)]
 pub struct ChunkOffsets(Vec<u64>);
 
 impl ChunkOffsets {
@@ -36,10 +36,13 @@ impl From<Vec<u64>> for ChunkOffsets {
 impl fmt::Debug for ChunkOffsets {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.0.len() <= 10 {
-            return f.debug_list().entries(self.0.iter()).finish();
+            return f
+                .debug_list()
+                .entries(self.0.iter().map(|co| format!("0x{co:0x}")))
+                .finish();
         }
         f.debug_list()
-            .entries(self.0.iter().take(10))
+            .entries(self.0.iter().take(10).map(|co| format!("0x{co:0x}")))
             .entry(&DebugEllipsis(Some(self.0.len() - 10)))
             .finish()
     }

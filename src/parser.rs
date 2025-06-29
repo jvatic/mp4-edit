@@ -160,7 +160,12 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
 
     pub async fn parse_metadata(mut self) -> Result<(Mp4Reader<R>, Metadata), ParseError> {
         let atoms = self.parse_metadata_inner(None).await?;
-        Ok((self.reader, Metadata::new(atoms, self.mdat)))
+        let metadata_size = self
+            .mdat
+            .as_ref()
+            .map(|mdat| mdat.offset as usize)
+            .unwrap_or_else(|| self.reader.current_offset);
+        Ok((self.reader, Metadata::new(atoms, metadata_size, self.mdat)))
     }
 
     async fn parse_metadata_inner(
@@ -396,12 +401,33 @@ fn is_container_atom(atom_type: &[u8; 4]) -> bool {
 
 pub struct Metadata {
     atoms: Vec<Atom>,
+    size: usize,
     mdat: Option<ParsedAtom>,
 }
 
+impl Clone for Metadata {
+    fn clone(&self) -> Self {
+        Self {
+            atoms: self.atoms.clone(),
+            size: self.size,
+            mdat: None,
+        }
+    }
+}
+
 impl Metadata {
-    fn new(atoms: Vec<Atom>, mdat: Option<ParsedAtom>) -> Self {
-        Self { atoms, mdat }
+    fn new(atoms: Vec<Atom>, size: usize, mdat: Option<ParsedAtom>) -> Self {
+        Self { atoms, size, mdat }
+    }
+
+    pub fn original_size(&self) -> usize {
+        self.size
+    }
+
+    pub fn original_mdat_content_offset(&self) -> usize {
+        let mdat = self.mdat.as_ref().unwrap();
+        let header_size = mdat.size - mdat.content_size;
+        (mdat.offset + header_size) as usize
     }
 
     /// Transforms into (reader, current_offset, atoms)
@@ -430,6 +456,26 @@ impl Metadata {
             atom.children_flat_retain_mut(|a| pred(a));
         }
         self
+    }
+
+    pub fn ftyp_mut<F>(&mut self, mut f: F) -> Result<(), anyhow::Error>
+    where
+        F: FnMut(&mut FileTypeAtom),
+    {
+        let ftyp = self
+            .atoms
+            .iter_mut()
+            .find(|a| a.atom_type == FTYP)
+            .ok_or_else(|| anyhow!("missing ftyp atom"))?
+            .data
+            .as_mut()
+            .ok_or_else(|| anyhow!("missing ftyp data"))?;
+        if let AtomData::FileType(ftyp) = ftyp {
+            f(ftyp);
+        } else {
+            return Err(anyhow!("invalid ftyp data"));
+        }
+        Ok(())
     }
 
     /// Iterate through TRAK atoms
