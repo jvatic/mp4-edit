@@ -15,6 +15,7 @@ pub const HANDLER_AUDIO: &[u8; 4] = b"soun";
 pub const HANDLER_HINT: &[u8; 4] = b"hint";
 pub const HANDLER_META: &[u8; 4] = b"meta";
 pub const HANDLER_TEXT: &[u8; 4] = b"text";
+pub const HANDLER_MDIR: &[u8; 4] = b"mdir";
 pub const HANDLER_SUBTITLE: &[u8; 4] = b"subt";
 pub const HANDLER_TIMECODE: &[u8; 4] = b"tmcd";
 
@@ -25,6 +26,7 @@ pub enum HandlerType {
     Hint,
     Meta,
     Text,
+    Mdir,
     Subtitle,
     Timecode,
     Unknown([u8; 4]),
@@ -38,6 +40,7 @@ impl HandlerType {
             HANDLER_HINT => HandlerType::Hint,
             HANDLER_META => HandlerType::Meta,
             HANDLER_TEXT => HandlerType::Text,
+            HANDLER_MDIR => HandlerType::Mdir,
             HANDLER_SUBTITLE => HandlerType::Subtitle,
             HANDLER_TIMECODE => HandlerType::Timecode,
             _ => HandlerType::Unknown(*bytes),
@@ -51,6 +54,7 @@ impl HandlerType {
             HandlerType::Hint => *HANDLER_HINT,
             HandlerType::Meta => *HANDLER_META,
             HandlerType::Text => *HANDLER_TEXT,
+            HandlerType::Mdir => *HANDLER_MDIR,
             HandlerType::Subtitle => *HANDLER_SUBTITLE,
             HandlerType::Timecode => *HANDLER_TIMECODE,
             HandlerType::Unknown(bytes) => *bytes,
@@ -64,6 +68,7 @@ impl HandlerType {
             HandlerType::Hint => "Hint",
             HandlerType::Meta => "Metadata",
             HandlerType::Text => "Text",
+            HandlerType::Mdir => "Mdir",
             HandlerType::Subtitle => "Subtitle",
             HandlerType::Timecode => "Timecode",
             HandlerType::Unknown(_) => "Unknown",
@@ -248,6 +253,7 @@ impl From<HandlerReferenceAtom> for Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     #[test]
     fn test_handler_type_from_bytes() {
@@ -303,5 +309,199 @@ mod tests {
         let empty_name = b"";
         let result = parse_handler_name(empty_name).unwrap();
         assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_hdlr_mdir_round_trip() {
+        // Create the exact hdlr atom that Apple expects for metadata
+        let original_hdlr = HandlerReferenceAtom {
+            version: 0,
+            flags: [0, 0, 0],
+            component_type: [0, 0, 0, 0],
+            handler_type: HandlerType::Mdir, // This should be 'mdir' for metadata
+            component_manufacturer: [97, 112, 112, 108], // 'appl'
+            component_flags: 0,
+            component_flags_mask: 0,
+            name: "".to_string(), // Empty name is common
+        };
+
+        // Convert to bytes
+        let bytes: Vec<u8> = original_hdlr.clone().into();
+
+        // Parse back from bytes
+        let cursor = Cursor::new(&bytes);
+        let parsed_hdlr = parse_hdlr_data(cursor).unwrap();
+
+        // Verify all fields match
+        assert_eq!(parsed_hdlr.version, original_hdlr.version);
+        assert_eq!(parsed_hdlr.flags, original_hdlr.flags);
+        assert_eq!(parsed_hdlr.component_type, original_hdlr.component_type);
+        assert_eq!(parsed_hdlr.handler_type, original_hdlr.handler_type);
+        assert_eq!(
+            parsed_hdlr.component_manufacturer,
+            original_hdlr.component_manufacturer
+        );
+        assert_eq!(parsed_hdlr.component_flags, original_hdlr.component_flags);
+        assert_eq!(
+            parsed_hdlr.component_flags_mask,
+            original_hdlr.component_flags_mask
+        );
+        assert_eq!(parsed_hdlr.name, original_hdlr.name);
+    }
+
+    #[test]
+    fn test_hdlr_raw_bytes_mdir() {
+        // Test with raw bytes that represent a valid Apple metadata hdlr atom
+        let raw_hdlr_data = vec![
+            // version (1 byte) + flags (3 bytes)
+            0x00, 0x00, 0x00, 0x00, // component_type (4 bytes) - usually zeros
+            0x00, 0x00, 0x00, 0x00, // handler_type (4 bytes) - 'mdir' in ASCII
+            0x6D, 0x64, 0x69, 0x72, // 'm', 'd', 'i', 'r'
+            // component_manufacturer (4 bytes) - 'appl' in ASCII
+            0x61, 0x70, 0x70, 0x6C, // 'a', 'p', 'p', 'l'
+            // component_flags (4 bytes) - usually zero
+            0x00, 0x00, 0x00, 0x00, // component_flags_mask (4 bytes) - usually zero
+            0x00, 0x00, 0x00, 0x00, // name - empty (null terminated)
+            0x00,
+        ];
+
+        let cursor = Cursor::new(&raw_hdlr_data);
+        let parsed_hdlr = parse_hdlr_data(cursor).unwrap();
+
+        // Verify the handler type is correctly parsed as mdir
+        assert_eq!(parsed_hdlr.handler_type, HandlerType::Mdir);
+        assert_eq!(parsed_hdlr.version, 0);
+        assert_eq!(parsed_hdlr.flags, [0, 0, 0]);
+        assert_eq!(parsed_hdlr.component_manufacturer, [0x61, 0x70, 0x70, 0x6C]); // 'appl'
+        assert_eq!(parsed_hdlr.name, "");
+    }
+
+    #[test]
+    fn test_hdlr_write_produces_correct_mdir_bytes() {
+        let hdlr = HandlerReferenceAtom {
+            version: 0,
+            flags: [0, 0, 0],
+            component_type: [0, 0, 0, 0],
+            handler_type: HandlerType::Mdir,
+            component_manufacturer: [97, 112, 112, 108], // 'appl'
+            component_flags: 0,
+            component_flags_mask: 0,
+            name: "".to_string(),
+        };
+
+        let bytes: Vec<u8> = hdlr.into();
+
+        // Check that the handler type bytes are exactly 'mdir'
+        let handler_type_offset = 8; // version(1) + flags(3) + component_type(4) = 8
+        assert_eq!(
+            &bytes[handler_type_offset..handler_type_offset + 4],
+            &[0x6D, 0x64, 0x69, 0x72] // 'mdir'
+        );
+
+        // Check that component manufacturer is 'appl'
+        let manufacturer_offset = 12; // handler_type is at offset 8, so manufacturer at 12
+        assert_eq!(
+            &bytes[manufacturer_offset..manufacturer_offset + 4],
+            &[0x61, 0x70, 0x70, 0x6C] // 'appl'
+        );
+    }
+
+    #[test]
+    fn test_hdlr_with_name() {
+        let hdlr = HandlerReferenceAtom {
+            version: 0,
+            flags: [0, 0, 0],
+            component_type: [0, 0, 0, 0],
+            handler_type: HandlerType::Mdir,
+            component_manufacturer: [97, 112, 112, 108], // 'appl'
+            component_flags: 0,
+            component_flags_mask: 0,
+            name: "Apple Metadata Handler".to_string(),
+        };
+
+        // Round trip test
+        let bytes: Vec<u8> = hdlr.clone().into();
+        let cursor = Cursor::new(&bytes);
+        let parsed_hdlr = parse_hdlr_data(cursor).unwrap();
+
+        assert_eq!(parsed_hdlr.name, hdlr.name);
+        assert_eq!(parsed_hdlr.handler_type, HandlerType::Mdir);
+    }
+
+    #[test]
+    fn test_hdlr_unknown_handler_type() {
+        // Test that unknown handler types are preserved correctly
+        let raw_data = vec![
+            0x00, 0x00, 0x00, 0x00, // version + flags
+            0x00, 0x00, 0x00, 0x00, // component_type
+            0x78, 0x79, 0x7A, 0x77, // 'xyzw' - unknown handler type
+            0x61, 0x70, 0x70, 0x6C, // 'appl'
+            0x00, 0x00, 0x00, 0x00, // component_flags
+            0x00, 0x00, 0x00, 0x00, // component_flags_mask
+            0x00, // empty name
+        ];
+
+        let cursor = Cursor::new(&raw_data);
+        let parsed_hdlr = parse_hdlr_data(cursor).unwrap();
+
+        // Should be parsed as Unknown with the correct bytes
+        match parsed_hdlr.handler_type {
+            HandlerType::Unknown(bytes) => {
+                assert_eq!(bytes, [0x78, 0x79, 0x7A, 0x77]); // 'xyzw'
+            }
+            _ => panic!("Expected Unknown handler type"),
+        }
+
+        // Round trip should preserve the unknown type
+        let output_bytes: Vec<u8> = parsed_hdlr.into();
+        let cursor2 = Cursor::new(&output_bytes);
+        let reparsed_hdlr = parse_hdlr_data(cursor2).unwrap();
+
+        match reparsed_hdlr.handler_type {
+            HandlerType::Unknown(bytes) => {
+                assert_eq!(bytes, [0x78, 0x79, 0x7A, 0x77]);
+            }
+            _ => panic!("Expected Unknown handler type after round trip"),
+        }
+    }
+
+    #[test]
+    fn test_your_actual_hdlr_data() {
+        // This tests the exact data you showed in your debug output
+        let hdlr = HandlerReferenceAtom {
+            version: 0,
+            flags: [0, 0, 0],
+            component_type: [0, 0, 0, 0],
+            handler_type: HandlerType::Unknown([109, 100, 105, 114]), // Your actual data
+            component_manufacturer: [97, 112, 112, 108],              // 'appl'
+            component_flags: 0,
+            component_flags_mask: 0,
+            name: "".to_string(),
+        };
+
+        // Convert to bytes and back
+        let bytes: Vec<u8> = hdlr.into();
+        let cursor = Cursor::new(&bytes);
+        let parsed_hdlr = parse_hdlr_data(cursor).unwrap();
+
+        // The key test: those Unknown bytes [109, 100, 105, 114] should be 'mdir'
+        // Your parser should recognize this as HandlerType::Mdir, not Unknown
+        println!(
+            "Handler type after round trip: {:?}",
+            parsed_hdlr.handler_type
+        );
+
+        // Check the raw bytes in the output
+        let handler_type_offset = 8;
+        println!(
+            "Raw handler type bytes: {:?}",
+            &bytes[handler_type_offset..handler_type_offset + 4]
+        );
+
+        // These should be [109, 100, 105, 114] which is 'mdir'
+        assert_eq!(
+            &bytes[handler_type_offset..handler_type_offset + 4],
+            &[109, 100, 105, 114]
+        );
     }
 }
