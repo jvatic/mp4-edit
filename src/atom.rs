@@ -7,6 +7,7 @@ pub mod gmhd;
 pub mod hdlr;
 pub mod ilst;
 pub mod mdhd;
+pub mod meta;
 pub mod mvhd;
 pub mod sbgp;
 pub mod sgpd;
