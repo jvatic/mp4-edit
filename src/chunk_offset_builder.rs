@@ -83,6 +83,8 @@ impl<'a> ChunkOffsetBuilder<'a> {
     }
 
     /// Build actual chunk offsets given a starting offset
+    ///
+    /// WARNING: This assumes the track in question is the only thing in the mdat
     pub fn build_chunk_offsets(&self, start_offset: u64) -> impl Iterator<Item = u64> + 'a {
         self.build_chunk_info()
             .scan(start_offset, |current_offset, chunk| {
