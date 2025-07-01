@@ -9,7 +9,7 @@ use tokio_util::compat::TokioAsyncReadCompatExt;
 use mp4_parser::{atom::meta, Atom, AtomData, Parser};
 
 /// Format file size in human-readable format
-fn format_size(size: u64) -> String {
+fn format_size(size: usize) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB"];
     let mut size = size as f64;
     let mut unit_index = 0;
@@ -29,7 +29,7 @@ fn format_size(size: u64) -> String {
 /// Get a summary of atom data
 fn get_atom_summary(atom: &Atom) -> String {
     match &atom.data {
-        Some(AtomData::RawData(data)) if atom.atom_type == b"meta" => {
+        Some(AtomData::RawData(data)) if atom.header.atom_type == b"meta" => {
             meta::MetaHeader::from_bytes(&data.0)
                 .map(|meta| format!("{meta:?}"))
                 .unwrap_or_else(|_| format!("{data:?}"))
@@ -47,17 +47,17 @@ fn print_atom(atom: &Atom, indent: usize) {
         String::new()
     };
 
-    let atom_display = format!("{}{}", indent_str, atom.atom_type);
-    let size_display = format_size(atom.size);
+    let atom_display = format!("{}{}", indent_str, atom.header.atom_type);
+    let size_display = format_size(atom.header.atom_size());
     let offset_display = format!(
         "0x{:08x}..=0x{:08x}",
-        atom.offset,
-        atom.offset + atom.size - 1
+        atom.header.offset,
+        atom.header.offset + atom.header.atom_size() - 1
     );
     let summary = get_atom_summary(atom);
 
     // Color coding based on atom type
-    let atom_color = match atom.atom_type.to_string().as_str() {
+    let atom_color = match atom.header.atom_type.to_string().as_str() {
         "ftyp" | "styp" => "\x1b[1;32m",          // Green for file type
         "moov" | "trak" | "mdia" => "\x1b[1;34m", // Blue for containers
         "mvhd" | "tkhd" | "mdhd" => "\x1b[1;35m", // Magenta for headers
@@ -180,7 +180,10 @@ async fn main() -> anyhow::Result<()> {
     println!("   Total atoms: \x1b[1m{}\x1b[0m", atom_count);
     if args[1].as_str() != "-" {
         let file_size = fs::metadata(&args[1]).await?.len();
-        println!("   File size: \x1b[1m{}\x1b[0m", format_size(file_size));
+        println!(
+            "   File size: \x1b[1m{}\x1b[0m",
+            format_size(file_size as usize)
+        );
     }
 
     Ok(())

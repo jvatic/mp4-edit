@@ -30,7 +30,7 @@ use mp4_parser::{
         tref::TREF,
         FileTypeAtom, FourCC, FreeAtom,
     },
-    Atom, AtomData, Mp4Writer, Parser,
+    AtomData, Mp4Writer, Parser,
 };
 
 async fn open_input(input_name: &str) -> anyhow::Result<Box<dyn AsyncRead + Unpin + Send>> {
@@ -97,14 +97,14 @@ async fn main() -> anyhow::Result<()> {
     let mut progress_bar = ProgressBar::new_with_eta(num_samples as usize);
 
     let mut moov_size = 0;
-    let mut metadata = metadata.atoms_flat_retain_mut(|atom| match atom.atom_type.deref() {
+    let mut metadata = metadata.atoms_flat_retain_mut(|atom| match atom.header.atom_type.deref() {
         FTYP | FREE | TREF | EDTS | SGPD | SBGP | GMHD | CHPL => false,
         MOOV => {
-            moov_size = atom.size;
+            moov_size = atom.header.atom_size();
             true
         }
         META => {
-            atom.children_flat_retain_mut(|atom| match atom.atom_type.deref() {
+            atom.children_flat_retain_mut(|atom| match atom.header.atom_type.deref() {
                 HDLR => false,
                 ILST => {
                     // TODO: edit tags
@@ -126,23 +126,18 @@ async fn main() -> anyhow::Result<()> {
 
     // Write the ftyp atom
     mp4_writer
-        .write_atom(
+        .write_leaf_atom(
             &mut output_writer,
-            Atom {
-                atom_type: FourCC::from(*FTYP),
-                offset: 0,
-                size: 0,
-                data: Some(AtomData::FileType(FileTypeAtom {
-                    major_brand: FourCC::from(*b"isom"),
-                    minor_version: 0x00000200,
-                    compatible_brands: vec![
-                        FourCC::from(*b"isom"),
-                        FourCC::from(*b"iso2"),
-                        FourCC::from(*b"mp41"),
-                    ],
-                })),
-                children: Vec::new(),
-            },
+            FourCC::from(*FTYP),
+            AtomData::FileType(FileTypeAtom {
+                major_brand: FourCC::from(*b"isom"),
+                minor_version: 0x00000200,
+                compatible_brands: vec![
+                    FourCC::from(*b"isom"),
+                    FourCC::from(*b"iso2"),
+                    FourCC::from(*b"mp41"),
+                ],
+            }),
         )
         .await
         .context("error writing ftyp atom")?;
@@ -150,37 +145,25 @@ async fn main() -> anyhow::Result<()> {
     // Write FREE atom to reserve enough space for MOOV
     // (we shouldn't need more space than in the input file, but add padding just in case)
     let free_offset = mp4_writer.current_offset();
-    let free_content_size = moov_size as usize; // + (400 << 10);
-    let free_atom_bytes = Mp4Writer::serialize_atom(&Atom {
-        atom_type: FourCC::from(*b"free"),
-        offset: 0,
-        size: 0,
-        data: Some(AtomData::Free(FreeAtom {
-            atom_type: FourCC::from(*b"free"),
-            data_size: free_content_size,
-            data: vec![0u8; free_content_size],
-        })),
-        children: Vec::new(),
-    });
-    let free_size = free_atom_bytes.len();
+    let free_content_size = moov_size; // + (400 << 10);
     mp4_writer
-        .write_raw(&mut output_writer, &free_atom_bytes)
+        .write_leaf_atom(
+            &mut output_writer,
+            FourCC::from(*b"free"),
+            AtomData::Free(FreeAtom {
+                atom_type: FourCC::from(*b"free"),
+                data_size: free_content_size,
+                data: vec![0u8; free_content_size],
+            }),
+        )
         .await
         .context("error writing free atom")?;
+    let free_size = mp4_writer.current_offset() - free_offset;
 
     // Write MDAT header (it will have a size=0 which we'll update later)
     let mdat_offset = mp4_writer.current_offset();
     mp4_writer
-        .write_atom(
-            &mut output_writer,
-            Atom {
-                atom_type: FourCC::from(*b"mdat"),
-                data: None,
-                children: Vec::new(),
-                offset: 0,
-                size: 0,
-            },
-        )
+        .write_atom_header(&mut output_writer, FourCC::from(*b"mdat"), 0)
         .await
         .context("error writing mdat placeholder header")?;
 
@@ -333,7 +316,9 @@ async fn main() -> anyhow::Result<()> {
         mp4_writer
             .write_atom(&mut output_writer, atom.clone())
             .await
-            .with_context(|| format!("Failed to write atom {} ({})", i + 1, atom.atom_type))?;
+            .with_context(|| {
+                format!("Failed to write atom {} ({})", i + 1, atom.header.atom_type)
+            })?;
     }
     let metadata_size = mp4_writer.current_offset() - start_offset;
 
@@ -345,26 +330,23 @@ async fn main() -> anyhow::Result<()> {
         ));
     }
     if metadata_size != free_size {
-        let free_atom_bytes = Mp4Writer::serialize_atom(&Atom {
-            atom_type: FourCC::from(*b"free"),
-            offset: 0,
-            size: 0,
-            data: Some(AtomData::Free(FreeAtom {
-                atom_type: FourCC::from(*b"free"),
-                data_size: free_content_size - metadata_size,
-                data: vec![0u8; free_content_size - metadata_size],
-            })),
-            children: Vec::new(),
-        });
-        if free_size - metadata_size != free_atom_bytes.len() {
+        if free_size - metadata_size != (free_content_size - metadata_size) {
             return Err(anyhow!(
                 "error writing new free atom: wrong size (expected {}, got {})",
                 free_size - metadata_size,
-                free_atom_bytes.len()
+                (free_content_size - metadata_size)
             ));
         }
         mp4_writer
-            .write_raw(&mut output_writer, &free_atom_bytes)
+            .write_leaf_atom(
+                &mut output_writer,
+                FourCC::from(*b"free"),
+                AtomData::Free(FreeAtom {
+                    atom_type: FourCC::from(*b"free"),
+                    data_size: free_content_size - metadata_size,
+                    data: vec![0u8; free_content_size - metadata_size],
+                }),
+            )
             .await
             .context("error writing new free atom")?;
     }

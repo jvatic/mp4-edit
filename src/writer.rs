@@ -3,7 +3,7 @@ use futures_io::AsyncWrite;
 use futures_util::AsyncWriteExt;
 use thiserror::Error;
 
-use crate::{atom::FourCC, Atom};
+use crate::{atom::FourCC, Atom, AtomData};
 
 #[derive(Debug, Error)]
 #[error("{kind}{}", self.source.as_ref().map(|e| format!(" ({e})")).unwrap_or_default())]
@@ -40,6 +40,45 @@ impl Mp4Writer {
         self.offset
     }
 
+    pub async fn write_atom_header<W: AsyncWrite + Unpin>(
+        &mut self,
+        mut writer: W,
+        atom_type: FourCC,
+        data_size: usize,
+    ) -> Result<(), WriteError> {
+        // Write atom header
+        let header_bytes = Self::serialize_atom_header(atom_type, data_size as u64);
+        writer
+            .write_all(&header_bytes)
+            .await
+            .map_err(|e| WriteError {
+                kind: WriteErrorKind::Io,
+                source: Some(Box::new(e)),
+            })?;
+        self.offset += header_bytes.len();
+        Ok(())
+    }
+
+    pub async fn write_leaf_atom<W: AsyncWrite + Unpin>(
+        &mut self,
+        mut writer: W,
+        atom_type: FourCC,
+        data: AtomData,
+    ) -> Result<(), WriteError> {
+        let data_bytes: Vec<u8> = data.into();
+        self.write_atom_header(&mut writer, atom_type, data_bytes.len())
+            .await?;
+        writer
+            .write_all(&data_bytes)
+            .await
+            .map_err(|e| WriteError {
+                kind: WriteErrorKind::Io,
+                source: Some(Box::new(e)),
+            })?;
+        self.offset += data_bytes.len();
+        Ok(())
+    }
+
     pub async fn write_atom<W: AsyncWrite + Unpin>(
         &mut self,
         mut writer: W,
@@ -73,16 +112,16 @@ impl Mp4Writer {
         Ok(())
     }
 
-    pub fn serialize_atom_header(atom_type: FourCC, content_size: u64) -> Vec<u8> {
+    pub fn serialize_atom_header(atom_type: FourCC, data_size: u64) -> Vec<u8> {
         let mut result = Vec::new();
 
         // Determine if we need 64-bit size
-        let total_size_with_32bit_header = 8u64 + content_size;
+        let total_size_with_32bit_header = 8u64 + data_size;
         let use_64bit = total_size_with_32bit_header > u32::MAX as u64;
 
         if use_64bit {
             // Extended 64-bit size format: size=1 (4 bytes) + type (4 bytes) + extended_size (8 bytes) + content
-            let total_size = 16u64 + content_size;
+            let total_size = 16u64 + data_size;
 
             // Write size=1 to indicate extended format
             result.extend_from_slice(&1u32.to_be_bytes());
@@ -126,10 +165,13 @@ impl Mp4Writer {
         }
 
         // Calculate total content size (data + children)
-        let content_size = data_bytes.len() as u64 + children_bytes.len() as u64;
+        let data_size = data_bytes.len() as u64 + children_bytes.len() as u64;
 
         // Write atom header
-        result.extend(Self::serialize_atom_header(atom.atom_type, content_size));
+        result.extend(Self::serialize_atom_header(
+            atom.header.atom_type,
+            data_size,
+        ));
 
         // Write atom data
         result.extend_from_slice(&data_bytes);

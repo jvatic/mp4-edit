@@ -40,7 +40,7 @@ impl ListItemData {
     fn new(data_type: u32, data: Vec<u8>) -> Self {
         match data_type {
             1 => String::from_utf8(data)
-                .map(|s| Self::Text(s))
+                .map(Self::Text)
                 .unwrap_or_else(|e| Self::Raw(RawData(e.into_bytes()))),
             13 => Self::Jpeg(RawData(data)),
             _ => Self::Raw(RawData(data)),

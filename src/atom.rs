@@ -59,10 +59,26 @@ impl std::fmt::Debug for RawData {
 }
 
 #[derive(Debug, Clone)]
-pub struct Atom {
+pub struct AtomHeader {
     pub atom_type: FourCC,
-    pub offset: u64,
-    pub size: u64,
+    pub offset: usize,
+    pub header_size: usize,
+    pub data_size: usize,
+}
+
+impl AtomHeader {
+    pub fn location(&self) -> (usize, usize) {
+        (self.offset, self.header_size + self.data_size)
+    }
+
+    pub fn atom_size(&self) -> usize {
+        self.header_size + self.data_size
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Atom {
+    pub header: AtomHeader,
     pub data: Option<AtomData>,
     pub children: Vec<Atom>,
 }
