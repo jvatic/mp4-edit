@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use derive_more::Display;
 use futures_io::AsyncWrite;
 use futures_util::AsyncWriteExt;
@@ -19,6 +21,14 @@ pub struct WriteError {
 pub enum WriteErrorKind {
     #[display("I/O error")]
     Io,
+}
+
+pub trait WriteAtom: Sized {
+    /// Write full atom (and any children) to the provided writer
+    fn write_atom<W: AsyncWrite + Unpin + Send>(
+        &self,
+        writer: W,
+    ) -> impl Future<Output = Result<(), anyhow::Error>> + Send;
 }
 
 pub struct Mp4Writer {
