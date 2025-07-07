@@ -1,8 +1,5 @@
 use anyhow::Context;
-use futures_util::{
-    io::{BufReader, BufWriter},
-    AsyncWriteExt,
-};
+use futures_util::io::{BufReader, BufWriter};
 use progress_bar::pb::ProgressBar;
 use std::env;
 use tokio::{
@@ -12,12 +9,9 @@ use tokio::{
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use mp4_parser::{
-    atom::{
-        hdlr::HandlerType,
-        stco_co64::ChunkOffsets,
-        FourCC,
-    },
-    chunk_offset_builder::ChunkOffsetBuilder, Mp4Writer, Parser,
+    atom::{hdlr::HandlerType, stco_co64::ChunkOffsets, FourCC},
+    chunk_offset_builder::ChunkOffsetBuilder,
+    writer, Mp4Writer, Parser,
 };
 
 async fn open_input(input_name: &str) -> anyhow::Result<Box<dyn AsyncRead + Unpin + Send>> {
@@ -88,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
     // serialize metadata to find the new size (should be fairly cheap)
     let new_metadata_size = metadata
         .atoms_iter()
-        .flat_map(Mp4Writer::serialize_atom)
+        .flat_map(writer::serialize_atom)
         .collect::<Vec<_>>()
         .len();
 
@@ -115,29 +109,22 @@ async fn main() -> anyhow::Result<()> {
     // Open output file for writing
     let output_file = create_output_file(output_name).await?;
     let output_writer = output_file.compat_write();
-    let mut output_writer = BufWriter::new(output_writer);
+    let output_writer = BufWriter::new(output_writer);
 
-    let mut mp4_writer = Mp4Writer::new();
+    let mut mp4_writer = Mp4Writer::new(output_writer);
 
     // Write metadata atoms (all neccesary changes have been made already)
     for (i, atom) in metadata.atoms_iter().enumerate() {
-        mp4_writer
-            .write_atom(&mut output_writer, atom.clone())
-            .await
-            .with_context(|| {
-                format!("Failed to write atom {} ({})", i + 1, atom.header.atom_type)
-            })?;
+        mp4_writer.write_atom(atom.clone()).await.with_context(|| {
+            format!("Failed to write atom {} ({})", i + 1, atom.header.atom_type)
+        })?;
     }
 
-    output_writer.flush().await.context("metadata flush")?;
+    mp4_writer.flush().await.context("metadata flush")?;
 
     // Write MDAT header (it will have a size=0 which we'll update later)
     mp4_writer
-        .write_atom_header(
-            &mut output_writer,
-            FourCC::from(*b"mdat"),
-            mdat_size as usize - 8,
-        )
+        .write_atom_header(FourCC::from(*b"mdat"), mdat_size as usize - 8)
         .await
         .context("error writing mdat placeholder header")?;
 
@@ -149,12 +136,9 @@ async fn main() -> anyhow::Result<()> {
         for (i, sample) in chunk.samples().enumerate() {
             let data = sample.data.to_vec();
 
-            mp4_writer
-                .write_raw(&mut output_writer, &data)
-                .await
-                .context(format!(
-                    "error writing sample {i:02} data in chunk {chunk_idx:02}"
-                ))?;
+            mp4_writer.write_raw(&data).await.context(format!(
+                "error writing sample {i:02} data in chunk {chunk_idx:02}"
+            ))?;
 
             sample_idx += 1;
             progress_bar.set_progress(sample_idx);
@@ -163,7 +147,7 @@ async fn main() -> anyhow::Result<()> {
         chunk_idx += 1;
     }
 
-    output_writer.flush().await.context("final flush")?;
+    mp4_writer.flush().await.context("final flush")?;
 
     progress_bar.finalize();
 
