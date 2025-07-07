@@ -5,6 +5,7 @@ use std::io::Read;
 use crate::{
     atom::util::{async_to_sync_read, FourCC},
     parser::Parse,
+    writer::SerializeAtom,
 };
 
 pub const DREF: &[u8; 4] = b"dref";
@@ -92,21 +93,25 @@ impl Parse for DataReferenceAtom {
     }
 }
 
-impl From<DataReferenceAtom> for Vec<u8> {
-    fn from(atom: DataReferenceAtom) -> Self {
+impl SerializeAtom for DataReferenceAtom {
+    fn atom_type(&self) -> FourCC {
+        FourCC(*DREF)
+    }
+
+    fn into_body_bytes(self) -> Vec<u8> {
         let mut data = Vec::new();
 
         // Version (1 byte)
-        data.push(atom.version);
+        data.push(self.version);
 
         // Flags (3 bytes)
-        data.extend_from_slice(&atom.flags);
+        data.extend_from_slice(&self.flags);
 
         // Entry count (4 bytes, big-endian)
-        data.extend_from_slice(&atom.entry_count.to_be_bytes());
+        data.extend_from_slice(&self.entry_count.to_be_bytes());
 
         // Entries
-        for entry in atom.entries {
+        for entry in self.entries {
             let mut entry_data = Vec::new();
 
             // Entry version and flags (4 bytes)

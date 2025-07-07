@@ -5,6 +5,7 @@ use std::{fmt, io::Read};
 use crate::{
     atom::util::{async_to_sync_read, FourCC},
     parser::Parse,
+    writer::SerializeAtom,
 };
 
 pub const TREF: &[u8; 4] = b"tref";
@@ -70,6 +71,23 @@ pub struct TrackReferenceAtom {
     pub references: Vec<TrackReference>,
 }
 
+impl fmt::Display for TrackReferenceAtom {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.references.is_empty() {
+            write!(f, "TrackReferenceAtom {{ no references }}")
+        } else {
+            write!(f, "TrackReferenceAtom {{")?;
+            for (i, reference) in self.references.iter().enumerate() {
+                if i > 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, " {}", reference)?;
+            }
+            write!(f, " }}")
+        }
+    }
+}
+
 impl Parse for TrackReferenceAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
@@ -85,20 +103,32 @@ impl Parse for TrackReferenceAtom {
     }
 }
 
-impl fmt::Display for TrackReferenceAtom {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.references.is_empty() {
-            write!(f, "TrackReferenceAtom {{ no references }}")
-        } else {
-            write!(f, "TrackReferenceAtom {{")?;
-            for (i, reference) in self.references.iter().enumerate() {
-                if i > 0 {
-                    write!(f, ", ")?;
-                }
-                write!(f, " {}", reference)?;
+impl SerializeAtom for TrackReferenceAtom {
+    fn atom_type(&self) -> FourCC {
+        FourCC(*TREF)
+    }
+
+    fn into_body_bytes(self) -> Vec<u8> {
+        let mut data = Vec::new();
+
+        // Serialize each reference as a child atom
+        for reference in self.references {
+            // Calculate size: 8 bytes header + 4 bytes per track ID
+            let size = 8 + (reference.track_ids.len() * 4);
+
+            // Write size (4 bytes)
+            data.extend(&(size as u32).to_be_bytes());
+
+            // Write reference type (4 bytes)
+            data.extend(&reference.reference_type.0);
+
+            // Write track IDs (4 bytes each)
+            for track_id in reference.track_ids {
+                data.extend(&track_id.to_be_bytes());
             }
-            write!(f, " }}")
         }
+
+        data
     }
 }
 
@@ -170,29 +200,4 @@ fn parse_tref_data<R: Read>(mut reader: R) -> Result<TrackReferenceAtom, anyhow:
     }
 
     Ok(TrackReferenceAtom { references })
-}
-
-impl From<TrackReferenceAtom> for Vec<u8> {
-    fn from(atom: TrackReferenceAtom) -> Self {
-        let mut data = Vec::new();
-
-        // Serialize each reference as a child atom
-        for reference in atom.references {
-            // Calculate size: 8 bytes header + 4 bytes per track ID
-            let size = 8 + (reference.track_ids.len() * 4);
-
-            // Write size (4 bytes)
-            data.extend_from_slice(&(size as u32).to_be_bytes());
-
-            // Write reference type (4 bytes)
-            data.extend_from_slice(&reference.reference_type.0);
-
-            // Write track IDs (4 bytes each)
-            for track_id in reference.track_ids {
-                data.extend_from_slice(&track_id.to_be_bytes());
-            }
-        }
-
-        data
-    }
 }

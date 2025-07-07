@@ -5,6 +5,7 @@ use std::io::Read;
 use crate::{
     atom::{util::async_to_sync_read, FourCC},
     parser::Parse,
+    writer::SerializeAtom,
 };
 
 pub const GMHD: &[u8; 4] = b"gmhd";
@@ -33,21 +34,25 @@ impl Parse for GenericMediaHeaderAtom {
     }
 }
 
-impl From<GenericMediaHeaderAtom> for Vec<u8> {
-    fn from(atom: GenericMediaHeaderAtom) -> Self {
+impl SerializeAtom for GenericMediaHeaderAtom {
+    fn atom_type(&self) -> FourCC {
+        FourCC(*GMHD)
+    }
+
+    fn into_body_bytes(self) -> Vec<u8> {
         let mut data = Vec::with_capacity(12);
 
         // Version (1 byte)
-        data.push(atom.version);
+        data.push(self.version);
 
         // Flags (3 bytes)
-        data.extend_from_slice(&atom.flags);
+        data.extend_from_slice(&self.flags);
 
         // Graphics mode (2 bytes, big-endian)
-        data.extend_from_slice(&atom.graphics_mode.to_be_bytes());
+        data.extend_from_slice(&self.graphics_mode.to_be_bytes());
 
         // RGB color values (6 bytes total, 2 bytes each, big-endian)
-        for color in atom.opcolor {
+        for color in self.opcolor {
             data.extend_from_slice(&color.to_be_bytes());
         }
 

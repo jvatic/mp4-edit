@@ -13,6 +13,7 @@ use crate::{
         FourCC,
     },
     parser::Parse,
+    writer::SerializeAtom,
 };
 
 pub const STSZ: &[u8; 4] = b"stsz";
@@ -89,7 +90,10 @@ impl SampleSizeAtom {
     /// the values from `entry_sizes`.
     pub fn sample_sizes(&self) -> impl Iterator<Item = &u32> + '_ {
         if self.sample_size != 0 {
-            Either::Left(std::iter::repeat_n(&self.sample_size, self.sample_count as usize))
+            Either::Left(std::iter::repeat_n(
+                &self.sample_size,
+                self.sample_count as usize,
+            ))
         } else {
             Either::Right(self.entry_sizes.iter())
         }
@@ -182,23 +186,27 @@ impl fmt::Display for SampleSizeAtom {
     }
 }
 
-impl From<SampleSizeAtom> for Vec<u8> {
-    fn from(atom: SampleSizeAtom) -> Self {
+impl SerializeAtom for SampleSizeAtom {
+    fn atom_type(&self) -> FourCC {
+        FourCC(*STSZ)
+    }
+
+    fn into_body_bytes(self) -> Vec<u8> {
         let mut data = Vec::new();
 
         // Version and flags (4 bytes total)
-        let version_flags = (atom.version as u32) << 24 | (atom.flags & 0x00FFFFFF);
+        let version_flags = (self.version as u32) << 24 | (self.flags & 0x00FFFFFF);
         data.extend_from_slice(&version_flags.to_be_bytes());
 
         // Sample size (4 bytes)
-        data.extend_from_slice(&atom.sample_size.to_be_bytes());
+        data.extend_from_slice(&self.sample_size.to_be_bytes());
 
         // Sample count (4 bytes)
-        data.extend_from_slice(&atom.sample_count.to_be_bytes());
+        data.extend_from_slice(&self.sample_count.to_be_bytes());
 
         // If sample_size is 0, write the sample size table
-        if atom.sample_size == 0 {
-            for size in atom.entry_sizes.iter() {
+        if self.sample_size == 0 {
+            for size in self.entry_sizes.iter() {
                 data.extend_from_slice(&size.to_be_bytes());
             }
         }

@@ -9,6 +9,7 @@ use crate::atom::util::DebugEllipsis;
 use crate::{
     atom::{util::async_to_sync_read, FourCC},
     parser::Parse,
+    writer::SerializeAtom,
 };
 
 pub const ILST: &[u8; 4] = b"ilst";
@@ -46,12 +47,10 @@ impl ListItemData {
             _ => Self::Raw(RawData(data)),
         }
     }
-}
 
-impl From<ListItemData> for Vec<u8> {
-    fn from(value: ListItemData) -> Self {
+    fn to_bytes(self: ListItemData) -> Vec<u8> {
         use ListItemData::*;
-        match value {
+        match self {
             Text(s) => s.into_bytes(),
             Jpeg(data) => data.0,
             Raw(data) => data.0,
@@ -86,16 +85,20 @@ impl Parse for ItemListAtom {
     }
 }
 
-impl From<ItemListAtom> for Vec<u8> {
-    fn from(atom: ItemListAtom) -> Self {
+impl SerializeAtom for ItemListAtom {
+    fn atom_type(&self) -> FourCC {
+        FourCC(*ILST)
+    }
+
+    fn into_body_bytes(self) -> Vec<u8> {
         let mut output = Vec::new();
 
-        for item in atom.items {
+        for item in self.items {
             // Calculate item data
             let mut item_data = Vec::new();
 
             for data_atom in item.data_atoms {
-                let data: Vec<u8> = data_atom.data.into();
+                let data: Vec<u8> = data_atom.data.to_bytes();
                 let data_size = 16 + data.len() as u32; // header + type flags + reserved + data
 
                 // Write data atom
@@ -243,7 +246,7 @@ mod tests {
         let decoded =
             parse_ilst_data(Cursor::new(ilst_data)).expect("failed to parse encoded data");
         assert!(!decoded.items.is_empty());
-        let re_encoded: Vec<u8> = decoded.into();
+        let re_encoded: Vec<u8> = decoded.into_body_bytes();
 
         // check each chunk for equality to make any variations easier to debug
         const CHUNK_SIZE: usize = 200;

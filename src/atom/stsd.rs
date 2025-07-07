@@ -12,6 +12,7 @@ use crate::{
         util::{async_to_sync_read, FourCC},
     },
     parser::Parse,
+    writer::SerializeAtom,
 };
 
 mod extension;
@@ -180,21 +181,25 @@ impl Parse for SampleDescriptionTableAtom {
     }
 }
 
-impl From<SampleDescriptionTableAtom> for Vec<u8> {
-    fn from(atom: SampleDescriptionTableAtom) -> Self {
+impl SerializeAtom for SampleDescriptionTableAtom {
+    fn atom_type(&self) -> FourCC {
+        FourCC(*STSD)
+    }
+
+    fn into_body_bytes(self) -> Vec<u8> {
         let mut data = Vec::new();
 
         // Version (1 byte)
-        data.push(atom.version);
+        data.push(self.version);
 
         // Flags (3 bytes)
-        data.extend_from_slice(&atom.flags);
+        data.extend_from_slice(&self.flags);
 
         // Entry count (4 bytes, big-endian)
-        data.extend_from_slice(&(atom.entries.len() as u32).to_be_bytes());
+        data.extend_from_slice(&(self.entries.len() as u32).to_be_bytes());
 
         // Sample entries
-        for entry in atom.entries {
+        for entry in self.entries {
             let mut entry_data = Vec::new();
 
             // Reserved (6 bytes) - must be zero
@@ -234,7 +239,7 @@ impl From<SampleDescriptionTableAtom> for Vec<u8> {
                     entry_data.extend_from_slice(&video.depth.to_be_bytes());
                     entry_data.extend_from_slice(&video.color_table_id.to_be_bytes());
                     video.extensions.into_iter().for_each(|ext| {
-                        let ext_data: Vec<u8> = ext.into();
+                        let ext_data: Vec<u8> = ext.to_bytes();
                         entry_data.extend_from_slice(&ext_data);
                     });
                 }
@@ -250,7 +255,7 @@ impl From<SampleDescriptionTableAtom> for Vec<u8> {
                     entry_data
                         .extend_from_slice(&((audio.sample_rate * 65536.0) as u32).to_be_bytes());
                     audio.extensions.into_iter().for_each(|ext| {
-                        let ext_data: Vec<u8> = ext.into();
+                        let ext_data = ext.to_bytes();
                         entry_data.extend_from_slice(&ext_data);
                     });
                 }
@@ -597,10 +602,7 @@ mod tests {
         let round_trip_data: Vec<u8> = result
             .clone()
             .into_iter()
-            .flat_map(|ext| {
-                let data: Vec<u8> = ext.into();
-                data
-            })
+            .flat_map(|ext| ext.to_bytes())
             .collect();
 
         assert_eq!(

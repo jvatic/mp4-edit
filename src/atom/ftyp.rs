@@ -5,6 +5,7 @@ use std::io::Read;
 use crate::{
     atom::util::{async_to_sync_read, FourCC},
     parser::Parse,
+    writer::SerializeAtom,
 };
 
 pub const FTYP: &[u8; 4] = b"ftyp";
@@ -86,18 +87,22 @@ fn parse_ftyp_data<R: Read>(mut reader: R) -> Result<FileTypeAtom, anyhow::Error
     })
 }
 
-impl From<FileTypeAtom> for Vec<u8> {
-    fn from(atom: FileTypeAtom) -> Self {
+impl SerializeAtom for FileTypeAtom {
+    fn atom_type(&self) -> FourCC {
+        FourCC(*FTYP)
+    }
+
+    fn into_body_bytes(self) -> Vec<u8> {
         let mut data = Vec::new();
 
         // Major brand (4 bytes)
-        data.extend_from_slice(&atom.major_brand.0);
+        data.extend_from_slice(&self.major_brand.0);
 
         // Minor version (4 bytes, big-endian)
-        data.extend_from_slice(&atom.minor_version.to_be_bytes());
+        data.extend_from_slice(&self.minor_version.to_be_bytes());
 
         // Compatible brands (4 bytes each)
-        for brand in atom.compatible_brands {
+        for brand in self.compatible_brands {
             data.extend_from_slice(&brand.0);
         }
 

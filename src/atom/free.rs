@@ -6,6 +6,7 @@ use std::fmt;
 use crate::{
     atom::util::{DebugEllipsis, FourCC},
     parser::Parse,
+    writer::SerializeAtom,
 };
 
 pub const FREE: &[u8; 4] = b"free";
@@ -54,8 +55,17 @@ impl Parse for FreeAtom {
     }
 }
 
-impl From<FreeAtom> for Vec<u8> {
-    fn from(atom: FreeAtom) -> Self {
-        vec![0u8; atom.data_size]
+impl SerializeAtom for FreeAtom {
+    fn atom_type(&self) -> FourCC {
+        self.atom_type
+    }
+
+    fn into_body_bytes(self) -> Vec<u8> {
+        // Free atoms typically contain zero bytes or preserved data
+        if self.data.is_empty() {
+            vec![0u8; self.data_size]
+        } else {
+            self.data
+        }
     }
 }

@@ -1,5 +1,3 @@
-use std::future::Future;
-
 use derive_more::Display;
 use futures_io::AsyncWrite;
 use futures_util::AsyncWriteExt;
@@ -23,12 +21,21 @@ pub enum WriteErrorKind {
     Io,
 }
 
-pub trait WriteAtom: Sized {
-    /// Write full atom (and any children) to the provided writer
-    fn write_atom<W: AsyncWrite + Unpin + Send>(
-        &self,
-        writer: W,
-    ) -> impl Future<Output = Result<(), anyhow::Error>> + Send;
+pub trait SerializeAtom: Sized {
+    /// [FourCC] representing atom type
+    fn atom_type(&self) -> FourCC;
+
+    /// Serialize an atom's body
+    fn into_body_bytes(self) -> Vec<u8>;
+
+    /// Serialize an atom into bytes
+    fn into_bytes(self) -> Vec<u8> {
+        let atom_type = self.atom_type();
+        let mut body = self.into_body_bytes();
+        let mut header = serialize_atom_header(atom_type, body.len() as u64);
+        header.append(&mut body);
+        header
+    }
 }
 
 pub struct Mp4Writer<W> {
@@ -75,7 +82,7 @@ impl<W: AsyncWrite + Unpin> Mp4Writer<W> {
         atom_type: FourCC,
         data: AtomData,
     ) -> Result<(), WriteError> {
-        let data_bytes: Vec<u8> = data.into();
+        let data_bytes: Vec<u8> = data.into_body_bytes();
         self.write_atom_header(atom_type, data_bytes.len()).await?;
         self.writer
             .write_all(&data_bytes)
@@ -90,7 +97,7 @@ impl<W: AsyncWrite + Unpin> Mp4Writer<W> {
 
     pub async fn write_atom(&mut self, atom: Atom) -> Result<(), WriteError> {
         // Serialize the entire atom tree into bytes
-        let bytes = serialize_atom(&atom);
+        let bytes = atom.into_bytes();
 
         // Write all bytes at once
         self.writer
@@ -146,40 +153,6 @@ fn serialize_atom_header(atom_type: FourCC, data_size: u64) -> Vec<u8> {
         // Write atom type
         result.extend_from_slice(&atom_type.0);
     }
-
-    result
-}
-
-/// Serialize an atom and all its children into bytes
-pub fn serialize_atom(atom: &Atom) -> Vec<u8> {
-    let mut result = Vec::new();
-
-    // Get atom data bytes
-    let data_bytes = if let Some(data) = &atom.data {
-        let bytes: Vec<u8> = data.clone().into();
-        bytes
-    } else {
-        Vec::new()
-    };
-
-    // Serialize all children
-    let mut children_bytes = Vec::new();
-    for child in &atom.children {
-        let child_bytes = serialize_atom(child);
-        children_bytes.extend(child_bytes);
-    }
-
-    // Calculate total content size (data + children)
-    let data_size = data_bytes.len() as u64 + children_bytes.len() as u64;
-
-    // Write atom header
-    result.extend(serialize_atom_header(atom.header.atom_type, data_size));
-
-    // Write atom data
-    result.extend_from_slice(&data_bytes);
-
-    // Write children
-    result.extend_from_slice(&children_bytes);
 
     result
 }

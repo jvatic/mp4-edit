@@ -12,6 +12,7 @@ use crate::{
         FourCC,
     },
     parser::Parse,
+    writer::SerializeAtom,
 };
 
 pub const CHPL: &[u8; 4] = b"chpl";
@@ -63,21 +64,25 @@ impl Parse for ChapterListAtom {
     }
 }
 
-impl From<ChapterListAtom> for Vec<u8> {
-    fn from(atom: ChapterListAtom) -> Self {
+impl SerializeAtom for ChapterListAtom {
+    fn atom_type(&self) -> FourCC {
+        FourCC(*CHPL)
+    }
+
+    fn into_body_bytes(self) -> Vec<u8> {
         let mut data = Vec::new();
 
         // Version (1 byte)
-        data.push(atom.version);
+        data.push(self.version);
 
         // Flags (3 bytes)
-        data.extend_from_slice(&atom.flags);
+        data.extend_from_slice(&self.flags);
 
         // Reserved field (8 bytes) - should be zero
         data.extend_from_slice(&[0u8; 8]);
 
         // Chapter entries
-        for chapter in atom.chapters.iter() {
+        for chapter in self.chapters.iter() {
             // Start time (8 bytes, big-endian)
             data.extend_from_slice(&chapter.start_time.to_be_bytes());
 

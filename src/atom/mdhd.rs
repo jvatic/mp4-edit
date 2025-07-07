@@ -5,6 +5,7 @@ use std::{fmt, io::Read};
 use crate::{
     atom::{util::async_to_sync_read, FourCC},
     parser::Parse,
+    writer::SerializeAtom,
 };
 
 pub const MDHD: &[u8; 4] = b"mdhd";
@@ -149,59 +150,55 @@ fn parse_mdhd_data<R: Read>(mut reader: R) -> Result<MediaHeaderAtom, anyhow::Er
     })
 }
 
-impl From<MediaHeaderAtom> for Vec<u8> {
-    fn from(atom: MediaHeaderAtom) -> Self {
+impl SerializeAtom for MediaHeaderAtom {
+    fn atom_type(&self) -> FourCC {
+        FourCC(*MDHD)
+    }
+
+    fn into_body_bytes(self) -> Vec<u8> {
         let mut data = Vec::new();
 
-        // Version and flags (4 bytes)
-        let version_flags = (atom.version as u32) << 24
-            | (atom.flags[0] as u32) << 16
-            | (atom.flags[1] as u32) << 8
-            | (atom.flags[2] as u32);
-        data.extend_from_slice(&version_flags.to_be_bytes());
-
         // Determine version based on whether values fit in 32-bit
-        let needs_64_bit = atom.creation_time > u32::MAX as u64
-            || atom.modification_time > u32::MAX as u64
-            || atom.duration > u32::MAX as u64;
+        let needs_64_bit = self.creation_time > u32::MAX as u64
+            || self.modification_time > u32::MAX as u64
+            || self.duration > u32::MAX as u64;
 
         let version = if needs_64_bit { 1 } else { 0 };
 
-        // Update version in the version_flags
+        // Version and flags (4 bytes)
         let version_flags = (version as u32) << 24
-            | (atom.flags[0] as u32) << 16
-            | (atom.flags[1] as u32) << 8
-            | (atom.flags[2] as u32);
-        data.clear();
+            | (self.flags[0] as u32) << 16
+            | (self.flags[1] as u32) << 8
+            | (self.flags[2] as u32);
         data.extend_from_slice(&version_flags.to_be_bytes());
 
         match version {
             0 => {
                 // Creation time (32-bit)
-                data.extend_from_slice(&(atom.creation_time as u32).to_be_bytes());
+                data.extend_from_slice(&(self.creation_time as u32).to_be_bytes());
                 // Modification time (32-bit)
-                data.extend_from_slice(&(atom.modification_time as u32).to_be_bytes());
+                data.extend_from_slice(&(self.modification_time as u32).to_be_bytes());
                 // Timescale (32-bit)
-                data.extend_from_slice(&atom.timescale.to_be_bytes());
+                data.extend_from_slice(&self.timescale.to_be_bytes());
                 // Duration (32-bit)
-                data.extend_from_slice(&(atom.duration as u32).to_be_bytes());
+                data.extend_from_slice(&(self.duration as u32).to_be_bytes());
             }
             1 => {
                 // Creation time (64-bit)
-                data.extend_from_slice(&atom.creation_time.to_be_bytes());
+                data.extend_from_slice(&self.creation_time.to_be_bytes());
                 // Modification time (64-bit)
-                data.extend_from_slice(&atom.modification_time.to_be_bytes());
+                data.extend_from_slice(&self.modification_time.to_be_bytes());
                 // Timescale (32-bit)
-                data.extend_from_slice(&atom.timescale.to_be_bytes());
+                data.extend_from_slice(&self.timescale.to_be_bytes());
                 // Duration (64-bit)
-                data.extend_from_slice(&atom.duration.to_be_bytes());
+                data.extend_from_slice(&self.duration.to_be_bytes());
             }
             _ => {} // Should not happen due to validation during parsing
         }
 
         // Language (2 bytes) + pre_defined (2 bytes)
-        data.extend_from_slice(&atom.language.0[0..2]);
-        data.extend_from_slice(&atom.pre_defined.to_be_bytes());
+        data.extend_from_slice(&self.language.0[0..2]);
+        data.extend_from_slice(&self.pre_defined.to_be_bytes());
 
         data
     }

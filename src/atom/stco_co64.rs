@@ -9,6 +9,7 @@ use crate::{
         FourCC,
     },
     parser::Parse,
+    writer::SerializeAtom,
 };
 
 pub const STCO: &[u8; 4] = b"stco";
@@ -88,22 +89,31 @@ impl Parse for ChunkOffsetAtom {
     }
 }
 
-impl From<ChunkOffsetAtom> for Vec<u8> {
-    fn from(atom: ChunkOffsetAtom) -> Self {
+impl SerializeAtom for ChunkOffsetAtom {
+    fn atom_type(&self) -> FourCC {
+        // Use the appropriate atom type based on is_64bit
+        if self.is_64bit {
+            FourCC(*CO64)
+        } else {
+            FourCC(*STCO)
+        }
+    }
+
+    fn into_body_bytes(self) -> Vec<u8> {
         let mut data = Vec::new();
 
         // Version (1 byte)
-        data.push(atom.version);
+        data.push(self.version);
 
         // Flags (3 bytes)
-        data.extend_from_slice(&atom.flags);
+        data.extend_from_slice(&self.flags);
 
         // Entry count (4 bytes, big-endian)
-        data.extend_from_slice(&(atom.chunk_offsets.len() as u32).to_be_bytes());
+        data.extend_from_slice(&(self.chunk_offsets.len() as u32).to_be_bytes());
 
         // Chunk offsets
-        for offset in atom.chunk_offsets.iter() {
-            if atom.is_64bit {
+        for offset in self.chunk_offsets.iter() {
+            if self.is_64bit {
                 // 64-bit offsets (co64)
                 data.extend_from_slice(&offset.to_be_bytes());
             } else {

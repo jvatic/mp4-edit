@@ -5,6 +5,7 @@ use std::io::{Cursor, Read};
 use crate::{
     atom::util::{async_to_sync_read, FourCC},
     parser::Parse,
+    writer::SerializeAtom,
 };
 
 pub const SGPD: &[u8; 4] = b"sgpd";
@@ -52,27 +53,31 @@ impl Parse for SampleGroupDescriptionAtom {
     }
 }
 
-impl From<SampleGroupDescriptionAtom> for Vec<u8> {
-    fn from(atom: SampleGroupDescriptionAtom) -> Self {
+impl SerializeAtom for SampleGroupDescriptionAtom {
+    fn atom_type(&self) -> FourCC {
+        FourCC(*SGPD)
+    }
+
+    fn into_body_bytes(self) -> Vec<u8> {
         let mut data = Vec::new();
 
         // Version (1 byte)
-        data.push(atom.version);
+        data.push(self.version);
 
         // Flags (3 bytes)
-        data.extend_from_slice(&atom.flags);
+        data.extend_from_slice(&self.flags);
 
         // Grouping type (4 bytes)
-        data.extend_from_slice(&atom.grouping_type.0);
+        data.extend_from_slice(&self.grouping_type.0);
 
         // Version-dependent fields
-        match atom.version {
+        match self.version {
             0 => {
                 // No additional fields
             }
             1 => {
                 // Default length (4 bytes)
-                if let Some(default_length) = atom.default_length {
+                if let Some(default_length) = self.default_length {
                     data.extend_from_slice(&default_length.to_be_bytes());
                 } else {
                     data.extend_from_slice(&0u32.to_be_bytes());
@@ -80,7 +85,7 @@ impl From<SampleGroupDescriptionAtom> for Vec<u8> {
             }
             _ => {
                 // Version 2+: Default sample description index (4 bytes)
-                if let Some(default_index) = atom.default_sample_description_index {
+                if let Some(default_index) = self.default_sample_description_index {
                     data.extend_from_slice(&default_index.to_be_bytes());
                 } else {
                     data.extend_from_slice(&0u32.to_be_bytes());
@@ -89,13 +94,13 @@ impl From<SampleGroupDescriptionAtom> for Vec<u8> {
         }
 
         // Entry count (4 bytes, big-endian)
-        data.extend_from_slice(&(atom.entries.len() as u32).to_be_bytes());
+        data.extend_from_slice(&(self.entries.len() as u32).to_be_bytes());
 
         // Entries
-        for entry in atom.entries {
+        for entry in self.entries {
             // For version 1, if default_length is 0, write description_length for each entry
-            if atom.version == 1 {
-                if let Some(default_length) = atom.default_length {
+            if self.version == 1 {
+                if let Some(default_length) = self.default_length {
                     if default_length == 0 {
                         if let Some(desc_length) = entry.description_length {
                             data.extend_from_slice(&desc_length.to_be_bytes());
