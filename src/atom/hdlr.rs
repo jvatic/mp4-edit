@@ -5,6 +5,7 @@ use std::io::Read;
 use crate::{
     atom::{util::async_to_sync_read, FourCC},
     parser::Parse,
+    writer::SerializeAtom,
 };
 
 pub const HDLR: &[u8; 4] = b"hdlr";
@@ -214,36 +215,38 @@ fn parse_handler_name(name_bytes: &[u8]) -> Result<String, anyhow::Error> {
     Ok(name_str.to_string())
 }
 
-impl From<HandlerReferenceAtom> for Vec<u8> {
-    fn from(atom: HandlerReferenceAtom) -> Self {
+impl SerializeAtom for HandlerReferenceAtom {
+    fn atom_type(&self) -> FourCC {
+        FourCC(*HDLR)
+    }
+
+    fn into_body_bytes(self) -> Vec<u8> {
         let mut data = Vec::new();
 
         // Version and flags (4 bytes)
-        let version_flags = (atom.version as u32) << 24
-            | (atom.flags[0] as u32) << 16
-            | (atom.flags[1] as u32) << 8
-            | (atom.flags[2] as u32);
+        let version_flags = (self.version as u32) << 24
+            | (self.flags[0] as u32) << 16
+            | (self.flags[1] as u32) << 8
+            | (self.flags[2] as u32);
         data.extend_from_slice(&version_flags.to_be_bytes());
 
         // Component type (4 bytes)
-        data.extend_from_slice(&atom.component_type);
+        data.extend_from_slice(&self.component_type);
 
         // Handler type (4 bytes)
-        data.extend_from_slice(&atom.handler_type.to_bytes());
+        data.extend_from_slice(&self.handler_type.to_bytes());
 
         // Component manufacturer (4 bytes)
-        data.extend_from_slice(&atom.component_manufacturer);
+        data.extend_from_slice(&self.component_manufacturer);
 
         // Component flags (4 bytes)
-        data.extend_from_slice(&atom.component_flags.to_be_bytes());
+        data.extend_from_slice(&self.component_flags.to_be_bytes());
 
         // Component flags mask (4 bytes)
-        data.extend_from_slice(&atom.component_flags_mask.to_be_bytes());
+        data.extend_from_slice(&self.component_flags_mask.to_be_bytes());
 
-        // Name (null-terminated string)
-        if !atom.name.is_empty() {
-            data.extend_from_slice(atom.name.as_bytes());
-        }
+        // Handler name (null-terminated string)
+        data.extend_from_slice(self.name.as_bytes());
         data.push(0); // Null terminator
 
         data
@@ -326,7 +329,7 @@ mod tests {
         };
 
         // Convert to bytes
-        let bytes: Vec<u8> = original_hdlr.clone().into();
+        let bytes: Vec<u8> = original_hdlr.clone().into_body_bytes();
 
         // Parse back from bytes
         let cursor = Cursor::new(&bytes);
@@ -389,7 +392,7 @@ mod tests {
             name: "".to_string(),
         };
 
-        let bytes: Vec<u8> = hdlr.into();
+        let bytes: Vec<u8> = hdlr.into_body_bytes();
 
         // Check that the handler type bytes are exactly 'mdir'
         let handler_type_offset = 8; // version(1) + flags(3) + component_type(4) = 8
@@ -420,7 +423,7 @@ mod tests {
         };
 
         // Round trip test
-        let bytes: Vec<u8> = hdlr.clone().into();
+        let bytes: Vec<u8> = hdlr.clone().into_body_bytes();
         let cursor = Cursor::new(&bytes);
         let parsed_hdlr = parse_hdlr_data(cursor).unwrap();
 
@@ -453,7 +456,7 @@ mod tests {
         }
 
         // Round trip should preserve the unknown type
-        let output_bytes: Vec<u8> = parsed_hdlr.into();
+        let output_bytes: Vec<u8> = parsed_hdlr.into_body_bytes();
         let cursor2 = Cursor::new(&output_bytes);
         let reparsed_hdlr = parse_hdlr_data(cursor2).unwrap();
 
@@ -480,7 +483,7 @@ mod tests {
         };
 
         // Convert to bytes and back
-        let bytes: Vec<u8> = hdlr.into();
+        let bytes: Vec<u8> = hdlr.into_body_bytes();
         let cursor = Cursor::new(&bytes);
         let parsed_hdlr = parse_hdlr_data(cursor).unwrap();
 

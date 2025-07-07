@@ -5,6 +5,7 @@ use std::io::{Cursor, Read};
 use crate::{
     atom::util::{async_to_sync_read, FourCC},
     parser::Parse,
+    writer::SerializeAtom,
 };
 
 pub const SBGP: &[u8; 4] = b"sbgp";
@@ -50,29 +51,33 @@ impl Parse for SampleToGroupAtom {
     }
 }
 
-impl From<SampleToGroupAtom> for Vec<u8> {
-    fn from(atom: SampleToGroupAtom) -> Self {
+impl SerializeAtom for SampleToGroupAtom {
+    fn atom_type(&self) -> FourCC {
+        FourCC(*SBGP)
+    }
+
+    fn into_body_bytes(self) -> Vec<u8> {
         let mut data = Vec::new();
 
         // Version (1 byte)
-        data.push(atom.version);
+        data.push(self.version);
 
         // Flags (3 bytes)
-        data.extend_from_slice(&atom.flags);
+        data.extend_from_slice(&self.flags);
 
         // Grouping type (4 bytes)
-        data.extend_from_slice(&atom.grouping_type.0);
+        data.extend_from_slice(&self.grouping_type.0);
 
         // Grouping type parameter (4 bytes) - version >= 1 only
-        if let Some(param) = atom.grouping_type_parameter {
+        if let Some(param) = self.grouping_type_parameter {
             data.extend_from_slice(&param.to_be_bytes());
         }
 
         // Entry count (4 bytes, big-endian)
-        data.extend_from_slice(&(atom.entries.len() as u32).to_be_bytes());
+        data.extend_from_slice(&(self.entries.len() as u32).to_be_bytes());
 
         // Entries
-        for entry in atom.entries {
+        for entry in self.entries {
             // Sample count (4 bytes, big-endian)
             data.extend_from_slice(&entry.sample_count.to_be_bytes());
             // Group description index (4 bytes, big-endian)

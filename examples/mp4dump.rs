@@ -30,7 +30,7 @@ fn format_size(size: usize) -> String {
 fn get_atom_summary(atom: &Atom) -> String {
     match &atom.data {
         Some(AtomData::RawData(data)) if atom.header.atom_type == b"meta" => {
-            meta::MetaHeader::from_bytes(&data.0)
+            meta::MetaHeader::from_bytes(data.as_slice())
                 .map(|meta| format!("{meta:?}"))
                 .unwrap_or_else(|_| format!("{data:?}"))
         }

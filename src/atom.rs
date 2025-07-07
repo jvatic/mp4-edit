@@ -40,6 +40,8 @@ pub mod containers {
     pub const META_VERSION_FLAGS_SIZE: usize = 4;
 }
 
+use crate::writer::SerializeAtom;
+
 pub use self::{
     chpl::ChapterListAtom, dref::DataReferenceAtom, elst::EditListAtom, free::FreeAtom,
     ftyp::FileTypeAtom, gmhd::GenericMediaHeaderAtom, hdlr::HandlerReferenceAtom,
@@ -50,11 +52,38 @@ pub use self::{
 };
 
 #[derive(Clone)]
-pub struct RawData(pub Vec<u8>);
+pub struct RawData {
+    atom_type: FourCC,
+    data: Vec<u8>,
+}
+
+impl SerializeAtom for RawData {
+    fn atom_type(&self) -> FourCC {
+        self.atom_type
+    }
+
+    fn into_body_bytes(self) -> Vec<u8> {
+        self.data
+    }
+}
+
+impl RawData {
+    pub fn new(atom_type: FourCC, data: Vec<u8>) -> Self {
+        Self { atom_type, data }
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        &self.data
+    }
+
+    pub fn to_vec(self) -> Vec<u8> {
+        self.data
+    }
+}
 
 impl std::fmt::Debug for RawData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[u8; {}]", self.0.len())
+        write!(f, "[u8; {}]", self.data.len())
     }
 }
 
@@ -107,6 +136,30 @@ impl Atom {
 
             current_level = next_level;
         }
+    }
+}
+
+impl SerializeAtom for Atom {
+    fn atom_type(&self) -> FourCC {
+        self.header.atom_type
+    }
+
+    /// Serialize [Atom]'s body and all children
+    fn into_body_bytes(self) -> Vec<u8> {
+        // Serialize all children
+        let mut children_bytes = Vec::new();
+        for child in self.children {
+            let mut child_bytes = child.into_bytes();
+            children_bytes.append(&mut child_bytes);
+        }
+
+        let mut body = self
+            .data
+            .map(SerializeAtom::into_body_bytes)
+            .unwrap_or_default();
+
+        body.append(&mut children_bytes);
+        body
     }
 }
 
@@ -262,37 +315,58 @@ impl From<RawData> for AtomData {
     }
 }
 
-impl From<RawData> for Vec<u8> {
-    fn from(data: RawData) -> Self {
-        data.0
-    }
-}
-
-impl From<AtomData> for Vec<u8> {
-    fn from(data: AtomData) -> Self {
+impl SerializeAtom for AtomData {
+    fn atom_type(&self) -> FourCC {
         use AtomData::*;
-        match data {
-            FileType(atom) => atom.into(),
-            MovieHeader(atom) => atom.into(),
-            TrackHeader(atom) => atom.into(),
-            EditList(atom) => atom.into(),
-            MediaHeader(atom) => atom.into(),
-            HandlerReference(atom) => atom.into(),
-            GenericMediaHeader(atom) => atom.into(),
-            ItemList(atom) => atom.into(),
-            SoundMediaHeader(atom) => atom.into(),
-            SampleDescriptionTable(atom) => atom.into(),
-            TrackReference(atom) => atom.into(),
-            DataReference(atom) => atom.into(),
-            SampleSize(atom) => atom.into(),
-            ChunkOffset(atom) => atom.into(),
-            TimeToSample(atom) => atom.into(),
-            SampleToChunk(atom) => atom.into(),
-            SampleToGroup(atom) => atom.into(),
-            SampleGroupDescription(atom) => atom.into(),
-            ChapterList(atom) => atom.into(),
-            Free(atom) => atom.into(),
-            RawData(data) => data.into(),
+        match self {
+            FileType(atom) => atom.atom_type(),
+            MovieHeader(atom) => atom.atom_type(),
+            TrackHeader(atom) => atom.atom_type(),
+            EditList(atom) => atom.atom_type(),
+            MediaHeader(atom) => atom.atom_type(),
+            HandlerReference(atom) => atom.atom_type(),
+            GenericMediaHeader(atom) => atom.atom_type(),
+            ItemList(atom) => atom.atom_type(),
+            SoundMediaHeader(atom) => atom.atom_type(),
+            SampleDescriptionTable(atom) => atom.atom_type(),
+            TrackReference(atom) => atom.atom_type(),
+            DataReference(atom) => atom.atom_type(),
+            SampleSize(atom) => atom.atom_type(),
+            ChunkOffset(atom) => atom.atom_type(),
+            TimeToSample(atom) => atom.atom_type(),
+            SampleToChunk(atom) => atom.atom_type(),
+            SampleToGroup(atom) => atom.atom_type(),
+            SampleGroupDescription(atom) => atom.atom_type(),
+            ChapterList(atom) => atom.atom_type(),
+            Free(atom) => atom.atom_type(),
+            RawData(atom) => atom.atom_type(),
+        }
+    }
+
+    fn into_body_bytes(self) -> Vec<u8> {
+        use AtomData::*;
+        match self {
+            FileType(atom) => atom.into_body_bytes(),
+            MovieHeader(atom) => atom.into_body_bytes(),
+            TrackHeader(atom) => atom.into_body_bytes(),
+            EditList(atom) => atom.into_body_bytes(),
+            MediaHeader(atom) => atom.into_body_bytes(),
+            HandlerReference(atom) => atom.into_body_bytes(),
+            GenericMediaHeader(atom) => atom.into_body_bytes(),
+            ItemList(atom) => atom.into_body_bytes(),
+            SoundMediaHeader(atom) => atom.into_body_bytes(),
+            SampleDescriptionTable(atom) => atom.into_body_bytes(),
+            TrackReference(atom) => atom.into_body_bytes(),
+            DataReference(atom) => atom.into_body_bytes(),
+            SampleSize(atom) => atom.into_body_bytes(),
+            ChunkOffset(atom) => atom.into_body_bytes(),
+            TimeToSample(atom) => atom.into_body_bytes(),
+            SampleToChunk(atom) => atom.into_body_bytes(),
+            SampleToGroup(atom) => atom.into_body_bytes(),
+            SampleGroupDescription(atom) => atom.into_body_bytes(),
+            ChapterList(atom) => atom.into_body_bytes(),
+            Free(atom) => atom.into_body_bytes(),
+            RawData(data) => data.into_body_bytes(),
         }
     }
 }

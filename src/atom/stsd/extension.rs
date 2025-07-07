@@ -87,65 +87,32 @@ impl From<std::io::Error> for ParseError {
     }
 }
 
-// Serialization trait
-pub trait Serialize {
-    fn serialize(&self) -> Vec<u8>;
-}
-
-impl From<StsdExtensionData> for Vec<u8> {
-    fn from(value: StsdExtensionData) -> Self {
-        value.serialize()
-    }
-}
-
-impl Serialize for StsdExtensionData {
-    fn serialize(&self) -> Vec<u8> {
-        let mut result = Vec::new();
-        for box_data in &self.extensions {
-            result.extend(box_data.serialize());
-        }
-        result
-    }
-}
-
-impl From<StsdExtension> for Vec<u8> {
-    fn from(value: StsdExtension) -> Self {
-        value.serialize()
-    }
-}
-
-impl Serialize for StsdExtension {
-    fn serialize(&self) -> Vec<u8> {
+impl StsdExtension {
+    pub fn to_bytes(self) -> Vec<u8> {
         match self {
-            StsdExtension::Esds(esds) => serialize_box(b"esds", &esds.serialize()),
-            StsdExtension::Btrt(btrt) => serialize_box(b"btrt", &btrt.serialize()),
+            StsdExtension::Esds(esds) => serialize_box(b"esds", &esds.into_vec()),
+            StsdExtension::Btrt(btrt) => serialize_box(b"btrt", &btrt.into_bytes()),
             StsdExtension::Unknown {
                 fourcc,
                 size: _,
                 data,
-            } => serialize_box(fourcc, data),
+            } => serialize_box(&fourcc, &data),
         }
     }
 }
 
-impl From<EsDescriptor> for Vec<u8> {
-    fn from(value: EsDescriptor) -> Self {
-        value.serialize()
-    }
-}
-
-impl Serialize for EsdsExtension {
-    fn serialize(&self) -> Vec<u8> {
+impl EsdsExtension {
+    fn into_vec(self) -> Vec<u8> {
         let mut result = Vec::new();
         result.push(self.version);
         result.extend_from_slice(&self.flags);
-        result.extend(self.es_descriptor.serialize());
+        result.extend(self.es_descriptor.into_bytes());
         result
     }
 }
 
-impl Serialize for EsDescriptor {
-    fn serialize(&self) -> Vec<u8> {
+impl EsDescriptor {
+    fn into_bytes(self) -> Vec<u8> {
         let mut payload = Vec::new();
 
         // ES ID
@@ -167,21 +134,21 @@ impl Serialize for EsDescriptor {
         // Add optional fields (not present in our sample data)
 
         // Add DecoderConfigDescriptor if present
-        if let Some(ref decoder_config) = self.decoder_config_descriptor {
-            payload.extend(decoder_config.serialize());
+        if let Some(decoder_config) = self.decoder_config_descriptor {
+            payload.extend(decoder_config.into_bytes());
         }
 
         // Add SLConfigDescriptor if present
-        if let Some(ref sl_config) = self.sl_config_descriptor {
-            payload.extend(sl_config.serialize());
+        if let Some(sl_config) = self.sl_config_descriptor {
+            payload.extend(sl_config.into_bytes());
         }
 
         serialize_descriptor(0x03, &payload)
     }
 }
 
-impl Serialize for DecoderConfigDescriptor {
-    fn serialize(&self) -> Vec<u8> {
+impl DecoderConfigDescriptor {
+    fn into_bytes(self) -> Vec<u8> {
         let mut payload = Vec::new();
 
         payload.push(self.object_type_indication);
@@ -209,14 +176,14 @@ impl Serialize for DecoderConfigDescriptor {
     }
 }
 
-impl Serialize for SlConfigDescriptor {
-    fn serialize(&self) -> Vec<u8> {
+impl SlConfigDescriptor {
+    fn into_bytes(self) -> Vec<u8> {
         serialize_descriptor(0x06, &[self.predefined])
     }
 }
 
-impl Serialize for BtrtExtension {
-    fn serialize(&self) -> Vec<u8> {
+impl BtrtExtension {
+    fn into_bytes(self) -> Vec<u8> {
         let mut result = Vec::new();
         result.extend_from_slice(&self.buffer_size_db.to_be_bytes());
         result.extend_from_slice(&self.max_bitrate.to_be_bytes());
@@ -538,7 +505,11 @@ mod tests {
         let parsed = parse_stsd_extensions(&original_data).expect("Failed to parse original data");
 
         // Serialize back to bytes
-        let serialized = parsed.serialize();
+        let serialized = parsed
+            .extensions
+            .into_iter()
+            .flat_map(|ext| ext.to_bytes())
+            .collect::<Vec<_>>();
 
         // Compare with original
         assert_eq!(serialized, original_data, "Round-trip serialization failed");
@@ -553,18 +524,18 @@ mod tests {
             0, 0, 245, 74,
         ];
 
-        let parsed = parse_stsd_extensions(&original_data).expect("Failed to parse data");
+        let mut parsed = parse_stsd_extensions(&original_data).expect("Failed to parse data");
 
         // Test ESDS box serialization
-        if let StsdExtension::Esds(esds) = &parsed.extensions[0] {
-            let esds_serialized = esds.serialize();
+        if let StsdExtension::Esds(esds) = parsed.extensions.swap_remove(0) {
+            let esds_serialized = esds.into_vec();
             let expected_esds = &original_data[8..51]; // Skip box header (8 bytes), take payload
             assert_eq!(esds_serialized, expected_esds, "ESDS serialization failed");
         }
 
         // Test BTRT box serialization
-        if let StsdExtension::Btrt(btrt) = &parsed.extensions[1] {
-            let btrt_serialized = btrt.serialize();
+        if let StsdExtension::Btrt(btrt) = parsed.extensions.swap_remove(0) {
+            let btrt_serialized = btrt.into_bytes();
             let expected_btrt = &original_data[59..]; // Skip to BTRT payload
             assert_eq!(btrt_serialized, expected_btrt, "BTRT serialization failed");
         }

@@ -9,6 +9,7 @@ use crate::{
         FourCC,
     },
     parser::Parse,
+    writer::SerializeAtom,
 };
 
 pub const STTS: &[u8; 4] = b"stts";
@@ -136,22 +137,26 @@ fn parse_stts_data<R: Read>(mut reader: R) -> Result<TimeToSampleAtom, anyhow::E
     })
 }
 
-impl From<TimeToSampleAtom> for Vec<u8> {
-    fn from(atom: TimeToSampleAtom) -> Self {
+impl SerializeAtom for TimeToSampleAtom {
+    fn atom_type(&self) -> FourCC {
+        FourCC(*STTS)
+    }
+
+    fn into_body_bytes(self) -> Vec<u8> {
         let mut data = Vec::new();
 
         // Version and flags (4 bytes)
-        let version_flags = (atom.version as u32) << 24
-            | (atom.flags[0] as u32) << 16
-            | (atom.flags[1] as u32) << 8
-            | (atom.flags[2] as u32);
+        let version_flags = (self.version as u32) << 24
+            | (self.flags[0] as u32) << 16
+            | (self.flags[1] as u32) << 8
+            | (self.flags[2] as u32);
         data.extend_from_slice(&version_flags.to_be_bytes());
 
         // Entry count (4 bytes)
-        data.extend_from_slice(&(atom.entries.len() as u32).to_be_bytes());
+        data.extend_from_slice(&(self.entries.len() as u32).to_be_bytes());
 
         // Entries (8 bytes each: sample_count + sample_duration)
-        for entry in atom.entries.iter() {
+        for entry in self.entries.iter() {
             data.extend_from_slice(&entry.sample_count.to_be_bytes());
             data.extend_from_slice(&entry.sample_duration.to_be_bytes());
         }

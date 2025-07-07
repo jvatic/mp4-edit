@@ -9,6 +9,7 @@ use crate::{
         FourCC,
     },
     parser::Parse,
+    writer::SerializeAtom,
 };
 
 pub const STSC: &[u8; 4] = b"stsc";
@@ -75,21 +76,25 @@ impl Parse for SampleToChunkAtom {
     }
 }
 
-impl From<SampleToChunkAtom> for Vec<u8> {
-    fn from(atom: SampleToChunkAtom) -> Self {
+impl SerializeAtom for SampleToChunkAtom {
+    fn atom_type(&self) -> FourCC {
+        FourCC(*STSC)
+    }
+
+    fn into_body_bytes(self) -> Vec<u8> {
         let mut data = Vec::new();
 
         // Version (1 byte)
-        data.push(atom.version);
+        data.push(self.version);
 
         // Flags (3 bytes)
-        data.extend_from_slice(&atom.flags);
+        data.extend_from_slice(&self.flags);
 
         // Entry count (4 bytes, big-endian)
-        data.extend_from_slice(&(atom.entries.len() as u32).to_be_bytes());
+        data.extend_from_slice(&(self.entries.len() as u32).to_be_bytes());
 
         // Entries
-        for entry in atom.entries.iter() {
+        for entry in self.entries.iter() {
             // First chunk (4 bytes, big-endian)
             data.extend_from_slice(&entry.first_chunk.to_be_bytes());
             // Samples per chunk (4 bytes, big-endian)

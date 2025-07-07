@@ -11,7 +11,8 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use mp4_parser::{
     atom::{hdlr::HandlerType, stco_co64::ChunkOffsets, FourCC},
     chunk_offset_builder::ChunkOffsetBuilder,
-    writer, Mp4Writer, Parser,
+    writer::SerializeAtom,
+    Mp4Writer, Parser,
 };
 
 async fn open_input(input_name: &str) -> anyhow::Result<Box<dyn AsyncRead + Unpin + Send>> {
@@ -82,7 +83,8 @@ async fn main() -> anyhow::Result<()> {
     // serialize metadata to find the new size (should be fairly cheap)
     let new_metadata_size = metadata
         .atoms_iter()
-        .flat_map(writer::serialize_atom)
+        .cloned()
+        .flat_map(SerializeAtom::into_bytes)
         .collect::<Vec<_>>()
         .len();
 

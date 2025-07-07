@@ -207,7 +207,10 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
                     let version_flags = self.reader.read_data(META_VERSION_FLAGS_SIZE).await?;
                     (
                         header.data_size - META_VERSION_FLAGS_SIZE,
-                        Some(AtomData::RawData(RawData(version_flags))),
+                        Some(AtomData::RawData(RawData::new(
+                            FourCC(*META),
+                            version_flags,
+                        ))),
                     )
                 } else {
                     (header.data_size, None)
@@ -350,7 +353,7 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
                 .await
                 .map(AtomData::from),
             FREE | SKIP => FreeAtom::parse(atom_type, cursor).await.map(AtomData::from),
-            _ => Ok(RawData(cursor.get_ref().clone()).into()),
+            fourcc => Ok(RawData::new(FourCC(*fourcc), cursor.get_ref().clone()).into()),
         }
         .map_err(|e| ParseError {
             kind: ParseErrorKind::AtomParsing,

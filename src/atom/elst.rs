@@ -6,6 +6,7 @@ use std::io::Read;
 use crate::{
     atom::{util::async_to_sync_read, FourCC},
     parser::Parse,
+    writer::SerializeAtom,
 };
 
 pub const ELST: &[u8; 4] = b"elst";
@@ -43,22 +44,26 @@ impl Parse for EditListAtom {
     }
 }
 
-impl From<EditListAtom> for Vec<u8> {
-    fn from(atom: EditListAtom) -> Self {
+impl SerializeAtom for EditListAtom {
+    fn atom_type(&self) -> FourCC {
+        FourCC(*ELST)
+    }
+
+    fn into_body_bytes(self) -> Vec<u8> {
         let mut data = Vec::new();
 
         // Version (1 byte)
-        data.push(atom.version);
+        data.push(self.version);
 
         // Flags (3 bytes)
-        data.extend_from_slice(&atom.flags);
+        data.extend_from_slice(&self.flags);
 
         // Entry count (4 bytes, big-endian)
-        data.extend_from_slice(&(atom.entries.len() as u32).to_be_bytes());
+        data.extend_from_slice(&(self.entries.len() as u32).to_be_bytes());
 
         // Entries
-        for entry in atom.entries {
-            match atom.version {
+        for entry in self.entries {
+            match self.version {
                 0 => {
                     // Version 0: 32-bit fields
                     data.extend_from_slice(&(entry.segment_duration as u32).to_be_bytes());
