@@ -17,6 +17,8 @@ pub mod stsc;
 pub mod stsd;
 pub mod stsz;
 pub mod stts;
+#[cfg(test)]
+pub mod test_utils;
 pub mod tkhd;
 pub mod tref;
 pub(crate) mod util;

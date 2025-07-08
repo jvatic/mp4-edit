@@ -151,3 +151,15 @@ fn parse_sbgp_data(data: &[u8]) -> Result<SampleToGroupAtom, anyhow::Error> {
 
     Ok(atom)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::atom::test_utils::test_atom_roundtrip_sync;
+
+    /// Test round-trip for all available sbgp test data files
+    #[test]
+    fn test_ftyp_roundtrip() {
+        test_atom_roundtrip_sync::<SampleToGroupAtom>(SBGP);
+    }
+}

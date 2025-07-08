@@ -261,3 +261,15 @@ fn parse_dref_data<R: Read>(mut reader: R) -> Result<DataReferenceAtom, anyhow::
         entries,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::atom::test_utils::test_atom_roundtrip_sync;
+
+    /// Test round-trip for all available dref test data files
+    #[test]
+    fn test_dref_roundtrip() {
+        test_atom_roundtrip_sync::<DataReferenceAtom>(DREF);
+    }
+}

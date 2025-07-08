@@ -145,3 +145,15 @@ fn parse_chpl_data<R: Read>(mut reader: R) -> Result<ChapterListAtom, anyhow::Er
         chapters: ChapterEntries(chapters),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::atom::test_utils::test_atom_roundtrip_sync;
+
+    /// Test round-trip for all available chpl test data files
+    #[test]
+    fn test_ftyp_roundtrip() {
+        test_atom_roundtrip_sync::<ChapterListAtom>(CHPL);
+    }
+}

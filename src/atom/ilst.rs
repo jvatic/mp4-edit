@@ -233,37 +233,11 @@ fn read_bytes<R: Read>(reader: &mut R, count: usize) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
+    use crate::atom::test_utils::test_atom_roundtrip_sync;
 
-    /// Test round-trip for binary data
+    /// Test round-trip for all available ilst test data files
     #[test]
-    fn test_binary_metadata_roundtrip() {
-        const BINARY_DATA: &[u8] = include_bytes!("../../test-data/ilst.bin");
-
-        // exclude the ilst atom size and fourcc
-        let ilst_data = &BINARY_DATA[8..];
-
-        let decoded =
-            parse_ilst_data(Cursor::new(ilst_data)).expect("failed to parse encoded data");
-        assert!(!decoded.items.is_empty());
-        let re_encoded: Vec<u8> = decoded.into_body_bytes();
-
-        // check each chunk for equality to make any variations easier to debug
-        const CHUNK_SIZE: usize = 200;
-        for ((i, left), right) in re_encoded
-            .chunks(CHUNK_SIZE)
-            .enumerate()
-            .zip(ilst_data.chunks(CHUNK_SIZE))
-        {
-            assert_eq!(
-                left,
-                right,
-                "round-trip failed for binary metadata at range [{}..{}] (left.len()={}, right.len()={})",
-                i * CHUNK_SIZE,
-                ((i + 1) * CHUNK_SIZE).min(ilst_data.len()),
-                re_encoded.len(),
-                ilst_data.len(),
-            );
-        }
+    fn test_ilst_roundtrip() {
+        test_atom_roundtrip_sync::<ItemListAtom>(ILST);
     }
 }
