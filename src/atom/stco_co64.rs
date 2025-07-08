@@ -187,3 +187,16 @@ fn parse_stco_data<R: Read>(
         is_64bit,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::atom::test_utils::test_atom_roundtrip_sync;
+
+    /// Test round-trip for all available stco/co64 test data files
+    #[test]
+    fn test_ftyp_roundtrip() {
+        test_atom_roundtrip_sync::<ChunkOffsetAtom>(STCO);
+        test_atom_roundtrip_sync::<ChunkOffsetAtom>(CO64);
+    }
+}

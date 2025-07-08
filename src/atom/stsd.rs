@@ -569,6 +569,7 @@ fn parse_pascal_string(bytes: &[u8; 32]) -> String {
 #[cfg(test)]
 mod tests {
     use crate::atom::stsd::extension::parse_stsd_extensions;
+    use crate::atom::test_utils::test_atom_roundtrip_sync;
 
     use super::*;
 
@@ -609,5 +610,11 @@ mod tests {
             round_trip_data, extension_data,
             "expected round trip data to equal input data ({result:?})"
         );
+    }
+
+    /// Test round-trip for all available stsd test data files
+    #[test]
+    fn test_ftyp_roundtrip() {
+        test_atom_roundtrip_sync::<SampleDescriptionTableAtom>(STSD);
     }
 }

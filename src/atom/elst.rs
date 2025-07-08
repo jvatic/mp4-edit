@@ -203,3 +203,15 @@ fn parse_elst_entries_v1<R: Read>(
 
     Ok(entries)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::atom::test_utils::test_atom_roundtrip_sync;
+
+    /// Test round-trip for all available elst test data files
+    #[test]
+    fn test_ftyp_roundtrip() {
+        test_atom_roundtrip_sync::<EditListAtom>(ELST);
+    }
+}

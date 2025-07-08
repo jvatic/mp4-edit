@@ -256,6 +256,7 @@ impl SerializeAtom for HandlerReferenceAtom {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::atom::test_utils::test_atom_roundtrip_sync;
     use std::io::Cursor;
 
     #[test]
@@ -506,5 +507,11 @@ mod tests {
             &bytes[handler_type_offset..handler_type_offset + 4],
             &[109, 100, 105, 114]
         );
+    }
+
+    /// Test round-trip for all available hdlr test data files
+    #[test]
+    fn test_ftyp_roundtrip() {
+        test_atom_roundtrip_sync::<HandlerReferenceAtom>(HDLR);
     }
 }

@@ -354,3 +354,15 @@ impl SerializeAtom for MovieHeaderAtom {
         data
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::atom::test_utils::test_atom_roundtrip_sync;
+
+    /// Test round-trip for all available mvhd test data files
+    #[test]
+    fn test_ftyp_roundtrip() {
+        test_atom_roundtrip_sync::<MovieHeaderAtom>(MVHD);
+    }
+}

@@ -249,3 +249,15 @@ fn parse_sgpd_data(data: &[u8]) -> Result<SampleGroupDescriptionAtom, anyhow::Er
 
     Ok(atom)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::atom::test_utils::test_atom_roundtrip_sync;
+
+    /// Test round-trip for all available sgpd test data files
+    #[test]
+    fn test_ftyp_roundtrip() {
+        test_atom_roundtrip_sync::<SampleGroupDescriptionAtom>(SGPD);
+    }
+}
