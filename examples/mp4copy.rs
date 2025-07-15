@@ -91,22 +91,33 @@ async fn main() -> anyhow::Result<()> {
     let mdat_content_offset = new_metadata_size + 8;
 
     // Update chunk offsets to reflect new metadata size
-    // TODO: handle track interleaving (if we didn't filter out the chapter track, this wouldn't work since the builder assumes it's single tracked)
-    metadata.tracks_iter_mut().for_each(|trak| {
-        let mut stbl = trak
-            .media()
-            .and_then(|mdia| mdia.media_information())
-            .and_then(|minf| minf.sample_table())
-            .unwrap();
-        let stsz = stbl.sample_size().unwrap();
-        let stsc = stbl.sample_to_chunk().unwrap();
-        let builder = ChunkOffsetBuilder::new(stsc, stsz);
-        let chunk_offsets =
-            ChunkOffsets::from_iter(builder.build_chunk_offsets(mdat_content_offset as u64));
-
-        let stco = stbl.chunk_offset_mut().unwrap();
-        stco.chunk_offsets = chunk_offsets;
-    });
+    let mut chunk_offsets = metadata
+        .tracks_iter()
+        .fold(ChunkOffsetBuilder::new(), |mut builder, trak| {
+            let stbl = trak
+                .media()
+                .and_then(|mdia| mdia.media_information())
+                .and_then(|minf| minf.sample_table())
+                .unwrap();
+            let stsz = stbl.sample_size().unwrap();
+            let stsc = stbl.sample_to_chunk().unwrap();
+            builder.add_track(stsc, stsz);
+            builder
+        })
+        .build_chunk_offsets(mdat_content_offset as u64);
+    metadata
+        .tracks_iter_mut()
+        .enumerate()
+        .for_each(|(track_idx, trak)| {
+            let mut stbl = trak
+                .media()
+                .and_then(|mdia| mdia.media_information())
+                .and_then(|minf| minf.sample_table())
+                .unwrap();
+            let stco = stbl.chunk_offset_mut().unwrap();
+            let chunk_offsets = std::mem::replace(&mut chunk_offsets[track_idx], Vec::new());
+            stco.chunk_offsets = ChunkOffsets::from(chunk_offsets);
+        });
 
     // Open output file for writing
     let output_file = create_output_file(output_name).await?;

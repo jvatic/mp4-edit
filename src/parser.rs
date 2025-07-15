@@ -522,7 +522,8 @@ impl Metadata {
                     time_to_sample,
                 ))
             })() {
-                let builder = ChunkOffsetBuilder::new(stsc, stsz);
+                let mut builder = ChunkOffsetBuilder::with_capacity(1);
+                builder.add_track(stsc, stsz);
                 parser.tracks.push(trak);
                 parser.chunk_offsets.push(stco);
                 parser.sample_to_chunk.push(stsc.entries.inner());
