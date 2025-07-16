@@ -115,7 +115,7 @@ async fn main() -> anyhow::Result<()> {
                 .and_then(|minf| minf.sample_table())
                 .unwrap();
             let stco = stbl.chunk_offset_mut().unwrap();
-            let chunk_offsets = std::mem::replace(&mut chunk_offsets[track_idx], Vec::new());
+            let chunk_offsets = std::mem::take(&mut chunk_offsets[track_idx]);
             stco.chunk_offsets = ChunkOffsets::from(chunk_offsets);
         });
 

@@ -61,7 +61,7 @@ async fn extract_leaf_atoms(input_path: &str, output_dir: &str) -> Result<()> {
         // Check if this is a leaf atom (no children)
         if atom.children.is_empty() {
             // Skip container atoms even if they have no children
-            if !is_container_atom(&*atom.header.atom_type) {
+            if !is_container_atom(&atom.header.atom_type) {
                 extract_single_atom(atom, &original_data, output_dir).await?;
                 leaf_count += 1;
                 total_size += atom.header.atom_size();
@@ -133,15 +133,15 @@ async fn extract_single_atom(atom: &Atom, original_data: &[u8], output_dir: &str
 /// Print usage information
 fn print_usage(program_name: &str) {
     eprintln!("Usage: {} <input_mp4> [output_dir]", program_name);
-    eprintln!("");
+    eprintln!();
     eprintln!("Arguments:");
     eprintln!("  input_mp4   Path to the MP4 file to extract atoms from");
     eprintln!("  output_dir  Directory to write extracted atoms to (default: current directory)");
-    eprintln!("");
+    eprintln!();
     eprintln!("Examples:");
     eprintln!("  {} video.mp4", program_name);
     eprintln!("  {} video.mp4 ./atoms", program_name);
-    eprintln!("");
+    eprintln!();
     eprintln!("This tool extracts leaf atoms from MP4 metadata and saves each atom");
     eprintln!("as a separate binary file (e.g., ilst.bin, chpl.bin) containing the");
     eprintln!("complete atom data including header and size information.");

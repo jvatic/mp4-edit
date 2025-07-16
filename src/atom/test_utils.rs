@@ -30,7 +30,7 @@ pub fn discover_test_files(atom_type: &str) -> Vec<String> {
             if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
                 if file_name.starts_with(atom_type) && file_name.ends_with(".bin") {
                     // Check if it matches the pattern {atom_type}{i:02}.bin
-                    let expected_prefix = format!("{}", atom_type);
+                    let expected_prefix = atom_type.to_string();
                     if file_name.len() == expected_prefix.len() + 6 // {i:02}.bin
                         && file_name[expected_prefix.len()..expected_prefix.len() + 2]
                             .chars()
@@ -163,7 +163,6 @@ where
 /// use mp4_parser::atom::test_utils::test_atom_roundtrip_sync;
 /// use mp4_parser::atom::ilst::{ItemListAtom, ILST};
 ///
-/// #[test]
 /// fn test_ilst_roundtrip() {
 ///     test_atom_roundtrip_sync::<ItemListAtom>(ILST);
 /// }
