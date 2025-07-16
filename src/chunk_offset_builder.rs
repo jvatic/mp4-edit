@@ -53,7 +53,7 @@ impl<'a> ChunkOffsetBuilderTrack<'a> {
                         (next_first_chunk - entry.first_chunk) * entry.samples_per_chunk;
 
                     // Process all chunks for this entry
-                    let track_index = track_index.clone();
+                    let track_index = *track_index;
                     Some((entry.first_chunk..next_first_chunk).scan(
                         (track_index, start_sample_index),
                         |(track_index, sample_index), chunk_num| {
@@ -79,7 +79,7 @@ impl<'a> ChunkOffsetBuilderTrack<'a> {
                                 );
                             *sample_index += entry.samples_per_chunk;
 
-                            let track_index = track_index.clone();
+                            let track_index = *track_index;
                             Some(ChunkInfo {
                                 track_index,
                                 chunk_number: chunk_num,
@@ -98,6 +98,12 @@ impl<'a> ChunkOffsetBuilderTrack<'a> {
 
 pub struct ChunkOffsetBuilder<'a> {
     tracks: Vec<ChunkOffsetBuilderTrack<'a>>,
+}
+
+impl<'a> Default for ChunkOffsetBuilder<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<'a> ChunkOffsetBuilder<'a> {
