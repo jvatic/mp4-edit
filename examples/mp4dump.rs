@@ -107,7 +107,7 @@ async fn print_atoms_from_stream<R: futures_io::AsyncRead + Unpin + Send>(
     let mut atom_count = 0;
     let mut first_atom = true;
 
-    let (_reader, metadata) = parser.parse_metadata().await?;
+    let metadata = parser.parse_metadata().await?;
 
     let mut track_bitrate = Vec::with_capacity(1);
     for trak in metadata.tracks_iter() {

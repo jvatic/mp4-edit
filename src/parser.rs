@@ -154,14 +154,14 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
         }
     }
 
-    pub async fn parse_metadata(mut self) -> Result<(Mp4Reader<R>, Metadata), ParseError> {
+    pub async fn parse_metadata(mut self) -> Result<Metadata<R>, ParseError> {
         let atoms = self.parse_metadata_inner(None).await?;
         let metadata_size = self
             .mdat
             .as_ref()
             .map(|mdat| mdat.offset)
             .unwrap_or_else(|| self.reader.current_offset);
-        Ok((self.reader, Metadata::new(atoms, metadata_size, self.mdat)))
+        Ok(Metadata::new(self.reader, atoms, metadata_size, self.mdat))
     }
 
     async fn parse_metadata_inner(
@@ -386,25 +386,32 @@ fn is_container_atom(atom_type: &[u8; 4]) -> bool {
     )
 }
 
-pub struct Metadata {
+pub struct Metadata<R> {
     atoms: Vec<Atom>,
     size: usize,
+    reader: Option<Mp4Reader<R>>,
     mdat: Option<AtomHeader>,
 }
 
-impl Clone for Metadata {
+impl<R> Clone for Metadata<R> {
     fn clone(&self) -> Self {
         Self {
             atoms: self.atoms.clone(),
             size: self.size,
+            reader: None,
             mdat: None,
         }
     }
 }
 
-impl Metadata {
-    fn new(atoms: Vec<Atom>, size: usize, mdat: Option<AtomHeader>) -> Self {
-        Self { atoms, size, mdat }
+impl<R> Metadata<R> {
+    fn new(reader: Mp4Reader<R>, atoms: Vec<Atom>, size: usize, mdat: Option<AtomHeader>) -> Self {
+        Self {
+            reader: Some(reader),
+            atoms,
+            size,
+            mdat,
+        }
     }
 
     /// Transforms into (reader, current_offset, atoms)
@@ -487,7 +494,12 @@ impl Metadata {
         self
     }
 
-    pub fn chunks(&mut self) -> Result<ChunkParser, ParseError> {
+    pub fn mdat_header(&self) -> Option<&AtomHeader> {
+        self.mdat.as_ref()
+    }
+
+    /// Parse chunks along with related metadata
+    pub fn chunks(&mut self) -> Result<ChunkParser<R>, ParseError> {
         let _ = self.mdat.take().ok_or_else(|| ParseError {
             kind: ParseErrorKind::InsufficientData,
             location: None,
@@ -496,7 +508,14 @@ impl Metadata {
             ),
         })?;
 
+        let reader = self.reader.take().ok_or_else(|| ParseError {
+            kind: ParseErrorKind::Io,
+            location: None,
+            source: Some(anyhow!("reader has already been consumed").into_boxed_dyn_error()),
+        })?;
+
         let mut parser = ChunkParser {
+            reader,
             tracks: Vec::new(),
             chunk_offsets: Vec::new(),
             sample_to_chunk: Vec::new(),
@@ -896,7 +915,8 @@ impl<'a> StblAtomRefMut<'a> {
     }
 }
 
-pub struct ChunkParser<'a> {
+pub struct ChunkParser<'a, R> {
+    reader: Mp4Reader<R>,
     /// Reference to each track's metadata
     tracks: Vec<TrakAtomRef<'a>>,
     /// Chunk offsets for each track
@@ -911,12 +931,9 @@ pub struct ChunkParser<'a> {
     chunk_info: Vec<VecDeque<ChunkInfo>>,
 }
 
-impl<'a> ChunkParser<'a> {
-    pub async fn read_next_chunk<R: AsyncRead + Unpin + Send>(
-        &mut self,
-        reader: &mut Mp4Reader<R>,
-    ) -> Result<Option<Chunk<'a>>, ParseError> {
-        let current_offset = reader.current_offset as u64;
+impl<'a, R: AsyncRead + Unpin + Send> ChunkParser<'a, R> {
+    pub async fn read_next_chunk(&mut self) -> Result<Option<Chunk<'a>>, ParseError> {
+        let current_offset = self.reader.current_offset as u64;
 
         let mut next_offset = None;
         let mut next_track_idx = 0;
@@ -941,13 +958,13 @@ impl<'a> ChunkParser<'a> {
             // Skip to the next chunk
             let bytes_to_skip = offset - current_offset;
             if bytes_to_skip > 0 {
-                reader.read_data(bytes_to_skip as usize).await?;
+                self.reader.read_data(bytes_to_skip as usize).await?;
             }
 
             let chunk_info = self.chunk_info[next_track_idx].pop_front().unwrap();
 
             // Read the chunk
-            self.read_chunk(reader, next_track_idx, next_chunk_idx, chunk_info)
+            self.read_chunk(next_track_idx, next_chunk_idx, chunk_info)
                 .await
                 .map(Some)
         } else {
@@ -956,9 +973,8 @@ impl<'a> ChunkParser<'a> {
         }
     }
 
-    async fn read_chunk<R: AsyncRead + Unpin + Send>(
-        &self,
-        reader: &mut Mp4Reader<R>,
+    async fn read_chunk(
+        &mut self,
         track_idx: usize,
         chunk_idx: usize,
         chunk_info: ChunkInfo,
@@ -984,7 +1000,7 @@ impl<'a> ChunkParser<'a> {
         let chunk_sample_sizes = chunk_info.sample_sizes.clone();
 
         // Read the chunk data
-        let data = reader.read_data(chunk_size as usize).await?;
+        let data = self.reader.read_data(chunk_size as usize).await?;
 
         // Get the sample durations slice for this chunk
         let sample_durations: Vec<u32> = time_to_sample

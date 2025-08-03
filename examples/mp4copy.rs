@@ -1,4 +1,4 @@
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use futures_util::io::{BufReader, BufWriter};
 use progress_bar::pb::ProgressBar;
 use std::env;
@@ -53,7 +53,7 @@ async fn main() -> anyhow::Result<()> {
     let parser = Parser::new(input_reader);
 
     // Parse metadata atoms from input
-    let (mut reader, metadata) = parser
+    let metadata = parser
         .parse_metadata()
         .await
         .context("Failed to parse metadata from input file")?;
@@ -141,11 +141,15 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("error writing mdat placeholder header")?;
 
+    if input_metadata.mdat_header().is_none() {
+        return Err(anyhow!("mdat atom not found"));
+    }
+
     // Copy and write sample data
     let mut chunk_idx = 0;
     let mut sample_idx = 0;
     let mut chunk_parser = input_metadata.chunks()?;
-    while let Some(chunk) = chunk_parser.read_next_chunk(&mut reader).await? {
+    while let Some(chunk) = chunk_parser.read_next_chunk().await? {
         for (i, sample) in chunk.samples().enumerate() {
             let data = sample.data.to_vec();
 
