@@ -212,7 +212,7 @@ mod tests {
 
     /// Test round-trip for all available mdhd test data files
     #[test]
-    fn test_ftyp_roundtrip() {
+    fn test_mdhd_roundtrip() {
         test_atom_roundtrip_sync::<MediaHeaderAtom>(MDHD);
     }
 }

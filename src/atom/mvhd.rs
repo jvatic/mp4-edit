@@ -363,7 +363,7 @@ mod tests {
 
     /// Test round-trip for all available mvhd test data files
     #[test]
-    fn test_ftyp_roundtrip() {
+    fn test_mvhd_roundtrip() {
         test_atom_roundtrip_sync::<MovieHeaderAtom>(MVHD);
     }
 }

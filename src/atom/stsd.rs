@@ -615,7 +615,7 @@ mod tests {
 
     /// Test round-trip for all available stsd test data files
     #[test]
-    fn test_ftyp_roundtrip() {
+    fn test_stsd_roundtrip() {
         test_atom_roundtrip_sync::<SampleDescriptionTableAtom>(STSD);
     }
 }

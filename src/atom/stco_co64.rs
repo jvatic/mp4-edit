@@ -193,7 +193,7 @@ mod tests {
 
     /// Test round-trip for all available stco/co64 test data files
     #[test]
-    fn test_ftyp_roundtrip() {
+    fn test_stco_co64_roundtrip() {
         test_atom_roundtrip_sync::<ChunkOffsetAtom>(STCO);
         test_atom_roundtrip_sync::<ChunkOffsetAtom>(CO64);
     }

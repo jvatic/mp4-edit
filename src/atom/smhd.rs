@@ -115,7 +115,7 @@ mod tests {
 
     /// Test round-trip for all available smhd test data files
     #[test]
-    fn test_ftyp_roundtrip() {
+    fn test_smhd_roundtrip() {
         test_atom_roundtrip_sync::<SoundMediaHeaderAtom>(SMHD);
     }
 }
