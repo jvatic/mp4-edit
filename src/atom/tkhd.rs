@@ -337,7 +337,7 @@ mod tests {
 
     /// Test round-trip for all available tkhd test data files
     #[test]
-    fn test_ftyp_roundtrip() {
+    fn test_tkhd_roundtrip() {
         test_atom_roundtrip_sync::<TrackHeaderAtom>(TKHD);
     }
 }

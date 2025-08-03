@@ -173,7 +173,7 @@ mod tests {
 
     /// Test round-trip for all available stts test data files
     #[test]
-    fn test_ftyp_roundtrip() {
+    fn test_stts_roundtrip() {
         test_atom_roundtrip_sync::<TimeToSampleAtom>(STTS);
     }
 }

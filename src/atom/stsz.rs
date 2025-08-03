@@ -223,7 +223,7 @@ mod tests {
 
     /// Test round-trip for all available stsz test data files
     #[test]
-    fn test_ftyp_roundtrip() {
+    fn test_stsz_roundtrip() {
         test_atom_roundtrip_sync::<SampleSizeAtom>(STSZ);
     }
 }

@@ -512,7 +512,7 @@ mod tests {
 
     /// Test round-trip for all available hdlr test data files
     #[test]
-    fn test_ftyp_roundtrip() {
+    fn test_hdlr_roundtrip() {
         test_atom_roundtrip_sync::<HandlerReferenceAtom>(HDLR);
     }
 }

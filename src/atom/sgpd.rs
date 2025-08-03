@@ -255,7 +255,7 @@ mod tests {
 
     /// Test round-trip for all available sgpd test data files
     #[test]
-    fn test_ftyp_roundtrip() {
+    fn test_sgpd_roundtrip() {
         test_atom_roundtrip_sync::<SampleGroupDescriptionAtom>(SGPD);
     }
 }
