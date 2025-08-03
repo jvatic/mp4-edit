@@ -117,6 +117,30 @@ where
 
     // Compare the original and re-encoded data
     if atom_data.len() != re_encoded.len() {
+        println!("=== DEBUG: Round-trip length mismatch ===");
+        println!("File: {}", file_path);
+        println!("Original length: {}", atom_data.len());
+        println!("Re-encoded length: {}", re_encoded.len());
+        println!(
+            "Original data (first 64 bytes): {:02X?}",
+            &atom_data[..atom_data.len().min(64)]
+        );
+        println!(
+            "Re-encoded data (first 64 bytes): {:02X?}",
+            &re_encoded[..re_encoded.len().min(64)]
+        );
+        if atom_data.len() > 64 {
+            println!(
+                "Original data (last 32 bytes): {:02X?}",
+                &atom_data[atom_data.len().saturating_sub(32)..]
+            );
+        }
+        if re_encoded.len() > 64 {
+            println!(
+                "Re-encoded data (last 32 bytes): {:02X?}",
+                &re_encoded[re_encoded.len().saturating_sub(32)..]
+            );
+        }
         panic!(
             "Round-trip length mismatch for {}: original={}, re-encoded={}",
             file_path,
