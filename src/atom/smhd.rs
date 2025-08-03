@@ -6,6 +6,7 @@ use crate::{
     atom::{util::async_to_sync_read, FourCC},
     parser::Parse,
     writer::SerializeAtom,
+    ParseError,
 };
 
 pub const SMHD: &[u8; 4] = b"smhd";
@@ -27,11 +28,11 @@ impl Parse for SoundMediaHeaderAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,
-    ) -> Result<Self, anyhow::Error> {
+    ) -> Result<Self, ParseError> {
         if atom_type != SMHD {
-            return Err(anyhow!("Invalid atom type: {}", atom_type));
+            return Err(ParseError::new_unexpected_atom(atom_type, SMHD));
         }
-        parse_smhd_data(async_to_sync_read(reader).await?)
+        parse_smhd_data(async_to_sync_read(reader).await?).map_err(ParseError::new_atom_parse)
     }
 }
 

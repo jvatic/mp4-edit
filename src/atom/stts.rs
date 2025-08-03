@@ -10,6 +10,7 @@ use crate::{
     },
     parser::Parse,
     writer::SerializeAtom,
+    ParseError,
 };
 
 pub const STTS: &[u8; 4] = b"stts";
@@ -63,12 +64,12 @@ impl Parse for TimeToSampleAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,
-    ) -> Result<Self, anyhow::Error> {
+    ) -> Result<Self, ParseError> {
         if atom_type != STTS {
-            return Err(anyhow!("Invalid atom type: {} (expected stts)", atom_type));
+            return Err(ParseError::new_unexpected_atom(atom_type, STTS));
         }
         let mut cursor = async_to_sync_read(reader).await?;
-        parse_stts_data(&mut cursor)
+        parse_stts_data(&mut cursor).map_err(ParseError::new_atom_parse)
     }
 }
 

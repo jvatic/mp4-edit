@@ -6,6 +6,7 @@ use crate::{
     atom::util::{async_to_sync_read, FourCC},
     parser::Parse,
     writer::SerializeAtom,
+    ParseError,
 };
 
 pub const DREF: &[u8; 4] = b"dref";
@@ -82,14 +83,11 @@ impl Parse for DataReferenceAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,
-    ) -> Result<Self, anyhow::Error> {
+    ) -> Result<Self, ParseError> {
         if atom_type != DREF {
-            return Err(anyhow!(
-                "Invalid atom type: expected dref, got {}",
-                atom_type
-            ));
+            return Err(ParseError::new_unexpected_atom(atom_type, DREF));
         }
-        parse_dref_data(async_to_sync_read(reader).await?)
+        parse_dref_data(async_to_sync_read(reader).await?).map_err(ParseError::new_atom_parse)
     }
 }
 

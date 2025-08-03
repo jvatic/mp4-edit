@@ -6,6 +6,7 @@ use crate::{
     atom::util::{async_to_sync_read, FourCC},
     parser::Parse,
     writer::SerializeAtom,
+    ParseError,
 };
 
 pub const FTYP: &[u8; 4] = b"ftyp";
@@ -36,14 +37,11 @@ impl Parse for FileTypeAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,
-    ) -> Result<Self, anyhow::Error> {
+    ) -> Result<Self, ParseError> {
         if atom_type != FTYP {
-            return Err(anyhow!(
-                "Invalid atom type: expected ftyp, got {}",
-                atom_type
-            ));
+            return Err(ParseError::new_unexpected_atom(atom_type, FTYP));
         }
-        parse_ftyp_data(async_to_sync_read(reader).await?)
+        parse_ftyp_data(async_to_sync_read(reader).await?).map_err(ParseError::new_atom_parse)
     }
 }
 

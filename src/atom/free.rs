@@ -1,12 +1,12 @@
-use anyhow::anyhow;
 use futures_io::AsyncRead;
 use futures_util::AsyncReadExt;
 use std::fmt;
 
 use crate::{
     atom::util::{DebugEllipsis, FourCC},
-    parser::Parse,
+    parser::{Parse, ParseErrorKind},
     writer::SerializeAtom,
+    ParseError,
 };
 
 pub const FREE: &[u8; 4] = b"free";
@@ -36,17 +36,21 @@ impl Parse for FreeAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         mut reader: R,
-    ) -> Result<Self, anyhow::Error> {
+    ) -> Result<Self, ParseError> {
         // Verify this is a free or skip atom
-        if atom_type != FREE && atom_type != SKIP {
-            return Err(anyhow!(
-                "Invalid atom type: {} (expected 'free' or 'skip')",
-                atom_type
-            ));
+        if atom_type != FREE {
+            return Err(ParseError::new_unexpected_atom(atom_type, FREE));
         }
 
         let mut data = Vec::new();
-        reader.read_to_end(&mut data).await?;
+        reader
+            .read_to_end(&mut data)
+            .await
+            .map_err(|err| ParseError {
+                kind: ParseErrorKind::Io,
+                location: None,
+                source: Some(Box::new(err)),
+            })?;
         Ok(FreeAtom {
             atom_type,
             data_size: data.len(),

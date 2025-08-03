@@ -6,6 +6,7 @@ use crate::{
     atom::util::{async_to_sync_read, FourCC},
     parser::Parse,
     writer::SerializeAtom,
+    ParseError,
 };
 
 pub const TREF: &[u8; 4] = b"tref";
@@ -92,14 +93,11 @@ impl Parse for TrackReferenceAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,
-    ) -> Result<Self, anyhow::Error> {
+    ) -> Result<Self, ParseError> {
         if atom_type != TREF {
-            return Err(anyhow!(
-                "Invalid atom type: expected tref, got {}",
-                atom_type
-            ));
+            return Err(ParseError::new_unexpected_atom(atom_type, TREF));
         }
-        parse_tref_data(async_to_sync_read(reader).await?)
+        parse_tref_data(async_to_sync_read(reader).await?).map_err(ParseError::new_atom_parse)
     }
 }
 

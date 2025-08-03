@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use futures_io::AsyncRead;
 use std::io::{Cursor, Read};
 
@@ -6,6 +6,7 @@ use crate::{
     atom::util::{async_to_sync_read, FourCC},
     parser::Parse,
     writer::SerializeAtom,
+    ParseError,
 };
 
 pub const SBGP: &[u8; 4] = b"sbgp";
@@ -39,15 +40,12 @@ impl Parse for SampleToGroupAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,
-    ) -> Result<Self, anyhow::Error> {
+    ) -> Result<Self, ParseError> {
         if atom_type != SBGP {
-            return Err(anyhow!(
-                "Invalid atom type: {} (expected 'sbgp')",
-                atom_type
-            ));
+            return Err(ParseError::new_unexpected_atom(atom_type, SBGP));
         }
         let cursor = async_to_sync_read(reader).await?;
-        parse_sbgp_data(cursor.get_ref())
+        parse_sbgp_data(cursor.get_ref()).map_err(ParseError::new_atom_parse)
     }
 }
 

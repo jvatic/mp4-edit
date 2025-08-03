@@ -13,6 +13,7 @@ use crate::{
     },
     parser::Parse,
     writer::SerializeAtom,
+    ParseError,
 };
 
 pub const CHPL: &[u8; 4] = b"chpl";
@@ -56,11 +57,11 @@ impl Parse for ChapterListAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,
-    ) -> Result<Self, anyhow::Error> {
+    ) -> Result<Self, ParseError> {
         if atom_type != CHPL {
-            return Err(anyhow!("Invalid atom type: {} (expected chpl)", atom_type));
+            return Err(ParseError::new_unexpected_atom(atom_type, CHPL));
         }
-        parse_chpl_data(async_to_sync_read(reader).await?)
+        parse_chpl_data(async_to_sync_read(reader).await?).map_err(ParseError::new_atom_parse)
     }
 }
 

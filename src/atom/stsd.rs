@@ -13,6 +13,7 @@ use crate::{
     },
     parser::Parse,
     writer::SerializeAtom,
+    ParseError,
 };
 
 mod extension;
@@ -173,11 +174,11 @@ impl Parse for SampleDescriptionTableAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,
-    ) -> Result<Self, anyhow::Error> {
+    ) -> Result<Self, ParseError> {
         if atom_type != STSD {
-            return Err(anyhow!("Invalid atom type: {}", atom_type));
+            return Err(ParseError::new_unexpected_atom(atom_type, STSD));
         }
-        parse_stsd_data(async_to_sync_read(reader).await?)
+        parse_stsd_data(async_to_sync_read(reader).await?).map_err(ParseError::new_atom_parse)
     }
 }
 
