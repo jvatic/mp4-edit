@@ -10,6 +10,7 @@ use crate::{
     },
     parser::Parse,
     writer::SerializeAtom,
+    ParseError,
 };
 
 pub const STSC: &[u8; 4] = b"stsc";
@@ -67,12 +68,12 @@ impl Parse for SampleToChunkAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,
-    ) -> Result<Self, anyhow::Error> {
+    ) -> Result<Self, ParseError> {
         if atom_type != STSC {
-            return Err(anyhow!("Invalid atom type: {} (expected stsc)", atom_type));
+            return Err(ParseError::new_unexpected_atom(atom_type, STSC));
         }
         let mut cursor = async_to_sync_read(reader).await?;
-        parse_stsc_data(&mut cursor)
+        parse_stsc_data(&mut cursor).map_err(ParseError::new_atom_parse)
     }
 }
 

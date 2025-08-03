@@ -51,7 +51,7 @@ pub trait Parse: Sized {
     fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,
-    ) -> impl Future<Output = Result<Self, anyhow::Error>> + Send;
+    ) -> impl Future<Output = Result<Self, ParseError>> + Send;
 }
 
 #[derive(Debug, Error)]
@@ -62,15 +62,16 @@ pub trait Parse: Sized {
 )]
 pub struct ParseError {
     /// The kind of error that occurred during parsing.
-    kind: ParseErrorKind,
+    pub(crate) kind: ParseErrorKind,
     /// location is the (offset, length) of the input data related to the error
-    location: Option<(usize, usize)>,
+    pub(crate) location: Option<(usize, usize)>,
     /// The source error that caused this error.
     #[source]
-    source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    pub(crate) source: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
 
 #[derive(Debug, Display)]
+#[non_exhaustive]
 pub enum ParseErrorKind {
     #[display("I/O error")]
     Io,
@@ -82,10 +83,31 @@ pub enum ParseErrorKind {
     InvalidSize,
     #[display("Unsupported atom type")]
     UnsupportedAtom,
+    #[display("Unexpected atom type")]
+    UnexpectedAtom,
     #[display("Atom parsing failed")]
     AtomParsing,
     #[display("Insufficient data")]
     InsufficientData,
+}
+
+impl ParseError {
+    pub(crate) fn new_unexpected_atom(atom_type: FourCC, expected: &[u8; 4]) -> Self {
+        let expected = FourCC::from(*expected);
+        Self {
+            kind: ParseErrorKind::UnexpectedAtom,
+            location: Some((0, 4)),
+            source: Some(anyhow!("expected {expected}, got {atom_type}").into_boxed_dyn_error()),
+        }
+    }
+
+    pub(crate) fn new_atom_parse(source: anyhow::Error) -> Self {
+        Self {
+            kind: ParseErrorKind::AtomParsing,
+            location: None,
+            source: Some(source.into_boxed_dyn_error()),
+        }
+    }
 }
 
 pub struct Mp4Reader<R> {
@@ -355,10 +377,16 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
             FREE | SKIP => FreeAtom::parse(atom_type, cursor).await.map(AtomData::from),
             fourcc => Ok(RawData::new(FourCC(*fourcc), cursor.get_ref().clone()).into()),
         }
-        .map_err(|e| ParseError {
+        .map_err(|err| ParseError {
             kind: ParseErrorKind::AtomParsing,
-            location: Some(header.location()),
-            source: Some(e.context(atom_type).into()),
+            location: Some(err.location.map_or_else(
+                || header.location(),
+                |(offset, size)| {
+                    let (header_offset, header_size) = header.location();
+                    (header_offset + offset, size.min(header_size))
+                },
+            )),
+            source: Some(anyhow::Error::from(err).context(atom_type).into()),
         })?;
 
         Ok(atom_data)
@@ -442,24 +470,22 @@ impl<R> Metadata<R> {
         self
     }
 
-    pub fn ftyp_mut<F>(&mut self, mut f: F) -> Result<(), anyhow::Error>
+    pub fn ftyp_mut<F>(&mut self, mut f: F) -> Option<()>
     where
         F: FnMut(&mut FileTypeAtom),
     {
         let ftyp = self
             .atoms
             .iter_mut()
-            .find(|a| a.header.atom_type == FTYP)
-            .ok_or_else(|| anyhow!("missing ftyp atom"))?
+            .find(|a| a.header.atom_type == FTYP)?
             .data
-            .as_mut()
-            .ok_or_else(|| anyhow!("missing ftyp data"))?;
+            .as_mut()?;
         if let AtomData::FileType(ftyp) = ftyp {
             f(ftyp);
         } else {
-            return Err(anyhow!("invalid ftyp data"));
+            return None;
         }
-        Ok(())
+        Some(())
     }
 
     /// Iterate through TRAK atoms

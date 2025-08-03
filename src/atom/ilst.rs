@@ -1,11 +1,11 @@
-use anyhow::anyhow;
-use anyhow::{bail, Result};
+use anyhow::bail;
 use core::fmt;
 use derive_more::Deref;
 use futures_io::AsyncRead;
 use std::io::Read;
 
 use crate::atom::util::DebugEllipsis;
+use crate::ParseError;
 use crate::{
     atom::{util::async_to_sync_read, FourCC},
     parser::Parse,
@@ -77,11 +77,14 @@ pub struct ItemListAtom {
 }
 
 impl Parse for ItemListAtom {
-    async fn parse<R: AsyncRead + Unpin + Send>(atom_type: FourCC, reader: R) -> Result<Self> {
+    async fn parse<R: AsyncRead + Unpin + Send>(
+        atom_type: FourCC,
+        reader: R,
+    ) -> Result<Self, ParseError> {
         if atom_type != ILST {
-            return Err(anyhow!("Invalid atom type: {}", atom_type));
+            return Err(ParseError::new_unexpected_atom(atom_type, ILST));
         }
-        parse_ilst_data(async_to_sync_read(reader).await?)
+        parse_ilst_data(async_to_sync_read(reader).await?).map_err(ParseError::new_atom_parse)
     }
 }
 
@@ -121,7 +124,7 @@ impl SerializeAtom for ItemListAtom {
     }
 }
 
-fn parse_ilst_data<R: std::io::Read>(mut reader: R) -> Result<ItemListAtom> {
+fn parse_ilst_data<R: std::io::Read>(mut reader: R) -> anyhow::Result<ItemListAtom> {
     let mut items = Vec::new();
 
     loop {
@@ -189,7 +192,7 @@ fn parse_ilst_data<R: std::io::Read>(mut reader: R) -> Result<ItemListAtom> {
     Ok(ItemListAtom { items })
 }
 
-fn parse_data_atom<R: Read>(reader: &mut R, size: u64) -> Result<DataAtom> {
+fn parse_data_atom<R: Read>(reader: &mut R, size: u64) -> anyhow::Result<DataAtom> {
     if size < 8 {
         bail!("Data atom too small");
     }
@@ -206,25 +209,25 @@ fn parse_data_atom<R: Read>(reader: &mut R, size: u64) -> Result<DataAtom> {
     })
 }
 
-fn read_u32<R: Read>(reader: &mut R) -> Result<u32> {
+fn read_u32<R: Read>(reader: &mut R) -> anyhow::Result<u32> {
     let mut buf = [0u8; 4];
     reader.read_exact(&mut buf)?;
     Ok(u32::from_be_bytes(buf))
 }
 
-fn read_u64<R: Read>(reader: &mut R) -> Result<u64> {
+fn read_u64<R: Read>(reader: &mut R) -> anyhow::Result<u64> {
     let mut buf = [0u8; 8];
     reader.read_exact(&mut buf)?;
     Ok(u64::from_be_bytes(buf))
 }
 
-fn read_fourcc<R: Read>(reader: &mut R) -> Result<FourCC> {
+fn read_fourcc<R: Read>(reader: &mut R) -> anyhow::Result<FourCC> {
     let mut buf = [0u8; 4];
     reader.read_exact(&mut buf)?;
     Ok(FourCC::from(buf))
 }
 
-fn read_bytes<R: Read>(reader: &mut R, count: usize) -> Result<Vec<u8>> {
+fn read_bytes<R: Read>(reader: &mut R, count: usize) -> anyhow::Result<Vec<u8>> {
     let mut buf = vec![0u8; count];
     reader.read_exact(&mut buf)?;
     Ok(buf)

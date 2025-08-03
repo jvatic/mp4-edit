@@ -10,6 +10,7 @@ use crate::{
     },
     parser::Parse,
     writer::SerializeAtom,
+    ParseError,
 };
 
 pub const STCO: &[u8; 4] = b"stco";
@@ -72,20 +73,17 @@ impl Parse for ChunkOffsetAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,
-    ) -> Result<Self, anyhow::Error> {
+    ) -> Result<Self, ParseError> {
         let is_64bit = if atom_type == STCO {
             false
         } else if atom_type == CO64 {
             true
         } else {
-            return Err(anyhow!(
-                "Invalid atom type: {} (expected stco or co64)",
-                atom_type
-            ));
+            return Err(ParseError::new_unexpected_atom(atom_type, STCO));
         };
 
         let cursor = async_to_sync_read(reader).await?;
-        parse_stco_data(cursor, is_64bit)
+        parse_stco_data(cursor, is_64bit).map_err(ParseError::new_atom_parse)
     }
 }
 

@@ -6,6 +6,7 @@ use crate::{
     atom::{util::async_to_sync_read, FourCC},
     parser::Parse,
     writer::SerializeAtom,
+    ParseError,
 };
 
 pub const GMHD: &[u8; 4] = b"gmhd";
@@ -26,11 +27,11 @@ impl Parse for GenericMediaHeaderAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,
-    ) -> Result<Self, anyhow::Error> {
+    ) -> Result<Self, ParseError> {
         if atom_type != GMHD {
-            return Err(anyhow!("Invalid atom type: {}", atom_type));
+            return Err(ParseError::new_unexpected_atom(atom_type, GMHD));
         }
-        parse_gmhd_data(async_to_sync_read(reader).await?)
+        parse_gmhd_data(async_to_sync_read(reader).await?).map_err(ParseError::new_atom_parse)
     }
 }
 
