@@ -46,11 +46,11 @@ use crate::writer::SerializeAtom;
 
 pub use self::{
     chpl::ChapterListAtom, dref::DataReferenceAtom, elst::EditListAtom, free::FreeAtom,
-    ftyp::FileTypeAtom, gmhd::GenericMediaHeaderAtom, hdlr::HandlerReferenceAtom,
-    ilst::ItemListAtom, mdhd::MediaHeaderAtom, mvhd::MovieHeaderAtom, sbgp::SampleToGroupAtom,
-    sgpd::SampleGroupDescriptionAtom, smhd::SoundMediaHeaderAtom, stco_co64::ChunkOffsetAtom,
-    stsc::SampleToChunkAtom, stsd::SampleDescriptionTableAtom, stsz::SampleSizeAtom,
-    stts::TimeToSampleAtom, tkhd::TrackHeaderAtom, tref::TrackReferenceAtom, util::FourCC,
+    ftyp::FileTypeAtom, hdlr::HandlerReferenceAtom, ilst::ItemListAtom, mdhd::MediaHeaderAtom,
+    mvhd::MovieHeaderAtom, sbgp::SampleToGroupAtom, sgpd::SampleGroupDescriptionAtom,
+    smhd::SoundMediaHeaderAtom, stco_co64::ChunkOffsetAtom, stsc::SampleToChunkAtom,
+    stsd::SampleDescriptionTableAtom, stsz::SampleSizeAtom, stts::TimeToSampleAtom,
+    tkhd::TrackHeaderAtom, tref::TrackReferenceAtom, util::FourCC,
 };
 
 #[derive(Clone)]
@@ -173,7 +173,6 @@ pub enum AtomData {
     EditList(EditListAtom),
     MediaHeader(MediaHeaderAtom),
     HandlerReference(HandlerReferenceAtom),
-    GenericMediaHeader(GenericMediaHeaderAtom),
     ItemList(ItemListAtom),
     SoundMediaHeader(SoundMediaHeaderAtom),
     SampleDescriptionTable(SampleDescriptionTableAtom),
@@ -224,12 +223,6 @@ impl From<MediaHeaderAtom> for AtomData {
 impl From<HandlerReferenceAtom> for AtomData {
     fn from(atom: HandlerReferenceAtom) -> Self {
         AtomData::HandlerReference(atom)
-    }
-}
-
-impl From<GenericMediaHeaderAtom> for AtomData {
-    fn from(atom: GenericMediaHeaderAtom) -> Self {
-        AtomData::GenericMediaHeader(atom)
     }
 }
 
@@ -327,7 +320,6 @@ impl SerializeAtom for AtomData {
             EditList(atom) => atom.atom_type(),
             MediaHeader(atom) => atom.atom_type(),
             HandlerReference(atom) => atom.atom_type(),
-            GenericMediaHeader(atom) => atom.atom_type(),
             ItemList(atom) => atom.atom_type(),
             SoundMediaHeader(atom) => atom.atom_type(),
             SampleDescriptionTable(atom) => atom.atom_type(),
@@ -354,7 +346,6 @@ impl SerializeAtom for AtomData {
             EditList(atom) => atom.into_body_bytes(),
             MediaHeader(atom) => atom.into_body_bytes(),
             HandlerReference(atom) => atom.into_body_bytes(),
-            GenericMediaHeader(atom) => atom.into_body_bytes(),
             ItemList(atom) => atom.into_body_bytes(),
             SoundMediaHeader(atom) => atom.into_body_bytes(),
             SampleDescriptionTable(atom) => atom.into_body_bytes(),

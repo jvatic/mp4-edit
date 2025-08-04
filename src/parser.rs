@@ -24,7 +24,6 @@ use crate::{
         elst::{EditListAtom, ELST},
         free::{FreeAtom, FREE, SKIP},
         ftyp::{FileTypeAtom, FTYP},
-        gmhd::{GenericMediaHeaderAtom, GMHD},
         hdlr::{HandlerReferenceAtom, HDLR},
         ilst::{ItemListAtom, ILST},
         mdhd::{MediaHeaderAtom, MDHD},
@@ -330,9 +329,6 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
                 .await
                 .map(AtomData::from),
             HDLR => HandlerReferenceAtom::parse(atom_type, cursor)
-                .await
-                .map(AtomData::from),
-            GMHD => GenericMediaHeaderAtom::parse(atom_type, cursor)
                 .await
                 .map(AtomData::from),
             SMHD => SoundMediaHeaderAtom::parse(atom_type, cursor)
