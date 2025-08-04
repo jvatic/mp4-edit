@@ -103,6 +103,10 @@ pub struct HandlerReferenceAtom {
     pub component_flags_mask: u32,
     /// Human-readable name of the handler (null-terminated string)
     pub name: String,
+    /// Whether the original name was encoded as a null byte
+    name_extra_null_byte: bool,
+    /// Whether the original name was encoded as a Pascal string
+    name_is_pascal_string: bool,
 }
 
 impl Parse for HandlerReferenceAtom {
@@ -170,8 +174,14 @@ fn parse_hdlr_data<R: Read>(mut reader: R) -> Result<HandlerReferenceAtom, anyho
         .read_to_end(&mut name_bytes)
         .context("read handler name")?;
 
-    // Parse the name string
-    let name = parse_handler_name(&name_bytes)?;
+    // Parse the name string and detect format
+    let (name, name_is_pascal_string) = parse_handler_name_with_format(&name_bytes)?;
+
+    // Empty names can end with two null bytes (00 00)
+    let extra_null_byte = !name_is_pascal_string
+        && name.is_empty()
+        && name_bytes.len() >= 2
+        && name_bytes[name_bytes.len() - 2..] == [0, 0];
 
     Ok(HandlerReferenceAtom {
         version,
@@ -182,12 +192,14 @@ fn parse_hdlr_data<R: Read>(mut reader: R) -> Result<HandlerReferenceAtom, anyho
         component_flags,
         component_flags_mask,
         name,
+        name_extra_null_byte: extra_null_byte,
+        name_is_pascal_string,
     })
 }
 
-fn parse_handler_name(name_bytes: &[u8]) -> Result<String, anyhow::Error> {
+fn parse_handler_name_with_format(name_bytes: &[u8]) -> Result<(String, bool), anyhow::Error> {
     if name_bytes.is_empty() {
-        return Ok(String::new());
+        return Ok((String::new(), false));
     }
 
     // The name can be either:
@@ -195,14 +207,19 @@ fn parse_handler_name(name_bytes: &[u8]) -> Result<String, anyhow::Error> {
     // 2. A C string (null-terminated)
     // 3. Just raw string data
 
-    let name_str = if name_bytes.len() > 1 && name_bytes[0] as usize == name_bytes.len() - 1 {
+    let (name_str, is_pascal) = if name_bytes.len() > 1
+        && name_bytes[0] as usize == name_bytes.len() - 1
+    {
         // Pascal string format
         let length = name_bytes[0] as usize;
         if length > 0 && length < name_bytes.len() {
-            std::str::from_utf8(&name_bytes[1..=length])
-                .context("invalid UTF-8 in Pascal string")?
+            (
+                std::str::from_utf8(&name_bytes[1..=length])
+                    .context("invalid UTF-8 in Pascal string")?,
+                true,
+            )
         } else {
-            ""
+            ("", true)
         }
     } else {
         // Try to find null terminator
@@ -210,10 +227,13 @@ fn parse_handler_name(name_bytes: &[u8]) -> Result<String, anyhow::Error> {
             .iter()
             .position(|&b| b == 0)
             .unwrap_or(name_bytes.len());
-        std::str::from_utf8(&name_bytes[..end_pos]).context("invalid UTF-8 in handler name")?
+        (
+            std::str::from_utf8(&name_bytes[..end_pos]).context("invalid UTF-8 in handler name")?,
+            false,
+        )
     };
 
-    Ok(name_str.to_string())
+    Ok((name_str.to_string(), is_pascal))
 }
 
 impl SerializeAtom for HandlerReferenceAtom {
@@ -246,9 +266,22 @@ impl SerializeAtom for HandlerReferenceAtom {
         // Component flags mask (4 bytes)
         data.extend_from_slice(&self.component_flags_mask.to_be_bytes());
 
-        // Handler name (null-terminated string)
-        data.extend_from_slice(self.name.as_bytes());
-        data.push(0); // Null terminator
+        // Handler name - format depends on original encoding
+        if self.name_is_pascal_string {
+            // Pascal string format: length byte followed by string data
+            let name_bytes = self.name.as_bytes();
+            data.push(name_bytes.len() as u8);
+            data.extend_from_slice(name_bytes);
+        } else {
+            // Null-terminated string format
+            data.extend_from_slice(self.name.as_bytes());
+            data.push(0); // Null terminator
+
+            // Add extra null byte if flag is set
+            if self.name_extra_null_byte {
+                data.push(0);
+            }
+        }
 
         data
     }
@@ -289,7 +322,7 @@ mod tests {
     fn test_parse_handler_name_pascal() {
         // Pascal string: length byte followed by string
         let pascal_name = b"\x0CHello World!";
-        let result = parse_handler_name(pascal_name).unwrap();
+        let result = parse_handler_name_with_format(pascal_name).unwrap().0;
         assert_eq!(result, "Hello World!");
     }
 
@@ -297,7 +330,7 @@ mod tests {
     fn test_parse_handler_name_null_terminated() {
         // C-style null-terminated string
         let c_name = b"Hello World!\0";
-        let result = parse_handler_name(c_name).unwrap();
+        let result = parse_handler_name_with_format(c_name).unwrap().0;
         assert_eq!(result, "Hello World!");
     }
 
@@ -305,14 +338,14 @@ mod tests {
     fn test_parse_handler_name_raw() {
         // Raw string without null terminator
         let raw_name = b"Hello World!";
-        let result = parse_handler_name(raw_name).unwrap();
+        let result = parse_handler_name_with_format(raw_name).unwrap().0;
         assert_eq!(result, "Hello World!");
     }
 
     #[test]
     fn test_parse_handler_name_empty() {
         let empty_name = b"";
-        let result = parse_handler_name(empty_name).unwrap();
+        let result = parse_handler_name_with_format(empty_name).unwrap().0;
         assert_eq!(result, "");
     }
 
@@ -328,6 +361,8 @@ mod tests {
             component_flags: 0,
             component_flags_mask: 0,
             name: "".to_string(), // Empty name is common
+            name_extra_null_byte: false,
+            name_is_pascal_string: false,
         };
 
         // Convert to bytes
@@ -392,6 +427,8 @@ mod tests {
             component_flags: 0,
             component_flags_mask: 0,
             name: "".to_string(),
+            name_extra_null_byte: false,
+            name_is_pascal_string: false,
         };
 
         let bytes: Vec<u8> = hdlr.into_body_bytes();
@@ -400,14 +437,14 @@ mod tests {
         let handler_type_offset = 8; // version(1) + flags(3) + component_type(4) = 8
         assert_eq!(
             &bytes[handler_type_offset..handler_type_offset + 4],
-            &[0x6D, 0x64, 0x69, 0x72] // 'mdir'
+            &[109, 100, 105, 114] // 'mdir'
         );
 
         // Check that component manufacturer is 'appl'
         let manufacturer_offset = 12; // handler_type is at offset 8, so manufacturer at 12
         assert_eq!(
             &bytes[manufacturer_offset..manufacturer_offset + 4],
-            &[0x61, 0x70, 0x70, 0x6C] // 'appl'
+            &[97, 112, 112, 108] // 'appl'
         );
     }
 
@@ -422,6 +459,8 @@ mod tests {
             component_flags: 0,
             component_flags_mask: 0,
             name: "Apple Metadata Handler".to_string(),
+            name_extra_null_byte: false,
+            name_is_pascal_string: false,
         };
 
         // Round trip test
@@ -482,6 +521,8 @@ mod tests {
             component_flags: 0,
             component_flags_mask: 0,
             name: "".to_string(),
+            name_extra_null_byte: false,
+            name_is_pascal_string: false,
         };
 
         // Convert to bytes and back
