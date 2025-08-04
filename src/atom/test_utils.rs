@@ -110,7 +110,7 @@ where
     let cursor = Cursor::new(atom_data);
     let parsed_atom = T::parse(fourcc, cursor)
         .await
-        .unwrap_or_else(|e| panic!("Failed to parse atom from {}: {}", file_path, e));
+        .unwrap_or_else(|e| panic!("Failed to parse atom from {}: {:#?}", file_path, e));
 
     // Serialize the atom back to bytes
     let re_encoded = parsed_atom.into_body_bytes();
@@ -158,7 +158,7 @@ where
     {
         if left != right {
             panic!(
-                "Round-trip failed for {} at range [{}..{}] (left.len()={}, right.len()={})\nOriginal: {:02X?}\nRe-encoded: {:02X?}",
+                "Round-trip failed for {} at range [{}..{}] (left.len()={}, right.len()={})\nOriginal:   {:02X?}\nRe-encoded: {:02X?}",
                 file_path,
                 i * CHUNK_SIZE,
                 ((i + 1) * CHUNK_SIZE).min(atom_data.len()),
