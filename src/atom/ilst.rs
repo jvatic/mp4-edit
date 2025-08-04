@@ -68,6 +68,8 @@ pub struct DataAtom {
 #[derive(Debug, Clone)]
 pub struct MetadataItem {
     pub item_type: FourCC,
+    pub mean: Option<Vec<u8>>,
+    pub name: Option<Vec<u8>>,
     pub data_atoms: Vec<DataAtom>,
 }
 
@@ -99,6 +101,20 @@ impl SerializeAtom for ItemListAtom {
         for item in self.items {
             // Calculate item data
             let mut item_data = Vec::new();
+
+            if let Some(mean_data) = &item.mean {
+                let mean_size = 8 + mean_data.len() as u32;
+                item_data.extend_from_slice(&mean_size.to_be_bytes());
+                item_data.extend_from_slice(b"mean");
+                item_data.extend_from_slice(mean_data);
+            }
+
+            if let Some(name_data) = &item.name {
+                let name_size = 8 + name_data.len() as u32;
+                item_data.extend_from_slice(&name_size.to_be_bytes());
+                item_data.extend_from_slice(b"name");
+                item_data.extend_from_slice(name_data);
+            }
 
             for data_atom in item.data_atoms {
                 let data: Vec<u8> = data_atom.data.to_bytes();
@@ -154,8 +170,9 @@ fn parse_ilst_data<R: std::io::Read>(mut reader: R) -> anyhow::Result<ItemListAt
         let item_data = read_bytes(&mut reader, remaining_size as usize)?;
         let mut item_reader = std::io::Cursor::new(&item_data);
 
-        // Parse data atoms within this item
         let mut data_atoms = Vec::new();
+        let mut mean_data = None;
+        let mut name_data = None;
 
         while item_reader.position() < item_data.len() as u64 {
             let data_size = match read_u32(&mut item_reader) {
@@ -174,17 +191,43 @@ fn parse_ilst_data<R: std::io::Read>(mut reader: R) -> anyhow::Result<ItemListAt
             };
 
             let atom_type = read_fourcc(&mut item_reader)?;
-            if atom_type != b"data" {
-                bail!("Expected 'data' atom, got '{}'", atom_type);
-            }
+            let remaining_atom_size = data_actual_size - if data_size == 1 { 16 } else { 8 };
 
-            let remaining_data_size = data_actual_size - if data_size == 1 { 16 } else { 8 };
-            let data_atom = parse_data_atom(&mut item_reader, remaining_data_size)?;
-            data_atoms.push(data_atom);
+            match atom_type.as_slice() {
+                b"data" => {
+                    let data_atom = parse_data_atom(&mut item_reader, remaining_atom_size)?;
+                    data_atoms.push(data_atom);
+                }
+                b"mean" => {
+                    // Parse mean atom (for ---- items)
+                    if item_type == b"----" {
+                        let mean_bytes =
+                            read_bytes(&mut item_reader, remaining_atom_size as usize)?;
+                        mean_data = Some(mean_bytes);
+                    } else {
+                        bail!("unexpected 'mean' atom in non-'----' item");
+                    }
+                }
+                b"name" => {
+                    // Parse name atom (for ---- items)
+                    if item_type == b"----" {
+                        let name_bytes =
+                            read_bytes(&mut item_reader, remaining_atom_size as usize)?;
+                        name_data = Some(name_bytes);
+                    } else {
+                        bail!("unexpected 'name' atom in non-'----' item");
+                    }
+                }
+                _ => {
+                    bail!("unexpected atom type '{atom_type}' in {item_type} item");
+                }
+            }
         }
 
         items.push(MetadataItem {
             item_type,
+            mean: mean_data,
+            name: name_data,
             data_atoms,
         });
     }
