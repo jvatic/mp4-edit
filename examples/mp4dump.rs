@@ -1,12 +1,11 @@
-use anyhow::Context;
 use std::env;
 use tokio::{
     fs,
-    io::{self, AsyncRead},
+    io::{self},
 };
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
-use mp4_parser::{atom::meta, Atom, AtomData, Parser};
+use mp4_parser::{atom::meta, parser::Metadata, Atom, AtomData, Parser};
 
 /// Format file size in human-readable format
 fn format_size(size: usize) -> String {
@@ -100,14 +99,9 @@ fn process_atom(atom: &Atom, indent: usize, atom_count: &mut usize) {
     }
 }
 
-/// Print atoms directly from hierarchical stream
-async fn print_atoms_from_stream<R: futures_io::AsyncRead + Unpin + Send>(
-    parser: Parser<R>,
-) -> anyhow::Result<usize> {
+async fn print_atoms(metadata: Metadata) -> anyhow::Result<usize> {
     let mut atom_count = 0;
     let mut first_atom = true;
-
-    let metadata = parser.parse_metadata().await?;
 
     let mut track_bitrate = Vec::with_capacity(1);
     for trak in metadata.tracks_iter() {
@@ -150,15 +144,6 @@ async fn print_atoms_from_stream<R: futures_io::AsyncRead + Unpin + Send>(
     Ok(atom_count)
 }
 
-async fn open_input(input_name: &str) -> anyhow::Result<Box<dyn AsyncRead + Unpin + Send>> {
-    if input_name == "-" {
-        Ok(Box::new(io::stdin()))
-    } else {
-        let file = fs::File::open(input_name).await?;
-        Ok(Box::new(file))
-    }
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -166,14 +151,23 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("Usage: {} <mp4_filename>", args[0]);
         std::process::exit(1);
     }
-    let file = open_input(args[1].as_str()).await?;
 
-    println!("\x1b[1;32m🎬 Analyzing MP4 file: {}\x1b[0m", &args[1]);
+    let input_name = args[1].as_str();
+    println!("\x1b[1;32m🎬 Analyzing MP4 file: {}\x1b[0m", input_name);
 
-    let parser = Parser::new(file.compat());
-    let atom_count = print_atoms_from_stream(parser)
-        .await
-        .context("Failed to parse MP4 file")?;
+    let atom_count = if input_name == "-" {
+        eprintln!("parsing as readonly");
+        let input = Box::new(io::stdin());
+        let parser = Parser::new(input.compat());
+        let metadata = parser.parse_metadata().await?.into_metadata();
+        print_atoms(metadata).await?
+    } else {
+        eprintln!("parsing as seekable");
+        let file = fs::File::open(input_name).await?;
+        let parser = Parser::new(file.compat());
+        let metadata = parser.parse_metadata_seek().await?.into_metadata();
+        print_atoms(metadata).await?
+    };
 
     // Print summary statistics
     println!("\x1b[1;33m📊 Summary:\x1b[0m");
