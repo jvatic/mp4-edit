@@ -1,11 +1,12 @@
 use anyhow::anyhow;
 use derive_more::Display;
-use futures_io::AsyncRead;
-use futures_util::io::{AsyncReadExt, Cursor};
+use futures_io::{AsyncRead, AsyncSeek};
+use futures_util::io::{AsyncReadExt, AsyncSeekExt, Cursor};
 use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
-use std::ops::Deref;
+use std::io::SeekFrom;
+use std::ops::{Deref, DerefMut};
 use thiserror::Error;
 
 use crate::atom::containers::{
@@ -124,6 +125,24 @@ impl<R: AsyncRead + Unpin + Send> Mp4Reader<R> {
         }
     }
 
+    async fn seek(&mut self, pos: SeekFrom) -> Result<(), ParseError>
+    where
+        R: AsyncSeek,
+    {
+        match self.reader.seek(pos).await {
+            Ok(offset) => {
+                self.current_offset = offset as usize;
+                self.peek_buffer = Vec::new();
+                Ok(())
+            }
+            Err(err) => Err(ParseError {
+                kind: ParseErrorKind::Io,
+                location: None,
+                source: Some(Box::new(err)),
+            }),
+        }
+    }
+
     async fn peek_exact(&mut self, buf: &mut [u8]) -> Result<(), ParseError> {
         let size = buf.len();
         if self.peek_buffer.len() < size {
@@ -175,14 +194,39 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
         }
     }
 
-    pub async fn parse_metadata(mut self) -> Result<Metadata<R>, ParseError> {
+    /// parses metadata atoms, both before and after mdat if moov isn't found before
+    pub async fn parse_metadata_seek(mut self) -> Result<MdatParser<R>, ParseError>
+    where
+        R: AsyncSeek,
+    {
+        let mut atoms = self.parse_metadata_inner(None).await?;
+        let mdat = match self.mdat.take() {
+            Some(mdat) if !atoms.iter().any(|a| a.header.atom_type == MOOV) => {
+                // moov is likely after mdat, so skip to the end of the mdat atom and parse any atoms there
+                self.reader
+                    .seek(SeekFrom::Current(mdat.data_size as i64))
+                    .await?;
+                let end_atoms = self.parse_metadata_inner(None).await?;
+                atoms.extend(end_atoms);
+                // and then return to where we were
+                self.reader
+                    .seek(SeekFrom::Start((mdat.offset + mdat.header_size) as u64))
+                    .await?;
+                Some(mdat)
+            }
+            mdat => mdat,
+        };
+        Ok(MdatParser::new(self.reader, Metadata::new(atoms), mdat))
+    }
+
+    /// parses metadata atoms until mdat found
+    pub async fn parse_metadata(mut self) -> Result<MdatParser<R>, ParseError> {
         let atoms = self.parse_metadata_inner(None).await?;
-        let metadata_size = self
-            .mdat
-            .as_ref()
-            .map(|mdat| mdat.offset)
-            .unwrap_or_else(|| self.reader.current_offset);
-        Ok(Metadata::new(self.reader, atoms, metadata_size, self.mdat))
+        Ok(MdatParser::new(
+            self.reader,
+            Metadata::new(atoms),
+            self.mdat,
+        ))
     }
 
     async fn parse_metadata_inner(
@@ -410,32 +454,141 @@ fn is_container_atom(atom_type: &[u8; 4]) -> bool {
     )
 }
 
-pub struct Metadata<R> {
-    atoms: Vec<Atom>,
-    size: usize,
+pub struct MdatParser<R> {
+    meta: Metadata,
     reader: Option<Mp4Reader<R>>,
     mdat: Option<AtomHeader>,
 }
 
-impl<R> Clone for Metadata<R> {
+impl<R> Clone for MdatParser<R> {
     fn clone(&self) -> Self {
         Self {
-            atoms: self.atoms.clone(),
-            size: self.size,
+            meta: self.meta.clone(),
             reader: None,
             mdat: None,
         }
     }
 }
 
-impl<R> Metadata<R> {
-    fn new(reader: Mp4Reader<R>, atoms: Vec<Atom>, size: usize, mdat: Option<AtomHeader>) -> Self {
+impl<R> Deref for MdatParser<R> {
+    type Target = Metadata;
+
+    fn deref(&self) -> &Self::Target {
+        &self.meta
+    }
+}
+
+impl<R> DerefMut for MdatParser<R> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.meta
+    }
+}
+
+impl<R> MdatParser<R> {
+    fn new(reader: Mp4Reader<R>, meta: Metadata, mdat: Option<AtomHeader>) -> Self {
         Self {
             reader: Some(reader),
-            atoms,
-            size,
+            meta,
             mdat,
         }
+    }
+
+    /// Discards the reader and returns just the metadata
+    pub fn into_metadata(self) -> Metadata {
+        self.meta
+    }
+
+    /// Retains only the metadata atoms that satisfy the predicate
+    /// (applies to top level and nested atoms)
+    pub fn atoms_flat_retain_mut<P>(mut self, pred: P) -> Self
+    where
+        P: FnMut(&mut Atom) -> bool,
+    {
+        self.meta = self.meta.atoms_flat_retain_mut(pred);
+        self
+    }
+
+    /// Retains only the TRAK atoms specified by the predicate
+    pub fn tracks_retain<P>(mut self, pred: P) -> Self
+    where
+        P: FnMut(TrakAtomRef) -> bool,
+    {
+        self.meta = self.meta.tracks_retain(pred);
+        self
+    }
+
+    pub fn mdat_header(&self) -> Option<&AtomHeader> {
+        self.mdat.as_ref()
+    }
+
+    /// Parse chunks along with related metadata
+    pub fn chunks(&mut self) -> Result<ChunkParser<R>, ParseError> {
+        let _ = self.mdat.take().ok_or_else(|| ParseError {
+            kind: ParseErrorKind::InsufficientData,
+            location: None,
+            source: Some(
+                anyhow!("mdat atom is missing or has already been consumed").into_boxed_dyn_error(),
+            ),
+        })?;
+
+        let reader = self.reader.take().ok_or_else(|| ParseError {
+            kind: ParseErrorKind::Io,
+            location: None,
+            source: Some(anyhow!("reader has already been consumed").into_boxed_dyn_error()),
+        })?;
+
+        let mut parser = ChunkParser {
+            reader,
+            tracks: Vec::new(),
+            chunk_offsets: Vec::new(),
+            sample_to_chunk: Vec::new(),
+            sample_sizes: Vec::new(),
+            time_to_sample: Vec::new(),
+            chunk_info: Vec::new(),
+        };
+
+        for trak in self.meta.tracks_iter() {
+            if let Some((trak, stco, stsc, stsz, stts)) = (|| {
+                let mdia = trak.media()?;
+                let minf = mdia.media_information()?;
+                let stbl = minf.sample_table()?;
+                let chunk_offset = stbl.chunk_offset()?;
+                let sample_entries = stbl.sample_to_chunk()?;
+                let sample_sizes = stbl.sample_size()?;
+                let time_to_sample = stbl.time_to_sample()?;
+                Some((
+                    trak,
+                    chunk_offset.chunk_offsets.inner(),
+                    sample_entries,
+                    sample_sizes,
+                    time_to_sample,
+                ))
+            })() {
+                let mut builder = ChunkOffsetBuilder::with_capacity(1);
+                builder.add_track(stsc, stsz);
+                parser.tracks.push(trak);
+                parser.chunk_offsets.push(stco);
+                parser.sample_to_chunk.push(stsc.entries.inner());
+                parser.sample_sizes.push(stsz.entry_sizes.inner());
+                parser.time_to_sample.push(stts.entries.inner());
+                parser
+                    .chunk_info
+                    .push(builder.build_chunk_info().collect::<VecDeque<_>>());
+            }
+        }
+
+        Ok(parser)
+    }
+}
+
+#[derive(Clone)]
+pub struct Metadata {
+    atoms: Vec<Atom>,
+}
+
+impl Metadata {
+    fn new(atoms: Vec<Atom>) -> Self {
+        Self { atoms }
     }
 
     /// Transforms into (reader, current_offset, atoms)
@@ -514,69 +667,6 @@ impl<R> Metadata<R> {
                     .retain(|a| a.header.atom_type != TRAK || pred(TrakAtomRef(a)));
             });
         self
-    }
-
-    pub fn mdat_header(&self) -> Option<&AtomHeader> {
-        self.mdat.as_ref()
-    }
-
-    /// Parse chunks along with related metadata
-    pub fn chunks(&mut self) -> Result<ChunkParser<R>, ParseError> {
-        let _ = self.mdat.take().ok_or_else(|| ParseError {
-            kind: ParseErrorKind::InsufficientData,
-            location: None,
-            source: Some(
-                anyhow!("mdat atom is missing or has already been consumed").into_boxed_dyn_error(),
-            ),
-        })?;
-
-        let reader = self.reader.take().ok_or_else(|| ParseError {
-            kind: ParseErrorKind::Io,
-            location: None,
-            source: Some(anyhow!("reader has already been consumed").into_boxed_dyn_error()),
-        })?;
-
-        let mut parser = ChunkParser {
-            reader,
-            tracks: Vec::new(),
-            chunk_offsets: Vec::new(),
-            sample_to_chunk: Vec::new(),
-            sample_sizes: Vec::new(),
-            time_to_sample: Vec::new(),
-            chunk_info: Vec::new(),
-        };
-
-        for trak in self.tracks_iter() {
-            if let Some((trak, stco, stsc, stsz, stts)) = (|| {
-                let mdia = trak.media()?;
-                let minf = mdia.media_information()?;
-                let stbl = minf.sample_table()?;
-                let chunk_offset = stbl.chunk_offset()?;
-                let sample_entries = stbl.sample_to_chunk()?;
-                let sample_sizes = stbl.sample_size()?;
-                let time_to_sample = stbl.time_to_sample()?;
-                Some((
-                    trak,
-                    chunk_offset.chunk_offsets.inner(),
-                    sample_entries,
-                    sample_sizes,
-                    time_to_sample,
-                ))
-            })() {
-                let mut builder = ChunkOffsetBuilder::with_capacity(1);
-                builder.add_track(stsc, stsz);
-                parser.tracks.push(trak);
-                parser.chunk_offsets.push(stco);
-                parser.sample_to_chunk.push(stsc.entries.inner());
-                parser.sample_sizes.push(stsz.entry_sizes.inner());
-                parser.time_to_sample.push(stts.entries.inner());
-                parser
-                    .chunk_info
-                    .push(builder.build_chunk_info().collect::<VecDeque<_>>());
-            }
-        }
-
-        Ok(parser)
     }
 }
 
