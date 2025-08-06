@@ -5,7 +5,11 @@ use tokio::{
 };
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
-use mp4_parser::{atom::meta, parser::Metadata, Atom, AtomData, Parser};
+use mp4_parser::{
+    atom::{meta, AtomHeader},
+    parser::Metadata,
+    Atom, AtomData, Parser,
+};
 
 /// Format file size in human-readable format
 fn format_size(size: usize) -> String {
@@ -99,7 +103,7 @@ fn process_atom(atom: &Atom, indent: usize, atom_count: &mut usize) {
     }
 }
 
-async fn print_atoms(metadata: Metadata) -> anyhow::Result<usize> {
+async fn print_atoms(metadata: Metadata, mdat_header: Option<AtomHeader>) -> anyhow::Result<usize> {
     let mut atom_count = 0;
     let mut first_atom = true;
 
@@ -137,6 +141,15 @@ async fn print_atoms(metadata: Metadata) -> anyhow::Result<usize> {
         process_atom(atom, 0, &mut atom_count);
     }
 
+    if let Some(mdat_header) = mdat_header {
+        let mdat_atom = Atom {
+            header: mdat_header,
+            data: None,
+            children: Vec::new(),
+        };
+        process_atom(&mdat_atom, 0, &mut atom_count);
+    }
+
     if !first_atom {
         print_table_footer();
     }
@@ -159,14 +172,16 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("parsing as readonly");
         let input = Box::new(io::stdin());
         let parser = Parser::new(input.compat());
-        let metadata = parser.parse_metadata().await?.into_metadata();
-        print_atoms(metadata).await?
+        let metadata = parser.parse_metadata().await?;
+        let mdat_header = metadata.mdat_header().cloned();
+        print_atoms(metadata.into_metadata(), mdat_header).await?
     } else {
         eprintln!("parsing as seekable");
         let file = fs::File::open(input_name).await?;
         let parser = Parser::new(file.compat());
-        let metadata = parser.parse_metadata_seek().await?.into_metadata();
-        print_atoms(metadata).await?
+        let metadata = parser.parse_metadata_seek().await?;
+        let mdat_header = metadata.mdat_header().cloned();
+        print_atoms(metadata.into_metadata(), mdat_header).await?
     };
 
     // Print summary statistics
