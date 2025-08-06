@@ -188,6 +188,7 @@ pub struct AudioSpecificConfig {
     pub audio_object_type: AudioObjectType,
     pub sampling_frequency: SamplingFrequency,
     pub channel_configuration: ChannelConfiguration,
+    pub reserved_bits: u8,
     pub bytes_read: usize, // 2 or 5
 }
 
@@ -203,6 +204,7 @@ impl AudioSpecificConfig {
         let idx = ((b0 & 0b0000_0111) << 1) | ((b1 & 0b1000_0000) >> 7);
         let mut sf = SamplingFrequency::try_from(idx)?;
         let ch = ChannelConfiguration::try_from((b1 & 0b0111_1000) >> 3)?;
+        let reserved_bits = b1 & 0b0000_0111;
 
         let (bytes_read, sampling_frequency) = if idx == 15 {
             if data.len() < 5 {
@@ -219,6 +221,7 @@ impl AudioSpecificConfig {
             audio_object_type: aot,
             sampling_frequency,
             channel_configuration: ch,
+            reserved_bits,
             bytes_read,
         })
     }
@@ -230,9 +233,9 @@ impl AudioSpecificConfig {
         let sf_idx = self.sampling_frequency.index();
         let b0 = (aot_u8 << 3) | ((sf_idx >> 1) & 0b0000_0111);
 
-        // second byte: [sf_idx(low bit) | ch(4 bits) | 0b000]
+        // second byte: [sf_idx(low bit) | ch(4 bits) | reserved_bits(3 bits)]
         let ch_u8: u8 = self.channel_configuration.into();
-        let b1 = ((sf_idx & 0b1) << 7) | (ch_u8 << 3);
+        let b1 = ((sf_idx & 0b1) << 7) | (ch_u8 << 3) | (self.reserved_bits & 0b0000_0111);
 
         let mut out = vec![b0, b1];
         if let SamplingFrequency::Explicit(freq) = self.sampling_frequency {
@@ -254,6 +257,7 @@ mod tests {
         let data = [0x13, 0x10];
         let cfg = AudioSpecificConfig::parse(&data).unwrap();
         assert_eq!(cfg.bytes_read, 2);
+        assert_eq!(cfg.reserved_bits, 0); // 0x10 & 0b111 = 0
         let ser = cfg.serialize();
         assert_eq!(ser, data);
     }
@@ -264,7 +268,21 @@ mod tests {
         data.extend(&[0x01, 0xE2, 0x40]);
         let cfg = AudioSpecificConfig::parse(&data).unwrap();
         assert_eq!(cfg.bytes_read, 5);
+        assert_eq!(cfg.reserved_bits, 0); // 0x88 & 0b111 = 0
         let ser = cfg.serialize();
         assert_eq!(ser, data);
+    }
+
+    #[test]
+    fn debug_problematic_bytes() {
+        // Test the specific bytes that are failing in stsd09.bin
+        let data = [0x2B, 0x8A];
+        let cfg = AudioSpecificConfig::parse(&data).unwrap();
+        println!("Parsed config: {:?}", cfg);
+        assert_eq!(cfg.reserved_bits, 2); // 0x8A & 0b111 = 2
+        let ser = cfg.serialize();
+        println!("Original: {:02X?}", data);
+        println!("Serialized: {:02X?}", ser);
+        assert_eq!(ser, data, "Round-trip failed for bytes 2B 8A");
     }
 }
