@@ -1,28 +1,19 @@
 use anyhow::{anyhow, Context};
 use futures_util::io::{BufReader, BufWriter};
 use progress_bar::pb::ProgressBar;
-use std::env;
+use std::{env, ops::Deref};
 use tokio::{
     fs,
-    io::{self, AsyncRead},
+    io::{self},
 };
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use mp4_parser::{
-    atom::{hdlr::HandlerType, stco_co64::ChunkOffsets, FourCC},
+    atom::{free::FREE, hdlr::HandlerType, stco_co64::ChunkOffsets, tref::TREF, FourCC},
     chunk_offset_builder::ChunkOffsetBuilder,
     writer::SerializeAtom,
     Mp4Writer, Parser,
 };
-
-async fn open_input(input_name: &str) -> anyhow::Result<Box<dyn AsyncRead + Unpin + Send>> {
-    if input_name == "-" {
-        Ok(Box::new(io::stdin()))
-    } else {
-        let file = fs::File::open(input_name).await?;
-        Ok(Box::new(file))
-    }
-}
 
 async fn create_output_file(output_name: &str) -> anyhow::Result<fs::File> {
     if output_name == "-" {
@@ -47,18 +38,41 @@ async fn main() -> anyhow::Result<()> {
 
     eprintln!("🎬 Copying {} into {}", input_name, output_name);
 
-    // Open input file and create parser
-    let input_file = open_input(input_name).await?;
-    let input_reader = BufReader::new(input_file.compat());
-    let parser = Parser::new(input_reader);
+    if input_name == "-" {
+        eprintln!("parsing stdin as readonly");
+        let input = Box::new(io::stdin());
+        let input_reader = BufReader::new(input.compat());
+        let parser = Parser::new(input_reader);
+        let input_metadata = parser
+            .parse_metadata()
+            .await
+            .context("Failed to parse metadata from stdin")?;
 
-    // Parse metadata atoms from input
-    let metadata = parser
-        .parse_metadata()
-        .await
-        .context("Failed to parse metadata from input file")?;
+        process_mp4_copy(input_metadata, output_name).await?;
+    } else {
+        eprintln!("parsing file as seekable");
+        let file = fs::File::open(input_name).await?;
+        let input_reader = file.compat();
+        let parser = Parser::new(input_reader);
+        let input_metadata = parser
+            .parse_metadata_seek()
+            .await
+            .context("Failed to parse metadata from input file")?;
 
-    // Filter out non-audio tracks
+        process_mp4_copy(input_metadata, output_name).await?;
+    }
+
+    Ok(())
+}
+
+async fn process_mp4_copy<R>(
+    metadata: mp4_parser::parser::MdatParser<R>,
+    output_name: &str,
+) -> anyhow::Result<()>
+where
+    R: futures_util::io::AsyncRead + Unpin + Send,
+{
+    // Filter out non-audio tracks for output metadata
     let metadata = metadata.tracks_retain(|trak| {
         trak.media()
             .and_then(|mdia| mdia.handler_reference())
@@ -67,7 +81,12 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let mut input_metadata = metadata;
-    let mut metadata = input_metadata.clone();
+    let metadata = input_metadata.clone();
+
+    let mut metadata = metadata.atoms_flat_retain_mut(|atom| match atom.header.atom_type.deref() {
+        FREE | TREF => false,
+        _ => true,
+    });
 
     let (num_samples, mdat_size) = metadata.tracks_iter().fold((0, 0), |(n, size), trak| {
         trak.media()
@@ -91,9 +110,9 @@ async fn main() -> anyhow::Result<()> {
     let mdat_content_offset = new_metadata_size + 8;
 
     // Update chunk offsets to reflect new metadata size
-    let mut chunk_offsets = metadata
-        .tracks_iter()
-        .fold(ChunkOffsetBuilder::new(), |mut builder, trak| {
+    let (chunk_offsets, original_chunk_offsets) = metadata.tracks_iter().fold(
+        (ChunkOffsetBuilder::new(), Vec::new()),
+        |(mut builder, mut chunk_offsets), trak| {
             let stbl = trak
                 .media()
                 .and_then(|mdia| mdia.media_information())
@@ -101,10 +120,14 @@ async fn main() -> anyhow::Result<()> {
                 .unwrap();
             let stsz = stbl.sample_size().unwrap();
             let stsc = stbl.sample_to_chunk().unwrap();
+            let stco = stbl.chunk_offset().unwrap();
             builder.add_track(stsc, stsz);
-            builder
-        })
-        .build_chunk_offsets(mdat_content_offset as u64);
+            chunk_offsets.push(stco.chunk_offsets.inner());
+            (builder, chunk_offsets)
+        },
+    );
+    let mut chunk_offsets = chunk_offsets
+        .build_chunk_offsets_ordered(original_chunk_offsets, mdat_content_offset as u64);
     metadata
         .tracks_iter_mut()
         .enumerate()
@@ -135,15 +158,21 @@ async fn main() -> anyhow::Result<()> {
 
     mp4_writer.flush().await.context("metadata flush")?;
 
-    // Write MDAT header (it will have a size=0 which we'll update later)
+    // Write MDAT header
     mp4_writer
-        .write_atom_header(FourCC::from(*b"mdat"), mdat_size as usize - 8)
+        .write_atom_header(FourCC::from(*b"mdat"), mdat_size as usize)
         .await
         .context("error writing mdat placeholder header")?;
 
     if input_metadata.mdat_header().is_none() {
         return Err(anyhow!("mdat atom not found"));
     }
+
+    assert_eq!(
+        mp4_writer.current_offset(),
+        mdat_content_offset,
+        "incorrect mdat_content_offset!"
+    );
 
     // Copy and write sample data
     let mut chunk_idx = 0;
@@ -167,6 +196,12 @@ async fn main() -> anyhow::Result<()> {
     mp4_writer.flush().await.context("final flush")?;
 
     progress_bar.finalize();
+
+    assert_eq!(
+        mp4_writer.current_offset(),
+        mdat_content_offset + mdat_size as usize,
+        "mdat header has incorrect size"
+    );
 
     Ok(())
 }
