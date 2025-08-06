@@ -53,7 +53,7 @@ pub struct DecoderConfigDescriptor {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DecoderSpecificInfo {
-    Audio(AudioSpecificConfig),
+    Audio(AudioSpecificConfig, Vec<u8>), // AudioSpecificConfig + extra bytes
     Unknown(Vec<u8>),
 }
 
@@ -166,10 +166,14 @@ impl DecoderConfigDescriptor {
         // Add DecoderSpecificInfo if present
         if let Some(ref decoder_info) = self.decoder_specific_info {
             let decoder_info_bytes = match decoder_info {
-                DecoderSpecificInfo::Audio(c) => &c.serialize(),
-                DecoderSpecificInfo::Unknown(c) => c,
+                DecoderSpecificInfo::Audio(c, extra) => {
+                    let mut bytes = c.serialize();
+                    bytes.extend_from_slice(extra);
+                    bytes
+                }
+                DecoderSpecificInfo::Unknown(c) => c.clone(),
             };
-            payload.extend(serialize_descriptor(0x05, decoder_info_bytes));
+            payload.extend(serialize_descriptor(0x05, &decoder_info_bytes));
         }
 
         serialize_descriptor(0x04, &payload)
@@ -359,7 +363,11 @@ fn parse_decoder_config_descriptor(
             let mut info_bytes = vec![0u8; length];
             cursor.read_exact(&mut info_bytes)?;
             let info = match stream_type {
-                5 => DecoderSpecificInfo::Audio(AudioSpecificConfig::parse(&info_bytes)?),
+                5 => {
+                    let audio_config = AudioSpecificConfig::parse(&info_bytes)?;
+                    let extra_bytes = info_bytes[audio_config.bytes_read..].to_vec();
+                    DecoderSpecificInfo::Audio(audio_config, extra_bytes)
+                }
                 _ => DecoderSpecificInfo::Unknown(info_bytes),
             };
             Some(info)
