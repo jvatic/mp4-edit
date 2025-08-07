@@ -57,8 +57,8 @@ pub fn discover_test_files(atom_type: &str) -> Vec<String> {
 ///
 /// # Example
 /// ```
-/// use mp4_parser::atom::test_utils::test_atom_roundtrip;
-/// use mp4_parser::atom::ilst::{ItemListAtom, ILST};
+/// use mp4_edit::atom::test_utils::test_atom_roundtrip;
+/// use mp4_edit::atom::ilst::{ItemListAtom, ILST};
 ///
 /// test_atom_roundtrip::<ItemListAtom>(ILST).unwrap();
 /// ```
@@ -184,8 +184,8 @@ where
 ///
 /// # Example
 /// ```
-/// use mp4_parser::atom::test_utils::test_atom_roundtrip_sync;
-/// use mp4_parser::atom::ilst::{ItemListAtom, ILST};
+/// use mp4_edit::atom::test_utils::test_atom_roundtrip_sync;
+/// use mp4_edit::atom::ilst::{ItemListAtom, ILST};
 ///
 /// fn test_ilst_roundtrip() {
 ///     test_atom_roundtrip_sync::<ItemListAtom>(ILST);

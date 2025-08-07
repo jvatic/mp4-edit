@@ -3,7 +3,7 @@ use std::{env, path::Path};
 use tokio::fs;
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
-use mp4_parser::{atom::containers, Atom, Parser};
+use mp4_edit::{atom::containers, Atom, Parser};
 
 /// Check if an atom type is a container atom
 fn is_container_atom(atom_type: &[u8; 4]) -> bool {

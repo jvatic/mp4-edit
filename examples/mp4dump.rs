@@ -5,7 +5,7 @@ use tokio::{
 };
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
-use mp4_parser::{
+use mp4_edit::{
     atom::{meta, AtomHeader},
     parser::Metadata,
     Atom, AtomData, Parser,
