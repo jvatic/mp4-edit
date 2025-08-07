@@ -8,7 +8,7 @@ use tokio::{
 };
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use mp4_parser::{atom::FourCC, parser::MDAT, Mp4Writer, Parser};
+use mp4_edit::{atom::FourCC, parser::MDAT, Mp4Writer, Parser};
 
 async fn create_output_file(output_name: &str) -> anyhow::Result<fs::File> {
     if output_name == "-" {
@@ -61,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn process_mp4_copy<R>(
-    metadata: mp4_parser::parser::MdatParser<R>,
+    metadata: mp4_edit::parser::MdatParser<R>,
     output_name: &str,
 ) -> anyhow::Result<()>
 where
