@@ -8,12 +8,7 @@ use tokio::{
 };
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use mp4_parser::{
-    atom::{stco_co64::ChunkOffsets, FourCC},
-    chunk_offset_builder::ChunkOffsetBuilder,
-    writer::SerializeAtom,
-    Mp4Writer, Parser,
-};
+use mp4_parser::{atom::FourCC, Mp4Writer, Parser};
 
 async fn create_output_file(output_name: &str) -> anyhow::Result<fs::File> {
     if output_name == "-" {
@@ -80,50 +75,13 @@ where
         .map(|trak| trak.size())
         .sum::<usize>();
 
-    // serialize metadata to find the new size (should be fairly cheap)
-    let new_metadata_size = metadata
-        .atoms_iter()
-        .cloned()
-        .flat_map(SerializeAtom::into_bytes)
-        .collect::<Vec<_>>()
-        .len();
+    let new_metadata_size = metadata.metadata_size();
 
     let mdat_content_offset = new_metadata_size + 8;
 
     let mut progress_bar = ProgressBar::new_with_eta(new_metadata_size + mdat_size);
 
-    // Update chunk offsets to reflect new metadata size
-    let (chunk_offsets, original_chunk_offsets) = metadata.tracks_iter().fold(
-        (ChunkOffsetBuilder::new(), Vec::new()),
-        |(mut builder, mut chunk_offsets), trak| {
-            let stbl = trak
-                .media()
-                .and_then(|mdia| mdia.media_information())
-                .and_then(|minf| minf.sample_table())
-                .unwrap();
-            let stsz = stbl.sample_size().unwrap();
-            let stsc = stbl.sample_to_chunk().unwrap();
-            let stco = stbl.chunk_offset().unwrap();
-            builder.add_track(stsc, stsz);
-            chunk_offsets.push(stco.chunk_offsets.inner());
-            (builder, chunk_offsets)
-        },
-    );
-    let mut chunk_offsets = chunk_offsets
-        .build_chunk_offsets_ordered(original_chunk_offsets, mdat_content_offset as u64);
-    metadata
-        .tracks_iter_mut()
-        .enumerate()
-        .for_each(|(track_idx, trak)| {
-            let mut stbl = trak
-                .media()
-                .and_then(|mdia| mdia.media_information())
-                .and_then(|minf| minf.sample_table())
-                .unwrap();
-            let stco = stbl.chunk_offset_mut().unwrap();
-            let chunk_offsets = std::mem::take(&mut chunk_offsets[track_idx]);
-            stco.chunk_offsets = ChunkOffsets::from(chunk_offsets);
-        });
+    metadata.update_chunk_offsets();
 
     // Open output file for writing
     let output_file = create_output_file(output_name).await?;
