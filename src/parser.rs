@@ -49,7 +49,7 @@ use crate::{
     Atom, AtomData,
 };
 
-const MDAT: &[u8; 4] = b"mdat";
+pub const MDAT: &[u8; 4] = b"mdat";
 
 /// Async trait for parsing atoms from an AsyncRead stream
 pub trait Parse: Sized {
