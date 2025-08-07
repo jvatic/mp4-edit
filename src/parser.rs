@@ -12,11 +12,13 @@ use thiserror::Error;
 use crate::atom::containers::{
     DINF, EDTS, MDIA, MFRA, MINF, MOOF, MOOV, SCHI, SINF, STBL, TRAF, TRAK, UDTA,
 };
+use crate::atom::stco_co64::ChunkOffsets;
 use crate::atom::stsc::SampleToChunkEntry;
 use crate::atom::stts::TimeToSampleEntry;
 use crate::atom::util::DebugEllipsis;
 use crate::atom::AtomHeader;
 use crate::chunk_offset_builder::{ChunkInfo, ChunkOffsetBuilder};
+use crate::writer::SerializeAtom;
 use crate::{
     atom::{
         chpl::{ChapterListAtom, CHPL},
@@ -668,6 +670,64 @@ impl Metadata {
             });
         self
     }
+
+    /// Returns the sum of all metadata atom sizes in bytes
+    pub fn metadata_size(&self) -> usize {
+        self.atoms_iter()
+            .cloned()
+            .flat_map(SerializeAtom::into_bytes)
+            .collect::<Vec<_>>()
+            .len()
+    }
+
+    /// Returns the sum of all track sizes in bytes
+    pub fn mdat_size(&self) -> usize {
+        self.tracks_iter().map(|trak| trak.size()).sum::<usize>()
+    }
+
+    /// Returns the sum of metadata_size and mdat_size
+    pub fn file_size(&self) -> usize {
+        self.metadata_size() + self.mdat_size()
+    }
+
+    /// Updates chunk offsets for each track
+    ///
+    /// Call this before writing metadata to disk to avoid corruption
+    pub fn update_chunk_offsets(&mut self) {
+        // mdat is located directly after metadata atoms, so metadata size + 8 bytes for the mdat header
+        let mdat_content_offset = self.metadata_size() + 8;
+
+        let (chunk_offsets, original_chunk_offsets) = self.tracks_iter().fold(
+            (ChunkOffsetBuilder::new(), Vec::new()),
+            |(mut builder, mut chunk_offsets), trak| {
+                let stbl = trak
+                    .media()
+                    .and_then(|mdia| mdia.media_information())
+                    .and_then(|minf| minf.sample_table())
+                    .unwrap();
+                let stsz = stbl.sample_size().unwrap();
+                let stsc = stbl.sample_to_chunk().unwrap();
+                let stco = stbl.chunk_offset().unwrap();
+                builder.add_track(stsc, stsz);
+                chunk_offsets.push(stco.chunk_offsets.inner());
+                (builder, chunk_offsets)
+            },
+        );
+        let mut chunk_offsets = chunk_offsets
+            .build_chunk_offsets_ordered(original_chunk_offsets, mdat_content_offset as u64);
+        self.tracks_iter_mut()
+            .enumerate()
+            .for_each(|(track_idx, trak)| {
+                let mut stbl = trak
+                    .media()
+                    .and_then(|mdia| mdia.media_information())
+                    .and_then(|minf| minf.sample_table())
+                    .unwrap();
+                let stco = stbl.chunk_offset_mut().unwrap();
+                let chunk_offsets = std::mem::take(&mut chunk_offsets[track_idx]);
+                stco.chunk_offsets = ChunkOffsets::from(chunk_offsets);
+            });
+    }
 }
 
 pub struct TrakAtomRef<'a>(&'a Atom);
@@ -707,7 +767,7 @@ impl<'a> TrakAtomRef<'a> {
         Some(MdiaAtomRef(atom))
     }
 
-    /// returns the sum of all sample sizes
+    /// Returns the sum of all sample sizes
     pub fn size(&self) -> usize {
         self.media()
             .and_then(|m| m.media_information())
