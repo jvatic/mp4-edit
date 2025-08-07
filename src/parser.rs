@@ -706,6 +706,22 @@ impl<'a> TrakAtomRef<'a> {
             .find(|a| a.header.atom_type == MDIA)?;
         Some(MdiaAtomRef(atom))
     }
+
+    /// returns the sum of all sample sizes
+    pub fn size(&self) -> usize {
+        self.media()
+            .and_then(|m| m.media_information())
+            .and_then(|m| m.sample_table())
+            .and_then(|st| st.sample_size())
+            .map(|s| {
+                if s.entry_sizes.is_empty() {
+                    s.sample_size * s.sample_count
+                } else {
+                    s.entry_sizes.iter().sum::<u32>()
+                }
+            })
+            .unwrap_or(0) as usize
+    }
 }
 
 pub struct TrakAtomRefMut<'a>(&'a mut Atom);
