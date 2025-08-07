@@ -522,7 +522,7 @@ impl<R> MdatParser<R> {
     }
 
     /// Parse chunks along with related metadata
-    pub fn chunks(&mut self) -> Result<ChunkParser<R>, ParseError> {
+    pub fn chunks(&mut self) -> Result<ChunkParser<'_, R>, ParseError> {
         let _ = self.mdat.take().ok_or_else(|| ParseError {
             kind: ParseErrorKind::InsufficientData,
             location: None,
@@ -638,7 +638,7 @@ impl Metadata {
     }
 
     /// Iterate through TRAK atoms
-    pub fn tracks_iter(&self) -> impl Iterator<Item = TrakAtomRef> {
+    pub fn tracks_iter(&self) -> impl Iterator<Item = TrakAtomRef<'_>> {
         self.atoms
             .iter()
             .filter(|a| a.header.atom_type == MOOV)
@@ -646,7 +646,7 @@ impl Metadata {
             .map(TrakAtomRef)
     }
 
-    pub fn tracks_iter_mut(&mut self) -> impl Iterator<Item = TrakAtomRefMut> {
+    pub fn tracks_iter_mut(&mut self) -> impl Iterator<Item = TrakAtomRefMut<'_>> {
         self.atoms
             .iter_mut()
             .filter(|a| a.header.atom_type == MOOV)
