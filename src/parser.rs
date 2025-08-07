@@ -726,7 +726,7 @@ impl Metadata {
                     .and_then(|mdia| mdia.media_information())
                     .and_then(|minf| minf.sample_table())
                     .unwrap();
-                let stco = stbl.chunk_offset_mut().unwrap();
+                let stco = stbl.chunk_offset().unwrap();
                 let chunk_offsets = std::mem::take(&mut chunk_offsets[track_idx]);
                 stco.chunk_offsets = ChunkOffsets::from(chunk_offsets);
             });
@@ -822,6 +822,10 @@ pub struct TrakAtomRefMut<'a>(&'a mut Atom);
 impl<'a> TrakAtomRefMut<'a> {
     pub fn as_ref(&self) -> TrakAtomRef<'_> {
         TrakAtomRef(&self.0)
+    }
+
+    pub fn into_ref(self) -> TrakAtomRef<'a> {
+        TrakAtomRef(self.0)
     }
 
     pub fn header(&mut self) -> Option<&mut TrackHeaderAtom> {
@@ -950,6 +954,14 @@ impl<'a> MdiaAtomRef<'a> {
 pub struct MdiaAtomRefMut<'a>(&'a mut Atom);
 
 impl<'a> MdiaAtomRefMut<'a> {
+    pub fn as_ref(&self) -> MdiaAtomRef<'_> {
+        MdiaAtomRef(&self.0)
+    }
+
+    pub fn into_ref(self) -> MdiaAtomRef<'a> {
+        MdiaAtomRef(self.0)
+    }
+
     pub fn children(self) -> impl Iterator<Item = &'a mut Atom> {
         self.0.children.iter_mut()
     }
@@ -1012,6 +1024,14 @@ impl<'a> MinfAtomRef<'a> {
 pub struct MinfAtomRefMut<'a>(&'a mut Atom);
 
 impl<'a> MinfAtomRefMut<'a> {
+    pub fn as_ref(&self) -> MinfAtomRef<'_> {
+        MinfAtomRef(&self.0)
+    }
+
+    pub fn into_ref(self) -> MinfAtomRef<'a> {
+        MinfAtomRef(self.0)
+    }
+
     pub fn children(self) -> impl Iterator<Item = &'a mut Atom> {
         self.0.children.iter_mut()
     }
@@ -1103,6 +1123,14 @@ impl<'a> StblAtomRef<'a> {
 pub struct StblAtomRefMut<'a>(&'a mut Atom);
 
 impl<'a> StblAtomRefMut<'a> {
+    pub fn as_ref(&self) -> StblAtomRef<'_> {
+        StblAtomRef(&self.0)
+    }
+
+    pub fn into_ref(self) -> StblAtomRef<'a> {
+        StblAtomRef(self.0)
+    }
+
     pub fn children(self) -> impl Iterator<Item = &'a mut Atom> {
         self.0.children.iter_mut()
     }
@@ -1133,20 +1161,8 @@ impl<'a> StblAtomRefMut<'a> {
         }
     }
 
-    pub fn sample_to_chunk(&self) -> Option<&SampleToChunkAtom> {
-        let atom = self
-            .0
-            .children
-            .iter()
-            .find(|a| a.header.atom_type == STSC)?;
-        match atom.data.as_ref()? {
-            AtomData::SampleToChunk(data) => Some(data),
-            _ => None,
-        }
-    }
-
     /// Finds the STSC atom
-    pub fn sample_to_chunk_mut(&mut self) -> Option<&mut SampleToChunkAtom> {
+    pub fn sample_to_chunk(&mut self) -> Option<&mut SampleToChunkAtom> {
         let atom = self
             .0
             .children
@@ -1158,20 +1174,8 @@ impl<'a> StblAtomRefMut<'a> {
         }
     }
 
-    pub fn sample_size(&self) -> Option<&SampleSizeAtom> {
-        let atom = self
-            .0
-            .children
-            .iter()
-            .find(|a| a.header.atom_type == STSZ)?;
-        match atom.data.as_ref()? {
-            AtomData::SampleSize(data) => Some(data),
-            _ => None,
-        }
-    }
-
     /// Finds the STSZ atom
-    pub fn sample_size_mut(&mut self) -> Option<&mut SampleSizeAtom> {
+    pub fn sample_size(&mut self) -> Option<&mut SampleSizeAtom> {
         let atom = self
             .0
             .children
@@ -1184,7 +1188,7 @@ impl<'a> StblAtomRefMut<'a> {
     }
 
     /// Finds the STCO atom
-    pub fn chunk_offset_mut(&mut self) -> Option<&mut ChunkOffsetAtom> {
+    pub fn chunk_offset(&mut self) -> Option<&mut ChunkOffsetAtom> {
         let atom = self
             .0
             .children
