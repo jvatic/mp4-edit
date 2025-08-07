@@ -81,7 +81,9 @@ where
 
     let mut progress_bar = ProgressBar::new_with_eta(new_metadata_size + mdat_size);
 
-    metadata.update_chunk_offsets();
+    metadata
+        .update_chunk_offsets()
+        .context("error updating chunk offsets")?;
 
     // Open output file for writing
     let output_file = create_output_file(output_name).await?;
