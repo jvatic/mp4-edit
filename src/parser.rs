@@ -14,6 +14,9 @@ use crate::atom::containers::{
 };
 use crate::atom::stco_co64::ChunkOffsets;
 use crate::atom::stsc::SampleToChunkEntry;
+use crate::atom::stsd::{
+    BtrtExtension, DecoderSpecificInfo, SampleEntryData, SampleEntryType, StsdExtension,
+};
 use crate::atom::stts::TimeToSampleEntry;
 use crate::atom::util::DebugEllipsis;
 use crate::atom::AtomHeader;
@@ -728,6 +731,15 @@ impl Metadata {
                 stco.chunk_offsets = ChunkOffsets::from(chunk_offsets);
             });
     }
+
+    /// Updates bitrate for each track
+    pub fn update_bitrate(&mut self) {
+        self.tracks_iter_mut().for_each(|mut trak| {
+            if let Some(bitrate) = trak.as_ref().bitrate() {
+                trak.update_bitrate(bitrate);
+            }
+        });
+    }
 }
 
 pub struct TrakAtomRef<'a>(&'a Atom);
@@ -782,11 +794,36 @@ impl<'a> TrakAtomRef<'a> {
             })
             .unwrap_or(0) as usize
     }
+
+    /// Calculates the track's bitrate
+    ///
+    /// Returns None if either stsz or mdhd atoms can't be found
+    pub fn bitrate(&self) -> Option<u32> {
+        let duration_secds = self
+            .media()
+            .and_then(|m| m.header())
+            .map(|mdhd| (mdhd.duration as f64) / (mdhd.timescale as f64))?;
+
+        self.media()
+            .and_then(|mdia| mdia.media_information())
+            .and_then(|minf| minf.sample_table())
+            .and_then(|stbl| stbl.sample_size())
+            .map(|s| {
+                let num_bits = s.entry_sizes.iter().sum::<u32>() * 8;
+
+                let bitrate = (num_bits as f64) / duration_secds;
+                bitrate.round() as u32
+            })
+    }
 }
 
 pub struct TrakAtomRefMut<'a>(&'a mut Atom);
 
 impl<'a> TrakAtomRefMut<'a> {
+    pub fn as_ref(&self) -> TrakAtomRef<'_> {
+        TrakAtomRef(&self.0)
+    }
+
     pub fn header(&mut self) -> Option<&mut TrackHeaderAtom> {
         let atom = self
             .0
@@ -806,6 +843,63 @@ impl<'a> TrakAtomRefMut<'a> {
             .iter_mut()
             .find(|a| a.header.atom_type == MDIA)?;
         Some(MdiaAtomRefMut(atom))
+    }
+
+    /// Updates track metadata with the new bitrate
+    pub fn update_bitrate(&mut self, bitrate: u32) {
+        let mdia = self
+            .0
+            .children
+            .iter_mut()
+            .find(|a| a.header.atom_type == MDIA)
+            .map(|atom| MdiaAtomRefMut(atom));
+        let stbl = mdia
+            .and_then(|mdia| mdia.media_information())
+            .and_then(|minf| minf.sample_table());
+        if let Some(mut stbl) = stbl {
+            if let Some(stsd) = stbl.sample_description() {
+                stsd.entries.retain_mut(|entry| {
+                    if !matches!(entry.data, SampleEntryData::Audio(_)) {
+                        return true;
+                    }
+
+                    entry.entry_type = SampleEntryType::Mp4a;
+
+                    if let SampleEntryData::Audio(audio) = &mut entry.data {
+                        let mut sample_frequency = None;
+                        audio.extensions.retain_mut(|ext| match ext {
+                            StsdExtension::Esds(esds) => {
+                                if let Some(c) =
+                                    esds.es_descriptor.decoder_config_descriptor.as_mut()
+                                {
+                                    c.avg_bitrate = bitrate;
+                                    c.max_bitrate = bitrate;
+                                    if let Some(DecoderSpecificInfo::Audio(a, _)) =
+                                        c.decoder_specific_info.as_ref()
+                                    {
+                                        sample_frequency = Some(a.sampling_frequency.as_hz());
+                                    }
+                                };
+                                true
+                            }
+                            StsdExtension::Btrt(_) => false,
+                            StsdExtension::Unknown { .. } => false,
+                        });
+                        audio.extensions.push(StsdExtension::Btrt(BtrtExtension {
+                            buffer_size_db: 0,
+                            avg_bitrate: bitrate,
+                            max_bitrate: bitrate,
+                        }));
+
+                        if let Some(hz) = sample_frequency {
+                            audio.sample_rate = hz as f32;
+                        }
+                    }
+
+                    true
+                });
+            }
+        }
     }
 }
 
