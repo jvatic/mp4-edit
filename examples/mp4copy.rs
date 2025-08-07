@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Context};
 use futures_util::io::{BufReader, BufWriter};
 use progress_bar::pb::ProgressBar;
-use std::{env, ops::Deref};
+use std::env;
 use tokio::{
     fs,
     io::{self},
@@ -9,7 +9,7 @@ use tokio::{
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use mp4_parser::{
-    atom::{free::FREE, hdlr::HandlerType, stco_co64::ChunkOffsets, tref::TREF, FourCC},
+    atom::{stco_co64::ChunkOffsets, FourCC},
     chunk_offset_builder::ChunkOffsetBuilder,
     writer::SerializeAtom,
     Mp4Writer, Parser,
@@ -72,28 +72,23 @@ async fn process_mp4_copy<R>(
 where
     R: futures_util::io::AsyncRead + Unpin + Send,
 {
-    // Filter out non-audio tracks for output metadata
-    let metadata = metadata.tracks_retain(|trak| {
-        trak.media()
-            .and_then(|mdia| mdia.handler_reference())
-            .map(|hdlr| matches!(hdlr.handler_type, HandlerType::Audio))
-            .unwrap_or_default()
-    });
-
     let mut input_metadata = metadata;
-    let metadata = input_metadata.clone();
-
-    let mut metadata = metadata.atoms_flat_retain_mut(|atom| match atom.header.atom_type.deref() {
-        FREE | TREF => false,
-        _ => true,
-    });
+    let mut metadata = input_metadata.clone();
 
     let (num_samples, mdat_size) = metadata.tracks_iter().fold((0, 0), |(n, size), trak| {
         trak.media()
             .and_then(|m| m.media_information())
             .and_then(|m| m.sample_table())
             .and_then(|st| st.sample_size())
-            .map(|s| (n + s.sample_count, size + s.entry_sizes.iter().sum::<u32>()))
+            .map(|s| {
+                (n + s.sample_count, {
+                    if s.entry_sizes.is_empty() {
+                        size + (s.sample_size * s.sample_count)
+                    } else {
+                        size + s.entry_sizes.iter().sum::<u32>()
+                    }
+                })
+            })
             .unwrap_or((0, 0))
     });
 
