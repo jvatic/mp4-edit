@@ -75,24 +75,10 @@ where
     let mut input_metadata = metadata;
     let mut metadata = input_metadata.clone();
 
-    let (num_samples, mdat_size) = metadata.tracks_iter().fold((0, 0), |(n, size), trak| {
-        trak.media()
-            .and_then(|m| m.media_information())
-            .and_then(|m| m.sample_table())
-            .and_then(|st| st.sample_size())
-            .map(|s| {
-                (n + s.sample_count, {
-                    if s.entry_sizes.is_empty() {
-                        size + (s.sample_size * s.sample_count)
-                    } else {
-                        size + s.entry_sizes.iter().sum::<u32>()
-                    }
-                })
-            })
-            .unwrap_or((0, 0))
-    });
-
-    let mut progress_bar = ProgressBar::new_with_eta(num_samples as usize);
+    let mdat_size = metadata
+        .tracks_iter()
+        .map(|trak| trak.size())
+        .sum::<usize>();
 
     // serialize metadata to find the new size (should be fairly cheap)
     let new_metadata_size = metadata
@@ -103,6 +89,8 @@ where
         .len();
 
     let mdat_content_offset = new_metadata_size + 8;
+
+    let mut progress_bar = ProgressBar::new_with_eta(new_metadata_size + mdat_size);
 
     // Update chunk offsets to reflect new metadata size
     let (chunk_offsets, original_chunk_offsets) = metadata.tracks_iter().fold(
@@ -149,6 +137,7 @@ where
         mp4_writer.write_atom(atom.clone()).await.with_context(|| {
             format!("Failed to write atom {} ({})", i + 1, atom.header.atom_type)
         })?;
+        progress_bar.set_progress(mp4_writer.current_offset());
     }
 
     mp4_writer.flush().await.context("metadata flush")?;
@@ -171,7 +160,6 @@ where
 
     // Copy and write sample data
     let mut chunk_idx = 0;
-    let mut sample_idx = 0;
     let mut chunk_parser = input_metadata.chunks()?;
     while let Some(chunk) = chunk_parser.read_next_chunk().await? {
         for (i, sample) in chunk.samples().enumerate() {
@@ -181,8 +169,7 @@ where
                 "error writing sample {i:02} data in chunk {chunk_idx:02}"
             ))?;
 
-            sample_idx += 1;
-            progress_bar.set_progress(sample_idx);
+            progress_bar.set_progress(mp4_writer.current_offset());
         }
 
         chunk_idx += 1;
