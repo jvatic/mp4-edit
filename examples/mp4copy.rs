@@ -8,7 +8,7 @@ use tokio::{
 };
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use mp4_parser::{atom::FourCC, Mp4Writer, Parser};
+use mp4_parser::{atom::FourCC, parser::MDAT, Mp4Writer, Parser};
 
 async fn create_output_file(output_name: &str) -> anyhow::Result<fs::File> {
     if output_name == "-" {
@@ -104,7 +104,7 @@ where
 
     // Write MDAT header
     mp4_writer
-        .write_atom_header(FourCC::from(*b"mdat"), mdat_size as usize)
+        .write_atom_header(FourCC::from(*MDAT), mdat_size as usize)
         .await
         .context("error writing mdat placeholder header")?;
 
