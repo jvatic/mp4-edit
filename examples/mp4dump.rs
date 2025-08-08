@@ -116,7 +116,7 @@ async fn print_atoms(metadata: Metadata, mdat_header: Option<AtomHeader>) -> any
             .and_then(|st| st.sample_size())
             .map(|s| s.entry_sizes.iter().sum::<u32>())
             .unwrap_or_default()
-            * 8;
+            .saturating_mul(8);
 
         let duration_secds = trak
             .media()
