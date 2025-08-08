@@ -29,6 +29,7 @@ pub struct ChapterTrack {
     modification_time: u64,
     sample_data: Vec<u8>,
     total_duration: u64,
+    movie_duration: u64,
 }
 
 #[bon]
@@ -38,6 +39,7 @@ impl ChapterTrack {
         #[builder(finish_fn, into)] chapters: ChapterEntries,
         #[builder(default = LanguageCode::Undetermined)] language: LanguageCode,
         #[builder(default = 1000)] timescale: u32,
+        #[builder(default = 600)] movie_timescale: u32,
         #[builder(default = 2)] track_id: u32,
         #[builder(into)] total_duration: Duration,
         #[builder(default = mp4_timestamp_now())] creation_time: u64,
@@ -47,8 +49,15 @@ impl ChapterTrack {
 
         const NANOS_PER_SECOND: u128 = 1_000_000_000;
         let total_duration_nanos = total_duration.as_nanos();
+
+        // Calculate duration in media timescale (for MDHD and STTS)
         let timescale_nanos = timescale as u128;
         let total_duration = (total_duration_nanos * timescale_nanos / NANOS_PER_SECOND) as u64;
+
+        // Calculate duration in movie timescale (for TKHD)
+        let movie_timescale_nanos = movie_timescale as u128;
+        let movie_duration =
+            (total_duration_nanos * movie_timescale_nanos / NANOS_PER_SECOND) as u64;
 
         Self {
             language,
@@ -58,22 +67,35 @@ impl ChapterTrack {
             modification_time,
             sample_data,
             total_duration,
+            movie_duration,
         }
     }
 
-    /// Create sample data from chapters - using a simple text format
+    /// Create simple text sample data from chapters - one sample with all chapters
     fn create_sample_data(chapters: &ChapterEntries) -> Vec<u8> {
         let mut data = Vec::new();
 
-        // Simple text format: each line is "start_time_ms:title"
+        if chapters.is_empty() {
+            return data;
+        }
+
+        // Create a simple text format that most players can understand
+        // Format: "HH:MM:SS Chapter Title\n" for each chapter
         for (i, chapter) in chapters.iter().enumerate() {
             if i > 0 {
                 data.push(b'\n');
             }
 
-            // Convert start_time (in 100-nanosecond units) to milliseconds
-            let start_time_ms = chapter.start_time / 10_000;
-            let line = format!("{}:{}", start_time_ms, chapter.title);
+            // Convert start_time (100ns units) to seconds
+            let start_seconds = chapter.start_time / 10_000_000;
+            let hours = start_seconds / 3600;
+            let minutes = (start_seconds % 3600) / 60;
+            let seconds = start_seconds % 60;
+
+            let line = format!(
+                "{:02}:{:02}:{:02} {}",
+                hours, minutes, seconds, chapter.title
+            );
             data.extend_from_slice(line.as_bytes());
         }
 
@@ -109,7 +131,7 @@ impl ChapterTrack {
             creation_time: self.creation_time,
             modification_time: self.modification_time,
             track_id: self.track_id,
-            duration: self.total_duration,
+            duration: self.movie_duration, // Use movie timescale duration
             layer: 0,
             alternate_group: 0,
             volume: 0.0,  // Text track has no volume
@@ -360,16 +382,17 @@ mod tests {
         let track = ChapterTrack::builder()
             .track_id(2)
             .timescale(1000)
+            .movie_timescale(600)
             .total_duration(Duration::from_secs(900))
             .build(chapters);
 
-        // Test sample data creation
+        // Test sample data format (simple time:title format)
         let sample_data = track.sample_bytes();
         let sample_text = String::from_utf8_lossy(sample_data);
 
-        assert!(sample_text.contains("0:Introduction"));
-        assert!(sample_text.contains("30000:Chapter 1"));
-        assert!(sample_text.contains("60000:Chapter 2"));
+        assert!(sample_text.contains("00:00:00 Introduction"));
+        assert!(sample_text.contains("00:00:30 Chapter 1"));
+        assert!(sample_text.contains("00:01:00 Chapter 2"));
 
         // Test TRAK atom creation
         let trak_atom = track.create_trak_atom(1024);
@@ -381,6 +404,7 @@ mod tests {
     fn test_empty_chapters() {
         let track = ChapterTrack::builder()
             .total_duration(Duration::from_secs(0))
+            .movie_timescale(600)
             .build(vec![]);
 
         assert!(track.sample_bytes().is_empty());
@@ -395,9 +419,45 @@ mod tests {
 
         let track = ChapterTrack::builder()
             .total_duration(Duration::from_secs(300))
+            .movie_timescale(600)
             .build(chapters);
-        let sample_text = String::from_utf8_lossy(track.sample_bytes());
 
-        assert_eq!(sample_text, "0:Test Chapter");
+        let sample_data = track.sample_bytes();
+        let sample_text = String::from_utf8_lossy(sample_data);
+        assert_eq!(sample_text, "00:00:00 Test Chapter");
+    }
+
+    #[test]
+    fn test_utf8_chapter_titles() {
+        let chapters = vec![
+            ChapterEntry {
+                start_time: 0,
+                title: "Intro 📚".to_string(), // UTF-8 emoji
+            },
+            ChapterEntry {
+                start_time: 150_000_000,          // 15 seconds in 100ns units
+                title: "Chapter Één".to_string(), // UTF-8 accented characters
+            },
+            ChapterEntry {
+                start_time: 450_000_000,   // 45 seconds in 100ns units
+                title: "終章".to_string(), // Japanese characters
+            },
+        ];
+
+        let track = ChapterTrack::builder()
+            .total_duration(Duration::from_secs(60))
+            .movie_timescale(600)
+            .build(chapters);
+
+        let sample_data = track.sample_bytes();
+        let sample_text = String::from_utf8_lossy(sample_data);
+
+        assert!(sample_text.contains("00:00:00 Intro 📚"));
+        assert!(sample_text.contains("00:00:15 Chapter Één"));
+        assert!(sample_text.contains("00:00:45 終章"));
+
+        // Verify the full text is properly encoded
+        let expected = "00:00:00 Intro 📚\n00:00:15 Chapter Één\n00:00:45 終章";
+        assert_eq!(sample_text, expected);
     }
 }
