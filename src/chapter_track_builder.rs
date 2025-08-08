@@ -169,7 +169,7 @@ impl ChapterTrack {
     fn create_handler_reference(&self) -> Atom {
         let hdlr = HandlerReferenceAtom::builder()
             .handler_type(HandlerType::Text)
-            .name("SubtitleHandler")
+            .name("ChapterListHandler")
             .build();
 
         Atom {
