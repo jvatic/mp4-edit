@@ -98,6 +98,15 @@ pub struct AtomHeader {
 }
 
 impl AtomHeader {
+    pub fn new(atom_type: FourCC) -> Self {
+        Self {
+            atom_type,
+            offset: 0,
+            header_size: 0,
+            data_size: 0,
+        }
+    }
+
     pub fn location(&self) -> (usize, usize) {
         (self.offset, self.header_size + self.data_size)
     }

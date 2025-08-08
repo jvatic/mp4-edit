@@ -69,6 +69,17 @@ pub struct ChunkOffsetAtom {
     pub is_64bit: bool,
 }
 
+impl ChunkOffsetAtom {
+    pub fn new(chunk_offsets: impl Into<ChunkOffsets>) -> Self {
+        Self {
+            version: 0,
+            flags: [0u8; 3],
+            chunk_offsets: chunk_offsets.into(),
+            is_64bit: false,
+        }
+    }
+}
+
 impl Parse for ChunkOffsetAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,

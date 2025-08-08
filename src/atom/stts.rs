@@ -18,6 +18,12 @@ pub const STTS: &[u8; 4] = b"stts";
 #[derive(Clone, Deref)]
 pub struct TimeToSampleEntries(Vec<TimeToSampleEntry>);
 
+impl From<Vec<TimeToSampleEntry>> for TimeToSampleEntries {
+    fn from(entries: Vec<TimeToSampleEntry>) -> Self {
+        Self::new(entries)
+    }
+}
+
 impl TimeToSampleEntries {
     pub fn new(inner: Vec<TimeToSampleEntry>) -> Self {
         Self(inner)
@@ -58,6 +64,16 @@ pub struct TimeToSampleAtom {
     pub flags: [u8; 3],
     /// List of time-to-sample entries
     pub entries: TimeToSampleEntries,
+}
+
+impl From<Vec<TimeToSampleEntry>> for TimeToSampleAtom {
+    fn from(entries: Vec<TimeToSampleEntry>) -> Self {
+        TimeToSampleAtom {
+            version: 0,
+            flags: [0u8; 3],
+            entries: entries.into(),
+        }
+    }
 }
 
 impl Parse for TimeToSampleAtom {

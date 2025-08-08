@@ -1,4 +1,5 @@
 pub mod atom;
+pub mod chapter_track_builder;
 pub mod chunk_offset_builder;
 pub mod parser;
 pub mod writer;

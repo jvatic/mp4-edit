@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context};
+use bon::bon;
 use futures_io::AsyncRead;
 use std::io::Read;
 
@@ -107,6 +108,25 @@ pub struct HandlerReferenceAtom {
     name_extra_null_byte: bool,
     /// Whether the original name was encoded as a Pascal string
     name_is_pascal_string: bool,
+}
+
+#[bon]
+impl HandlerReferenceAtom {
+    #[builder]
+    pub fn new(handler_type: HandlerType, name: impl Into<String>) -> Self {
+        HandlerReferenceAtom {
+            version: 0,
+            flags: [0u8; 3],
+            component_type: [0u8; 4],
+            handler_type,
+            component_manufacturer: [0u8; 4],
+            component_flags: 0,
+            component_flags_mask: 0,
+            name: name.into(),
+            name_extra_null_byte: false,
+            name_is_pascal_string: false,
+        }
+    }
 }
 
 impl Parse for HandlerReferenceAtom {
