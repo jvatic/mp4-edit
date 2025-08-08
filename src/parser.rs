@@ -708,6 +708,43 @@ impl Metadata {
         self.metadata_size() + self.mdat_size()
     }
 
+    /// Adds or replaces the chapter list atom in the metadata
+    pub fn add_or_replace_chpl(&mut self, chpl: ChapterListAtom) {
+        let udta = self
+            .atoms_iter_mut()
+            .find(|atom| atom.header.atom_type == UDTA);
+        let udta = match udta {
+            Some(udta) => udta,
+            None => {
+                let udta = Atom {
+                    header: AtomHeader {
+                        atom_type: FourCC::from(*UDTA),
+                        offset: 0,
+                        header_size: 0,
+                        data_size: 0,
+                    },
+                    data: None,
+                    children: Vec::new(),
+                };
+                self.atoms.push(udta);
+                self.atoms.last_mut().unwrap()
+            }
+        };
+
+        udta.children
+            .retain_mut(|atom| atom.header.atom_type != CHPL);
+        udta.children.push(Atom {
+            header: AtomHeader {
+                atom_type: FourCC::from(*CHPL),
+                offset: 0,
+                header_size: 0,
+                data_size: 0,
+            },
+            data: Some(AtomData::ChapterList(chpl)),
+            children: Vec::new(),
+        });
+    }
+
     /// Updates chunk offsets for each track
     ///
     /// Call this before writing metadata to disk to avoid corruption
