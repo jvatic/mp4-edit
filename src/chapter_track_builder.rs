@@ -15,6 +15,7 @@ use crate::atom::{
     stsz::SampleSizeAtom,
     stts::{TimeToSampleAtom, TimeToSampleEntry},
     tkhd::TrackHeaderAtom,
+    util::time::mp4_timestamp_now,
     Atom, AtomData, AtomHeader, DataReferenceAtom, FourCC, RawData,
 };
 use crate::writer::SerializeAtom;
@@ -39,10 +40,8 @@ impl ChapterTrack {
         #[builder(default = 1000)] timescale: u32,
         #[builder(default = 2)] track_id: u32,
         #[builder(into)] total_duration: Duration,
-        #[builder(default = SystemTime::now().duration_since(UNIX_EPOCH).expect("time went backwards").as_secs())]
-        creation_time: u64,
-        #[builder(default = SystemTime::now().duration_since(UNIX_EPOCH).expect("time went backwards").as_secs())]
-        modification_time: u64,
+        #[builder(default = mp4_timestamp_now())] creation_time: u64,
+        #[builder(default = mp4_timestamp_now())] modification_time: u64,
     ) -> Self {
         let sample_data = Self::create_sample_data(&chapters);
 
