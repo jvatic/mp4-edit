@@ -16,7 +16,7 @@ use crate::{
 pub const MDHD: &[u8; 4] = b"mdhd";
 
 /// Language code (ISO 639-2/T language code)
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LanguageCode {
     English,
     Spanish,
