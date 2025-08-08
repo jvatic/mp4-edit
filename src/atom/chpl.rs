@@ -27,6 +27,12 @@ impl ChapterEntries {
     }
 }
 
+impl FromIterator<ChapterEntry> for ChapterEntries {
+    fn from_iter<T: IntoIterator<Item = ChapterEntry>>(iter: T) -> Self {
+        Vec::from_iter(iter).into()
+    }
+}
+
 impl From<Vec<ChapterEntry>> for ChapterEntries {
     fn from(entries: Vec<ChapterEntry>) -> Self {
         ChapterEntries(entries)
