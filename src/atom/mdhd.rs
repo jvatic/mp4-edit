@@ -1,11 +1,7 @@
 use anyhow::{anyhow, Context};
 use bon::bon;
 use futures_io::AsyncRead;
-use std::{
-    fmt,
-    io::Read,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{fmt, io::Read};
 
 use crate::{
     atom::{
