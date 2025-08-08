@@ -1,6 +1,11 @@
 use anyhow::{anyhow, Context};
+use bon::bon;
 use futures_io::AsyncRead;
-use std::{fmt, io::Read};
+use std::{
+    fmt,
+    io::Read,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use crate::{
     atom::{util::async_to_sync_read, FourCC},
@@ -12,22 +17,100 @@ use crate::{
 pub const MDHD: &[u8; 4] = b"mdhd";
 
 /// Language code (ISO 639-2/T language code)
-#[derive(Clone)]
-pub struct LanguageCode([u8; 3]);
+#[derive(Clone, Copy, Debug)]
+pub enum LanguageCode {
+    English,
+    Spanish,
+    French,
+    German,
+    Italian,
+    Japanese,
+    Korean,
+    Chinese,
+    Russian,
+    Arabic,
+    Portuguese,
+    Undetermined,
+    Other([char; 3]),
+}
 
-impl fmt::Debug for LanguageCode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "LanguageCode({})", self)
+impl From<[u8; 3]> for LanguageCode {
+    fn from(value: [u8; 3]) -> Self {
+        // Decode the packed language format
+        let packed = u16::from_be_bytes([value[0], value[1]]);
+        let char1 = (((packed >> 10) & 0x1F) + 0x60) as u8 as char;
+        let char2 = (((packed >> 5) & 0x1F) + 0x60) as u8 as char;
+        let char3 = ((packed & 0x1F) + 0x60) as u8 as char;
+
+        let lang_str = format!("{}{}{}", char1, char2, char3);
+
+        match lang_str.as_str() {
+            "eng" => LanguageCode::English,
+            "spa" => LanguageCode::Spanish,
+            "fra" => LanguageCode::French,
+            "deu" => LanguageCode::German,
+            "ita" => LanguageCode::Italian,
+            "jpn" => LanguageCode::Japanese,
+            "kor" => LanguageCode::Korean,
+            "chi" => LanguageCode::Chinese,
+            "rus" => LanguageCode::Russian,
+            "ara" => LanguageCode::Arabic,
+            "por" => LanguageCode::Portuguese,
+            "und" => LanguageCode::Undetermined,
+            _ => LanguageCode::Other([char1, char2, char3]),
+        }
+    }
+}
+
+impl LanguageCode {
+    /// Convert the language code to packed bytes format
+    fn to_packed_bytes(&self) -> [u8; 2] {
+        let chars = match self {
+            LanguageCode::English => ['e', 'n', 'g'],
+            LanguageCode::Spanish => ['s', 'p', 'a'],
+            LanguageCode::French => ['f', 'r', 'a'],
+            LanguageCode::German => ['d', 'e', 'u'],
+            LanguageCode::Italian => ['i', 't', 'a'],
+            LanguageCode::Japanese => ['j', 'p', 'n'],
+            LanguageCode::Korean => ['k', 'o', 'r'],
+            LanguageCode::Chinese => ['c', 'h', 'i'],
+            LanguageCode::Russian => ['r', 'u', 's'],
+            LanguageCode::Arabic => ['a', 'r', 'a'],
+            LanguageCode::Portuguese => ['p', 'o', 'r'],
+            LanguageCode::Undetermined => ['u', 'n', 'd'],
+            LanguageCode::Other(chars) => *chars,
+        };
+
+        // Pack into 16-bit format (3 x 5-bit values)
+        let char1_bits = (chars[0] as u8 - 0x60) & 0x1F;
+        let char2_bits = (chars[1] as u8 - 0x60) & 0x1F;
+        let char3_bits = (chars[2] as u8 - 0x60) & 0x1F;
+
+        let packed = ((char1_bits as u16) << 10) | ((char2_bits as u16) << 5) | (char3_bits as u16);
+        packed.to_be_bytes()
     }
 }
 
 impl fmt::Display for LanguageCode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let packed = u16::from_be_bytes([self.0[0], self.0[1]]);
-        let char1 = (((packed >> 10) & 0x1F) + 0x60) as u8 as char;
-        let char2 = (((packed >> 5) & 0x1F) + 0x60) as u8 as char;
-        let char3 = ((packed & 0x1F) + 0x60) as u8 as char;
-        write!(f, "{}{}{}", char1, char2, char3)
+        let code = match self {
+            LanguageCode::English => "eng",
+            LanguageCode::Spanish => "spa",
+            LanguageCode::French => "fra",
+            LanguageCode::German => "deu",
+            LanguageCode::Italian => "ita",
+            LanguageCode::Japanese => "jpn",
+            LanguageCode::Korean => "kor",
+            LanguageCode::Chinese => "chi",
+            LanguageCode::Russian => "rus",
+            LanguageCode::Arabic => "ara",
+            LanguageCode::Portuguese => "por",
+            LanguageCode::Undetermined => "und",
+            LanguageCode::Other(chars) => {
+                return write!(f, "{}{}{}", chars[0], chars[1], chars[2]);
+            }
+        };
+        write!(f, "{}", code)
     }
 }
 
@@ -49,6 +132,31 @@ pub struct MediaHeaderAtom {
     pub language: LanguageCode,
     /// Pre-defined value (should be 0)
     pub pre_defined: u16,
+}
+
+#[bon]
+impl MediaHeaderAtom {
+    #[builder]
+    pub fn new(
+        timescale: u32,
+        duration: u64,
+        #[builder(into)] language: LanguageCode,
+        #[builder(default = SystemTime::now().duration_since(UNIX_EPOCH).expect("time went backwards").as_secs())]
+        creation_time: u64,
+        #[builder(default = SystemTime::now().duration_since(UNIX_EPOCH).expect("time went backwards").as_secs())]
+        modification_time: u64,
+    ) -> Self {
+        MediaHeaderAtom {
+            version: 0,
+            flags: [0u8; 3],
+            creation_time,
+            modification_time,
+            timescale,
+            duration,
+            language,
+            pre_defined: 0,
+        }
+    }
 }
 
 impl Parse for MediaHeaderAtom {
@@ -131,7 +239,7 @@ fn parse_mdhd_data<R: Read>(mut reader: R) -> Result<MediaHeaderAtom, anyhow::Er
         .context("read language and pre_defined")?;
 
     // Language is packed in first 2 bytes as 3 x 5-bit values
-    let language = LanguageCode([lang_pre[0], lang_pre[1], 0]); // Third byte is derived from first two
+    let language = LanguageCode::from([lang_pre[0], lang_pre[1], 0]);
     let pre_defined = u16::from_be_bytes([lang_pre[2], lang_pre[3]]);
 
     // Validate timescale
@@ -198,7 +306,8 @@ impl SerializeAtom for MediaHeaderAtom {
         }
 
         // Language (2 bytes) + pre_defined (2 bytes)
-        data.extend_from_slice(&self.language.0[0..2]);
+        let lang_bytes = self.language.to_packed_bytes();
+        data.extend_from_slice(&lang_bytes);
         data.extend_from_slice(&self.pre_defined.to_be_bytes());
 
         data

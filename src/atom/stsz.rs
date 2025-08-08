@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context};
+use bon::bon;
 use derive_more::Deref;
 use either::Either;
 use futures_io::AsyncRead;
@@ -19,7 +20,7 @@ use crate::{
 
 pub const STSZ: &[u8; 4] = b"stsz";
 
-#[derive(Clone, Deref)]
+#[derive(Clone, Default, Deref)]
 pub struct SampleEntrySizes(Vec<u32>);
 
 impl SampleEntrySizes {
@@ -83,7 +84,25 @@ pub struct SampleSizeAtom {
     pub entry_sizes: SampleEntrySizes,
 }
 
+#[bon]
 impl SampleSizeAtom {
+    #[builder]
+    pub fn new(
+        #[builder(default = 0)] sample_size: u32,
+        #[builder(default = 0)] sample_count: u32,
+        /// either set sample_size and sample_count or entry_sizes
+        #[builder(into, default = SampleEntrySizes(Vec::new()))]
+        entry_sizes: SampleEntrySizes,
+    ) -> Self {
+        Self {
+            version: 0,
+            flags: 0,
+            sample_size,
+            sample_count,
+            entry_sizes,
+        }
+    }
+
     /// Returns an iterator over _all_ sample sizes.
     ///
     /// If `sample_size != 0` this will repeat that value

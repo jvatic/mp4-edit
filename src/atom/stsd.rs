@@ -29,6 +29,7 @@ pub const SAMPLE_ENTRY_TX3G: &[u8; 4] = b"tx3g"; // 3GPP text
 pub const SAMPLE_ENTRY_WVTT: &[u8; 4] = b"wvtt"; // WebVTT text
 pub const SAMPLE_ENTRY_STPP: &[u8; 4] = b"stpp"; // Subtitle
 pub const SAMPLE_ENTRY_AAVD: &[u8; 4] = b"aavd"; // Apple Audio Video Data
+pub const SAMPLE_ENTRY_TEXT: &[u8; 4] = b"text"; // Plain text
 
 #[derive(Debug, Clone, Display, PartialEq)]
 #[display("{}", self.as_str())]
@@ -49,6 +50,8 @@ pub enum SampleEntryType {
     Stpp,
     /// Apple Audio Video Data
     Aavd,
+    /// Plain text
+    Text,
     /// Unknown sample entry type
     Unknown(FourCC),
 }
@@ -64,6 +67,7 @@ impl SampleEntryType {
             SAMPLE_ENTRY_WVTT => SampleEntryType::Wvtt,
             SAMPLE_ENTRY_STPP => SampleEntryType::Stpp,
             SAMPLE_ENTRY_AAVD => SampleEntryType::Aavd,
+            SAMPLE_ENTRY_TEXT => SampleEntryType::Text,
             _ => SampleEntryType::Unknown(FourCC(*bytes)),
         }
     }
@@ -78,6 +82,7 @@ impl SampleEntryType {
             SampleEntryType::Wvtt => SAMPLE_ENTRY_WVTT,
             SampleEntryType::Stpp => SAMPLE_ENTRY_STPP,
             SampleEntryType::Aavd => SAMPLE_ENTRY_AAVD,
+            SampleEntryType::Text => SAMPLE_ENTRY_TEXT,
             SampleEntryType::Unknown(bytes) => &bytes.0,
         }
     }
@@ -91,6 +96,7 @@ impl SampleEntryType {
 pub enum SampleEntryData {
     Video(VideoSampleEntry),
     Audio(AudioSampleEntry),
+    Text(TextSampleEntry),
     Other(Vec<u8>),
 }
 
@@ -161,6 +167,30 @@ pub struct AudioSampleEntry {
 }
 
 #[derive(Debug, Clone)]
+pub struct TextSampleEntry {
+    /// Version (usually 0)
+    pub version: u16,
+    /// Revision level (usually 0)
+    pub revision_level: u16,
+    /// Vendor identifier
+    pub vendor: [u8; 4],
+    /// Display flags
+    pub display_flags: u32,
+    /// Text justification (0 = left, 1 = center, -1 = right)
+    pub text_justification: i8,
+    /// Background color (RGB)
+    pub background_color: [u16; 3],
+    /// Default text box (top, left, bottom, right)
+    pub default_text_box: [u16; 4],
+    /// Default style record
+    pub default_style: Option<Vec<u8>>,
+    /// Font table
+    pub font_table: Option<Vec<u8>>,
+    /// Extension data (codec-specific atoms)
+    pub extensions: Vec<StsdExtension>,
+}
+
+#[derive(Debug, Clone)]
 pub struct SampleDescriptionTableAtom {
     /// Version of the stsd atom format (0)
     pub version: u8,
@@ -168,6 +198,16 @@ pub struct SampleDescriptionTableAtom {
     pub flags: [u8; 3],
     /// List of sample entries
     pub entries: Vec<SampleEntry>,
+}
+
+impl From<Vec<SampleEntry>> for SampleDescriptionTableAtom {
+    fn from(entries: Vec<SampleEntry>) -> Self {
+        SampleDescriptionTableAtom {
+            version: 0,
+            flags: [0u8; 3],
+            entries,
+        }
+    }
 }
 
 impl Parse for SampleDescriptionTableAtom {
@@ -257,6 +297,40 @@ impl SerializeAtom for SampleDescriptionTableAtom {
                         .extend_from_slice(&((audio.sample_rate * 65536.0) as u32).to_be_bytes());
                     audio.extensions.into_iter().for_each(|ext| {
                         let ext_data = ext.to_bytes();
+                        entry_data.extend_from_slice(&ext_data);
+                    });
+                }
+                SampleEntryData::Text(text) => {
+                    // Text sample entry structure
+                    entry_data.extend_from_slice(&text.version.to_be_bytes());
+                    entry_data.extend_from_slice(&text.revision_level.to_be_bytes());
+                    entry_data.extend_from_slice(&text.vendor);
+                    entry_data.extend_from_slice(&text.display_flags.to_be_bytes());
+                    entry_data.push(text.text_justification as u8);
+
+                    // Background color (3 * 2 bytes)
+                    for &color in &text.background_color {
+                        entry_data.extend_from_slice(&color.to_be_bytes());
+                    }
+
+                    // Default text box (4 * 2 bytes)
+                    for &coord in &text.default_text_box {
+                        entry_data.extend_from_slice(&coord.to_be_bytes());
+                    }
+
+                    // Add default style if present
+                    if let Some(ref style_data) = text.default_style {
+                        entry_data.extend_from_slice(style_data);
+                    }
+
+                    // Add font table if present
+                    if let Some(ref font_data) = text.font_table {
+                        entry_data.extend_from_slice(font_data);
+                    }
+
+                    // Add extensions
+                    text.extensions.into_iter().for_each(|ext| {
+                        let ext_data: Vec<u8> = ext.to_bytes();
                         entry_data.extend_from_slice(&ext_data);
                     });
                 }
@@ -371,6 +445,10 @@ fn parse_sample_entry<R: Read>(mut reader: R) -> Result<SampleEntry, anyhow::Err
         SampleEntryType::Mp4a | SampleEntryType::Aavd => {
             SampleEntryData::Audio(parse_audio_sample_entry(&data)?)
         }
+        SampleEntryType::Tx3g
+        | SampleEntryType::Wvtt
+        | SampleEntryType::Stpp
+        | SampleEntryType::Text => SampleEntryData::Text(parse_text_sample_entry(&data)?),
         _ => SampleEntryData::Other(data),
     };
 
@@ -552,6 +630,89 @@ fn parse_audio_sample_entry(data: &[u8]) -> Result<AudioSampleEntry, anyhow::Err
     })
 }
 
+fn parse_text_sample_entry(data: &[u8]) -> Result<TextSampleEntry, anyhow::Error> {
+    let mut cursor = Cursor::new(data);
+
+    // Read version (2 bytes)
+    let mut buf2 = [0u8; 2];
+    cursor.read_exact(&mut buf2).context("read version")?;
+    let version = u16::from_be_bytes(buf2);
+
+    // Read revision level (2 bytes)
+    cursor
+        .read_exact(&mut buf2)
+        .context("read revision level")?;
+    let revision_level = u16::from_be_bytes(buf2);
+
+    // Read vendor (4 bytes)
+    let mut vendor = [0u8; 4];
+    cursor.read_exact(&mut vendor).context("read vendor")?;
+
+    // Read display flags (4 bytes)
+    let mut buf4 = [0u8; 4];
+    cursor.read_exact(&mut buf4).context("read display flags")?;
+    let display_flags = u32::from_be_bytes(buf4);
+
+    // Read text justification (1 byte)
+    let mut buf1 = [0u8; 1];
+    cursor
+        .read_exact(&mut buf1)
+        .context("read text justification")?;
+    let text_justification = buf1[0] as i8;
+
+    // Read background color (3 * 2 bytes = 6 bytes)
+    let mut background_color = [0u16; 3];
+    for i in 0..3 {
+        cursor
+            .read_exact(&mut buf2)
+            .context("read background color")?;
+        background_color[i] = u16::from_be_bytes(buf2);
+    }
+
+    // Read default text box (4 * 2 bytes = 8 bytes)
+    let mut default_text_box = [0u16; 4];
+    for i in 0..4 {
+        cursor
+            .read_exact(&mut buf2)
+            .context("read default text box")?;
+        default_text_box[i] = u16::from_be_bytes(buf2);
+    }
+
+    // For simplicity, we'll store any remaining data as raw bytes
+    // In a full implementation, you'd parse the default style and font table
+    let mut remaining_data = Vec::new();
+    cursor
+        .read_to_end(&mut remaining_data)
+        .context("read remaining text entry data")?;
+
+    // Try to parse extensions from remaining data, but handle gracefully if it fails
+    let (default_style, font_table, extensions) = if remaining_data.is_empty() {
+        (None, None, Vec::new())
+    } else {
+        // Try to parse as extensions first
+        match parse_stsd_extensions(&remaining_data) {
+            Ok(parsed) => (None, None, parsed.extensions),
+            Err(_) => {
+                // If extension parsing fails, treat as raw style/font data
+                (Some(remaining_data), None, Vec::new())
+            }
+        }
+    };
+
+    Ok(TextSampleEntry {
+        version,
+        revision_level,
+        vendor,
+        display_flags,
+        text_justification,
+        background_color,
+        default_text_box,
+        default_style,
+        font_table,
+        extensions,
+    })
+}
+
 fn parse_pascal_string(bytes: &[u8; 32]) -> String {
     if bytes[0] == 0 {
         return String::new();
@@ -617,5 +778,50 @@ mod tests {
     #[test]
     fn test_stsd_roundtrip() {
         test_atom_roundtrip_sync::<SampleDescriptionTableAtom>(STSD);
+    }
+
+    #[test]
+    fn test_text_sample_entry_type_recognition() {
+        // Test that "text" sample entry type is recognized correctly
+        let text_bytes = b"text";
+        let entry_type = SampleEntryType::from_bytes(text_bytes);
+        assert_eq!(entry_type, SampleEntryType::Text);
+
+        // Test round-trip
+        let bytes_back = entry_type.as_bytes();
+        assert_eq!(bytes_back, text_bytes);
+
+        // Test string representation
+        assert_eq!(entry_type.as_str(), "text");
+    }
+
+    #[test]
+    fn test_text_sample_entry_parsing() {
+        // Test that a "text" sample entry gets parsed as Text variant, not Other
+        // This simulates the user's example data
+        let sample_data = vec![
+            0, 0, 0, 1, // version + revision_level
+            0, 0, 0, 0, // vendor
+            0, 0, 0, 0, // display_flags
+            0, // text_justification
+            0, 0, 0, 0, 0, 0, // background_color (3 * u16)
+            0, 0, 0, 1, // default_text_box (4 * u16) - partial
+            0, 0, 0, 0, // default_text_box continued
+            0, 13, // some extension data
+            102, 116, 97, 98, 0, 1, 0, 1, 0, // remaining data
+        ];
+
+        let result = parse_text_sample_entry(&sample_data);
+        assert!(
+            result.is_ok(),
+            "text sample entry should parse successfully: {:?}",
+            result.err()
+        );
+
+        let text_entry = result.unwrap();
+        assert_eq!(text_entry.version, 0);
+        assert_eq!(text_entry.revision_level, 1);
+        assert_eq!(text_entry.display_flags, 0);
+        assert_eq!(text_entry.text_justification, 0);
     }
 }

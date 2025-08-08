@@ -64,6 +64,16 @@ pub struct SampleToChunkAtom {
     pub entries: SampleToChunkEntries,
 }
 
+impl From<Vec<SampleToChunkEntry>> for SampleToChunkAtom {
+    fn from(entries: Vec<SampleToChunkEntry>) -> Self {
+        SampleToChunkAtom {
+            version: 0,
+            flags: [0u8; 3],
+            entries: entries.into(),
+        }
+    }
+}
+
 impl Parse for SampleToChunkAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
