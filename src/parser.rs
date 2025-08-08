@@ -12,6 +12,7 @@ use thiserror::Error;
 use crate::atom::containers::{
     DINF, EDTS, MDIA, MFRA, MINF, MOOF, MOOV, SCHI, SINF, STBL, TRAF, TRAK, UDTA,
 };
+use crate::atom::hdlr::HandlerType;
 use crate::atom::stco_co64::ChunkOffsets;
 use crate::atom::stsc::SampleToChunkEntry;
 use crate::atom::stsd::{
@@ -649,6 +650,20 @@ impl Metadata {
             .filter(|a| a.header.atom_type == MOOV)
             .flat_map(|a| a.children.iter().filter(|a| a.header.atom_type == TRAK))
             .map(TrakAtomRef)
+    }
+
+    /// Iterate through TRAK atoms with handler type Audio
+    pub fn audio_track_iter(&self) -> impl Iterator<Item = TrakAtomRef<'_>> {
+        self.tracks_iter().filter(|trak| {
+            match trak
+                .media()
+                .and_then(|mdia| mdia.handler_reference())
+                .and_then(|hdlr| Some(&hdlr.handler_type))
+            {
+                Some(HandlerType::Audio) => true,
+                _ => false,
+            }
+        })
     }
 
     pub fn tracks_iter_mut(&mut self) -> impl Iterator<Item = TrakAtomRefMut<'_>> {
