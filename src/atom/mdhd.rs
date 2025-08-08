@@ -8,7 +8,10 @@ use std::{
 };
 
 use crate::{
-    atom::{util::async_to_sync_read, FourCC},
+    atom::{
+        util::{async_to_sync_read, time::mp4_timestamp_now},
+        FourCC,
+    },
     parser::Parse,
     writer::SerializeAtom,
     ParseError,
@@ -141,10 +144,8 @@ impl MediaHeaderAtom {
         timescale: u32,
         duration: u64,
         #[builder(into)] language: LanguageCode,
-        #[builder(default = SystemTime::now().duration_since(UNIX_EPOCH).expect("time went backwards").as_secs())]
-        creation_time: u64,
-        #[builder(default = SystemTime::now().duration_since(UNIX_EPOCH).expect("time went backwards").as_secs())]
-        modification_time: u64,
+        #[builder(default = mp4_timestamp_now())] creation_time: u64,
+        #[builder(default = mp4_timestamp_now())] modification_time: u64,
     ) -> Self {
         MediaHeaderAtom {
             version: 0,
