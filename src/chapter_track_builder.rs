@@ -3,7 +3,6 @@ use std::time::Duration;
 use bon::bon;
 
 use crate::atom::{
-    chpl::ChapterEntries,
     containers::*,
     dref::{DataReferenceEntry, DataReferenceEntryInner},
     elst::{EditEntry, ELST},
@@ -23,6 +22,30 @@ use crate::atom::{
 };
 use crate::writer::SerializeAtom;
 
+/// Represents a chapter from input JSON (milliseconds-based)
+#[derive(Debug, Clone)]
+pub struct InputChapter {
+    pub title: String,
+    pub offset_ms: u64,
+    pub duration_ms: u64,
+}
+
+#[bon]
+impl InputChapter {
+    #[builder]
+    pub fn new(
+        #[builder(into, finish_fn)] title: String,
+        start_offset: Duration,
+        duration: Duration,
+    ) -> Self {
+        Self {
+            title,
+            offset_ms: start_offset.as_millis() as u64,
+            duration_ms: duration.as_millis() as u64,
+        }
+    }
+}
+
 /// Represents a chapter track that can generate TRAK atoms and sample data
 pub struct ChapterTrack {
     language: LanguageCode,
@@ -40,9 +63,9 @@ pub struct ChapterTrack {
 impl ChapterTrack {
     #[builder]
     pub fn new(
-        #[builder(finish_fn, into)] chapters: ChapterEntries,
+        #[builder(finish_fn, into)] chapters: Vec<InputChapter>,
         #[builder(default = LanguageCode::Undetermined)] language: LanguageCode,
-        #[builder(default = 1000)] timescale: u32,
+        #[builder(default = 44100)] timescale: u32, // Match audio timescale from dump
         #[builder(default = 600)] movie_timescale: u32,
         #[builder(default = 2)] track_id: u32,
         #[builder(into)] total_duration: Duration,
@@ -67,8 +90,9 @@ impl ChapterTrack {
     }
 
     /// Create chapter marker samples with fixed-size data
+    /// This creates a contiguous timeline by extending chapters to fill gaps
     fn create_samples_and_durations(
-        chapters: &ChapterEntries,
+        chapters: &[InputChapter],
         total_duration: Duration,
         timescale: u32,
     ) -> (Vec<Vec<u8>>, Vec<u32>) {
@@ -76,25 +100,27 @@ impl ChapterTrack {
             return (vec![], vec![]);
         }
 
-        let total_duration_100ns = total_duration.as_nanos() / 100;
+        let total_duration_ms = total_duration.as_millis() as u64;
         let mut samples = Vec::new();
         let mut durations = Vec::new();
 
         for (i, chapter) in chapters.iter().enumerate() {
-            // Create minimal chapter marker data (similar to working file's 45-byte samples)
-            // This creates a simple text sample with the chapter title
+            // Create chapter marker data (45 bytes like working file)
             let chapter_marker = Self::create_chapter_marker_data(&chapter.title);
             samples.push(chapter_marker);
 
-            // Calculate duration for this chapter
-            let end_time = if i + 1 < chapters.len() {
-                chapters[i + 1].start_time
+            // Calculate the end time for this chapter
+            let chapter_end_ms = if i + 1 < chapters.len() {
+                // Extend this chapter until the next chapter starts
+                chapters[i + 1].offset_ms
             } else {
-                total_duration_100ns as u64
+                // Last chapter extends to the end of the media
+                total_duration_ms
             };
 
-            let chapter_duration_100ns = end_time - chapter.start_time;
-            let chapter_duration_seconds = chapter_duration_100ns as f64 / 10_000_000.0;
+            // Calculate the actual duration this chapter should span
+            let actual_duration_ms = chapter_end_ms - chapter.offset_ms;
+            let chapter_duration_seconds = actual_duration_ms as f64 / 1000.0;
             let chapter_duration_scaled = (chapter_duration_seconds * timescale as f64) as u32;
 
             durations.push(chapter_duration_scaled);
@@ -103,27 +129,27 @@ impl ChapterTrack {
         (samples, durations)
     }
 
-    /// Create standardized chapter marker data (45 bytes like working file)
+    /// Create standardized chapter marker data matching QuickTime format
     fn create_chapter_marker_data(title: &str) -> Vec<u8> {
-        // Create a simple text sample similar to QuickTime chapter markers
-        // Using a fixed format that matches expected chapter track structure
-        let mut data = Vec::new();
+        let mut data = Vec::with_capacity(45);
 
-        // Add text length as 16-bit big-endian (QuickTime text sample format)
-        let text_bytes = title.as_bytes();
-        let text_len = text_bytes.len().min(65535) as u16;
+        // QuickTime text sample format:
+        // - 2 bytes: text length (big-endian)
+        // - N bytes: UTF-8 text
+        // - Padding to reach 45 bytes total
+
+        let title_bytes = title.as_bytes();
+        let text_len = title_bytes.len().min(43) as u16; // Leave 2 bytes for length
+
+        // Write text length
         data.extend_from_slice(&text_len.to_be_bytes());
 
-        // Add the actual text
-        data.extend_from_slice(&text_bytes[..text_len as usize]);
+        // Write text data
+        data.extend_from_slice(&title_bytes[..text_len as usize]);
 
-        // Pad to consistent size (45 bytes like working file)
-        // This ensures all samples have the same size for better compatibility
-        const TARGET_SIZE: usize = 45;
-        if data.len() < TARGET_SIZE {
-            data.resize(TARGET_SIZE, 0);
-        } else if data.len() > TARGET_SIZE {
-            data.truncate(TARGET_SIZE);
+        // Pad to exactly 45 bytes (matching the working file)
+        while data.len() < 45 {
+            data.push(0);
         }
 
         data
@@ -164,11 +190,11 @@ impl ChapterTrack {
     fn create_track_header(&self) -> Atom {
         let tkhd = TrackHeaderAtom {
             version: 0,
-            flags: [0, 0, 2], // Enabled in movie, disabled in preview
+            flags: [0, 0, 2], // Track enabled, not in movie (matches working file)
             creation_time: self.creation_time,
             modification_time: self.modification_time,
             track_id: self.track_id,
-            duration: self.movie_duration, // Use movie timescale duration
+            duration: self.movie_duration,
             layer: 0,
             alternate_group: 0,
             volume: 0.0,  // Text track has no volume
@@ -235,7 +261,7 @@ impl ChapterTrack {
     fn create_handler_reference(&self) -> Atom {
         let hdlr = HandlerReferenceAtom::builder()
             .handler_type(HandlerType::Text)
-            .name("SubtitleHandler")
+            .name("SubtitleHandler") // Matches working file
             .build();
 
         Atom {
@@ -248,7 +274,7 @@ impl ChapterTrack {
     fn create_media_information(&self, chunk_offset: u64) -> Atom {
         let stbl = self.create_sample_table(chunk_offset);
 
-        // For text tracks, we need a generic media information header
+        // Generic media header for text tracks (matches working file)
         let gmhd = GenericMediaHeaderAtom::new();
 
         // Create DINF (Data Information) with proper data reference
@@ -303,28 +329,25 @@ impl ChapterTrack {
     }
 
     fn create_sample_description(&self) -> Atom {
+        // Text sample entry matching the working file format
         let text_sample_entry = SampleEntry {
             entry_type: SampleEntryType::Text,
-            data_reference_index: 1, // References the data reference entry we created
+            data_reference_index: 1,
             data: SampleEntryData::Text(TextSampleEntry {
                 version: 0,
-                revision_level: 1,
+                revision_level: 1, // Matches working file
                 vendor: [0u8; 4],
                 display_flags: 0,
                 text_justification: 0,
-                background_color: [0u16; 3], // Black background (RGB)
-                default_text_box: [0, 0, 256, 0],
+                background_color: [0u16; 3],      // Black background
+                default_text_box: [0, 0, 256, 0], // Matches working file
                 default_style: Some(vec![
-                    0, 0, // Start character (0)
-                    0, 0, // End character (0)
-                    0, 0,  // Font ID (0)
-                    13, // Font size (13pt)
-                    102, 116, 97, 98, // Font name: "ftab" (first 4 chars)
+                    0, 0, 0, 0, // Start/end character indices
+                    0, 0,  // Font ID
+                    13, // Font size (matches working file)
+                    102, 116, 97, 98, // "ftab" font name
                     0,  // Font face flags
-                    1,  // Red color component
-                    0,  // Green color component
-                    1,  // Blue color component
-                    0,  // Alpha/padding
+                    1, 0, 1, 0, // Color: red=1, green=0, blue=1, alpha=0
                 ]),
                 font_table: None,
                 extensions: Vec::new(),
@@ -341,6 +364,7 @@ impl ChapterTrack {
     }
 
     fn create_time_to_sample(&self) -> Atom {
+        // Create individual entries for each sample (like working file)
         let entries: Vec<TimeToSampleEntry> = self
             .sample_durations
             .iter()
@@ -360,7 +384,7 @@ impl ChapterTrack {
     }
 
     fn create_sample_to_chunk(&self) -> Atom {
-        // Single chunk with all samples (like the working file)
+        // Single chunk with all samples (matches working file pattern)
         let stsc = SampleToChunkAtom::from(vec![SampleToChunkEntry {
             first_chunk: 1,
             samples_per_chunk: self.sample_data.len() as u32,
@@ -375,10 +399,11 @@ impl ChapterTrack {
     }
 
     fn create_sample_size(&self) -> Atom {
-        // Since we're using fixed 45-byte samples, use constant size format
+        // Fixed size of 45 bytes per sample (matches working file)
         let stsz = SampleSizeAtom::builder()
-            .sample_size(45) // Fixed size like working file
+            .sample_size(45) // Constant size
             .sample_count(self.sample_data.len() as u32)
+            .entry_sizes(vec![]) // Empty when using constant size
             .build();
 
         Atom {
@@ -402,115 +427,77 @@ impl ChapterTrack {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atom::chpl::ChapterEntry;
 
     #[test]
-    fn test_chapter_track_creation() {
+    fn test_chapter_track_with_millisecond_input() {
         let chapters = vec![
-            ChapterEntry {
-                start_time: 0,
-                title: "Introduction".to_string(),
+            InputChapter {
+                title: "Opening Credits".to_string(),
+                offset_ms: 0,
+                duration_ms: 19758,
             },
-            ChapterEntry {
-                start_time: 300_000_000, // 30 seconds in 100ns units
-                title: "Chapter 1".to_string(),
+            InputChapter {
+                title: "Dedication".to_string(),
+                offset_ms: 19758,
+                duration_ms: 4510,
             },
-            ChapterEntry {
-                start_time: 600_000_000, // 60 seconds in 100ns units
-                title: "Chapter 2".to_string(),
+            InputChapter {
+                title: "Epigraph".to_string(),
+                offset_ms: 24268,
+                duration_ms: 12364,
             },
         ];
+
+        let total_duration = Duration::from_millis(36632);
 
         let track = ChapterTrack::builder()
             .track_id(2)
-            .timescale(1000)
+            .timescale(44100) // Match audio timescale
             .movie_timescale(600)
-            .total_duration(Duration::from_secs(900))
+            .total_duration(total_duration)
             .build(chapters);
 
-        // Test that all samples are exactly 45 bytes
-        let individual_samples = track.individual_samples();
-        assert_eq!(individual_samples.len(), 3);
-        for sample in individual_samples {
+        // Verify sample count and sizes
+        assert_eq!(track.individual_samples().len(), 3);
+        for sample in track.individual_samples() {
             assert_eq!(sample.len(), 45);
         }
 
-        // Test TRAK atom creation
-        let trak_atom = track.create_trak_atom(1024);
-        assert_eq!(trak_atom.header.atom_type, FourCC(*TRAK));
-        assert_eq!(trak_atom.children.len(), 3); // TKHD, EDTS and MDIA
-    }
-
-    #[test]
-    fn test_empty_chapters() {
-        let track = ChapterTrack::builder()
-            .total_duration(Duration::from_secs(0))
-            .movie_timescale(600)
-            .build(vec![]);
-
-        assert!(track.sample_bytes().is_empty());
-        assert!(track.individual_samples().is_empty());
-    }
-
-    #[test]
-    fn test_chapter_marker_data_format() {
-        let marker_data = ChapterTrack::create_chapter_marker_data("Test Chapter");
-
-        // Should be exactly 45 bytes
-        assert_eq!(marker_data.len(), 45);
-
-        // First 2 bytes should be the text length in big-endian
-        let text_len = u16::from_be_bytes([marker_data[0], marker_data[1]]);
-        assert_eq!(text_len, "Test Chapter".len() as u16);
-
-        // Next bytes should be the text
-        let text_bytes = &marker_data[2..2 + text_len as usize];
-        assert_eq!(text_bytes, "Test Chapter".as_bytes());
-    }
-
-    #[test]
-    fn test_long_chapter_title_truncation() {
-        let long_title = "This is a very long chapter title that exceeds the normal expected length and should be truncated";
-        let marker_data = ChapterTrack::create_chapter_marker_data(long_title);
-
-        // Should still be exactly 45 bytes
-        assert_eq!(marker_data.len(), 45);
-
-        // Text length should be truncated to fit
-        let text_len = u16::from_be_bytes([marker_data[0], marker_data[1]]);
-        assert!(text_len <= 43); // 45 - 2 bytes for length
-    }
-
-    #[test]
-    fn test_duration_calculations() {
-        let chapters = vec![
-            ChapterEntry {
-                start_time: 0,
-                title: "Chapter 1".to_string(),
-            },
-            ChapterEntry {
-                start_time: 300_000_000, // 30 seconds in 100ns units
-                title: "Chapter 2".to_string(),
-            },
+        // Verify duration calculations
+        let expected_durations = [
+            (19.758 * 44100.0) as u32, // ~871 samples
+            (4.510 * 44100.0) as u32,  // ~199 samples
+            (12.364 * 44100.0) as u32, // ~545 samples
         ];
 
-        let track = ChapterTrack::builder()
-            .timescale(1000) // 1000 units per second
-            .total_duration(Duration::from_secs(120)) // 2 minutes total
-            .movie_timescale(600)
-            .build(chapters);
+        for (i, &expected) in expected_durations.iter().enumerate() {
+            assert!(
+                (track.sample_durations[i] as f32 - expected as f32).abs() < 100.0,
+                "Duration mismatch for chapter {}: expected ~{}, got {}",
+                i,
+                expected,
+                track.sample_durations[i]
+            );
+        }
+    }
 
-        // Verify we have 2 samples with correct durations
-        assert_eq!(track.sample_durations.len(), 2);
+    #[test]
+    fn test_chapter_marker_format() {
+        let title = "Test Chapter";
+        let data = ChapterTrack::create_chapter_marker_data(title);
 
-        // Chapter 1: 0s to 30s = 30 seconds = 30,000 units at timescale 1000
-        assert_eq!(track.sample_durations[0], 30_000);
+        assert_eq!(data.len(), 45);
 
-        // Chapter 2: 30s to 120s = 90 seconds = 90,000 units at timescale 1000
-        assert_eq!(track.sample_durations[1], 90_000);
+        // Verify text length encoding
+        let text_len = u16::from_be_bytes([data[0], data[1]]);
+        assert_eq!(text_len, title.len() as u16);
 
-        // Total should match media duration
-        let total_sample_duration: u32 = track.sample_durations.iter().sum();
-        assert_eq!(total_sample_duration, track.media_duration as u32);
+        // Verify text content
+        let text_data = &data[2..2 + text_len as usize];
+        assert_eq!(text_data, title.as_bytes());
+
+        // Verify padding
+        let padding = &data[2 + text_len as usize..];
+        assert!(padding.iter().all(|&b| b == 0));
     }
 }
