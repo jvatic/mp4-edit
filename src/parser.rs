@@ -12,6 +12,7 @@ use thiserror::Error;
 use crate::atom::containers::{
     DINF, EDTS, MDIA, MFRA, MINF, MOOF, MOOV, SCHI, SINF, STBL, TRAF, TRAK, UDTA,
 };
+use crate::atom::elst::EditEntry;
 use crate::atom::hdlr::HandlerType;
 use crate::atom::stco_co64::ChunkOffsets;
 use crate::atom::stsc::SampleToChunkEntry;
@@ -1027,13 +1028,37 @@ impl<'a> TrakAtomRefMut<'a> {
     }
 
     pub fn add_track_reference(&mut self, references: impl Into<Vec<TrackReference>>) {
-        self.0.children.push(Atom {
-            header: AtomHeader::new(FourCC(*TREF)),
-            data: Some(AtomData::TrackReference(TrackReferenceAtom {
-                references: references.into(),
-            })),
-            children: Vec::new(),
-        })
+        self.0.children.insert(
+            // try and insert after track header but before mdia
+            1.min(self.0.children.len()),
+            Atom {
+                header: AtomHeader::new(FourCC(*TREF)),
+                data: Some(AtomData::TrackReference(TrackReferenceAtom {
+                    references: references.into(),
+                })),
+                children: Vec::new(),
+            },
+        );
+    }
+
+    pub fn add_edit_list(&mut self, entries: impl Into<Vec<EditEntry>>) {
+        self.0.children.insert(
+            // try and insert after track header but before mdia
+            1.min(self.0.children.len()),
+            Atom {
+                header: AtomHeader::new(FourCC(*EDTS)),
+                data: None,
+                children: vec![Atom {
+                    header: AtomHeader::new(FourCC(*ELST)),
+                    data: Some(AtomData::EditList(EditListAtom {
+                        version: 0,
+                        flags: [0u8; 3],
+                        entries: entries.into(),
+                    })),
+                    children: Vec::new(),
+                }],
+            },
+        );
     }
 
     /// Updates track metadata with the new bitrate

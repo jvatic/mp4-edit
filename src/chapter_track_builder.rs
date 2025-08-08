@@ -5,6 +5,8 @@ use bon::bon;
 use crate::atom::{
     chpl::ChapterEntries,
     containers::*,
+    elst::{EditEntry, ELST},
+    gmhd::GenericMediaHeaderAtom,
     hdlr::{HandlerReferenceAtom, HandlerType},
     mdhd::{LanguageCode, MediaHeaderAtom},
     stco_co64::ChunkOffsetAtom,
@@ -15,8 +17,8 @@ use crate::atom::{
     stsz::SampleSizeAtom,
     stts::{TimeToSampleAtom, TimeToSampleEntry},
     tkhd::TrackHeaderAtom,
-    util::time::mp4_timestamp_now,
-    Atom, AtomData, AtomHeader, DataReferenceAtom, FourCC, RawData,
+    util::time::{mp4_timestamp_now, scaled_duration},
+    Atom, AtomData, AtomHeader, DataReferenceAtom, EditListAtom, FourCC,
 };
 use crate::writer::SerializeAtom;
 
@@ -28,7 +30,7 @@ pub struct ChapterTrack {
     creation_time: u64,
     modification_time: u64,
     sample_data: Vec<u8>,
-    total_duration: u64,
+    media_duration: u64,
     movie_duration: u64,
 }
 
@@ -45,29 +47,17 @@ impl ChapterTrack {
         #[builder(default = mp4_timestamp_now())] creation_time: u64,
         #[builder(default = mp4_timestamp_now())] modification_time: u64,
     ) -> Self {
-        let sample_data = Self::create_sample_data(&chapters);
-
-        const NANOS_PER_SECOND: u128 = 1_000_000_000;
-        let total_duration_nanos = total_duration.as_nanos();
-
-        // Calculate duration in media timescale (for MDHD and STTS)
-        let timescale_nanos = timescale as u128;
-        let total_duration = (total_duration_nanos * timescale_nanos / NANOS_PER_SECOND) as u64;
-
-        // Calculate duration in movie timescale (for TKHD)
-        let movie_timescale_nanos = movie_timescale as u128;
-        let movie_duration =
-            (total_duration_nanos * movie_timescale_nanos / NANOS_PER_SECOND) as u64;
-
         Self {
             language,
             timescale,
             track_id,
             creation_time,
             modification_time,
-            sample_data,
-            total_duration,
-            movie_duration,
+            sample_data: Self::create_sample_data(&chapters),
+            // Calculate duration in media timescale (for MDHD and STTS)
+            media_duration: scaled_duration(total_duration, timescale as u64),
+            // Calculate duration in movie timescale (for TKHD)
+            movie_duration: scaled_duration(total_duration, movie_timescale as u64),
         }
     }
 
@@ -110,6 +100,7 @@ impl ChapterTrack {
     /// Creates a TRAK atom for the chapter track at the specified chunk offset
     pub fn create_trak_atom(&self, chunk_offset: u64) -> Atom {
         let track_header = self.create_track_header();
+        let edit_list = self.create_edit_list_atom();
         let media_atom = self.create_media_atom(chunk_offset);
 
         Atom {
@@ -120,7 +111,7 @@ impl ChapterTrack {
                 data_size: 0, // Will be calculated when serialized
             },
             data: None,
-            children: vec![track_header, media_atom],
+            children: vec![track_header, edit_list, media_atom],
         }
     }
 
@@ -152,6 +143,26 @@ impl ChapterTrack {
         }
     }
 
+    fn create_edit_list_atom(&self) -> Atom {
+        Atom {
+            header: AtomHeader::new(FourCC(*EDTS)),
+            data: None,
+            children: vec![Atom {
+                header: AtomHeader::new(FourCC(*ELST)),
+                data: Some(AtomData::EditList(EditListAtom {
+                    version: 0,
+                    flags: [0u8; 3],
+                    entries: vec![EditEntry {
+                        segment_duration: self.movie_duration,
+                        media_rate: 1.0,
+                        media_time: 0,
+                    }],
+                })),
+                children: Vec::new(),
+            }],
+        }
+    }
+
     fn create_media_atom(&self, chunk_offset: u64) -> Atom {
         let mdhd = self.create_media_header();
         let hdlr = self.create_handler_reference();
@@ -172,7 +183,7 @@ impl ChapterTrack {
     fn create_media_header(&self) -> Atom {
         let mdhd = MediaHeaderAtom::builder()
             .timescale(self.timescale)
-            .duration(self.total_duration)
+            .duration(self.media_duration)
             .language(self.language)
             .build();
 
@@ -191,7 +202,7 @@ impl ChapterTrack {
     fn create_handler_reference(&self) -> Atom {
         let hdlr = HandlerReferenceAtom::builder()
             .handler_type(HandlerType::Text)
-            .name("ChapterListHandler")
+            .name("SubtitleHandler")
             .build();
 
         Atom {
@@ -209,8 +220,8 @@ impl ChapterTrack {
     fn create_media_information(&self, chunk_offset: u64) -> Atom {
         let stbl = self.create_sample_table(chunk_offset);
 
-        // For text tracks, we need a null media information header
-        let nmhd = RawData::new(FourCC(*b"nmhd"), vec![0u8; 8]);
+        // For text tracks, we need a generic media information header
+        let gmhd = GenericMediaHeaderAtom::new();
 
         // Create DINF (Data Information)
         let dref = DataReferenceAtom {
@@ -235,8 +246,8 @@ impl ChapterTrack {
             data: None,
             children: vec![
                 Atom {
-                    header: AtomHeader::new(nmhd.atom_type()),
-                    data: Some(AtomData::RawData(nmhd)),
+                    header: AtomHeader::new(gmhd.atom_type()),
+                    data: Some(AtomData::GenericMediaHeader(gmhd)),
                     children: vec![],
                 },
                 dinf,
@@ -308,7 +319,7 @@ impl ChapterTrack {
     fn create_time_to_sample(&self) -> Atom {
         let stts = TimeToSampleAtom::from(vec![TimeToSampleEntry {
             sample_count: 1,
-            sample_duration: self.total_duration as u32,
+            sample_duration: self.media_duration as u32,
         }]);
 
         Atom {
