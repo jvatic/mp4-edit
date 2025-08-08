@@ -133,14 +133,6 @@ fn parse_stts_data<R: Read>(mut reader: R) -> Result<TimeToSampleAtom, anyhow::E
             .context(format!("read sample duration for entry {}", i))?;
         let sample_duration = u32::from_be_bytes(sample_duration_buf);
 
-        // Validate entry
-        if sample_count == 0 {
-            return Err(anyhow!("Entry {} has zero sample count", i));
-        }
-        if sample_duration == 0 {
-            return Err(anyhow!("Entry {} has zero sample duration", i));
-        }
-
         entries.push(TimeToSampleEntry {
             sample_count,
             sample_duration,
