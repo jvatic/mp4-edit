@@ -46,11 +46,11 @@ use crate::writer::SerializeAtom;
 
 pub use self::{
     chpl::ChapterListAtom, dref::DataReferenceAtom, elst::EditListAtom, free::FreeAtom,
-    ftyp::FileTypeAtom, hdlr::HandlerReferenceAtom, ilst::ItemListAtom, mdhd::MediaHeaderAtom,
-    mvhd::MovieHeaderAtom, sbgp::SampleToGroupAtom, sgpd::SampleGroupDescriptionAtom,
-    smhd::SoundMediaHeaderAtom, stco_co64::ChunkOffsetAtom, stsc::SampleToChunkAtom,
-    stsd::SampleDescriptionTableAtom, stsz::SampleSizeAtom, stts::TimeToSampleAtom,
-    tkhd::TrackHeaderAtom, tref::TrackReferenceAtom, util::FourCC,
+    ftyp::FileTypeAtom, gmhd::GenericMediaHeaderAtom, hdlr::HandlerReferenceAtom,
+    ilst::ItemListAtom, mdhd::MediaHeaderAtom, mvhd::MovieHeaderAtom, sbgp::SampleToGroupAtom,
+    sgpd::SampleGroupDescriptionAtom, smhd::SoundMediaHeaderAtom, stco_co64::ChunkOffsetAtom,
+    stsc::SampleToChunkAtom, stsd::SampleDescriptionTableAtom, stsz::SampleSizeAtom,
+    stts::TimeToSampleAtom, tkhd::TrackHeaderAtom, tref::TrackReferenceAtom, util::FourCC,
 };
 
 #[derive(Clone)]
@@ -184,6 +184,7 @@ pub enum AtomData {
     HandlerReference(HandlerReferenceAtom),
     ItemList(ItemListAtom),
     SoundMediaHeader(SoundMediaHeaderAtom),
+    GenericMediaHeader(GenericMediaHeaderAtom),
     SampleDescriptionTable(SampleDescriptionTableAtom),
     TrackReference(TrackReferenceAtom),
     DataReference(DataReferenceAtom),
@@ -244,6 +245,12 @@ impl From<ItemListAtom> for AtomData {
 impl From<SoundMediaHeaderAtom> for AtomData {
     fn from(atom: SoundMediaHeaderAtom) -> Self {
         AtomData::SoundMediaHeader(atom)
+    }
+}
+
+impl From<GenericMediaHeaderAtom> for AtomData {
+    fn from(atom: GenericMediaHeaderAtom) -> Self {
+        AtomData::GenericMediaHeader(atom)
     }
 }
 
@@ -331,6 +338,7 @@ impl SerializeAtom for AtomData {
             HandlerReference(atom) => atom.atom_type(),
             ItemList(atom) => atom.atom_type(),
             SoundMediaHeader(atom) => atom.atom_type(),
+            GenericMediaHeader(atom) => atom.atom_type(),
             SampleDescriptionTable(atom) => atom.atom_type(),
             TrackReference(atom) => atom.atom_type(),
             DataReference(atom) => atom.atom_type(),
@@ -357,6 +365,7 @@ impl SerializeAtom for AtomData {
             HandlerReference(atom) => atom.into_body_bytes(),
             ItemList(atom) => atom.into_body_bytes(),
             SoundMediaHeader(atom) => atom.into_body_bytes(),
+            GenericMediaHeader(atom) => atom.into_body_bytes(),
             SampleDescriptionTable(atom) => atom.into_body_bytes(),
             TrackReference(atom) => atom.into_body_bytes(),
             DataReference(atom) => atom.into_body_bytes(),

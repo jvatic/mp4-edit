@@ -1,10 +1,14 @@
-use anyhow::{anyhow, Context};
+use std::{io::Read, time::Duration};
 
+use anyhow::{anyhow, Context};
+use bon::bon;
 use futures_io::AsyncRead;
-use std::io::Read;
 
 use crate::{
-    atom::{util::async_to_sync_read, FourCC},
+    atom::{
+        util::{async_to_sync_read, time::scaled_duration},
+        FourCC,
+    },
     parser::Parse,
     writer::SerializeAtom,
     ParseError,
@@ -22,6 +26,47 @@ pub struct EditListAtom {
     pub entries: Vec<EditEntry>,
 }
 
+pub struct SegmentDuration {
+    duration: Duration,
+    movie_timescale: u32,
+}
+
+#[bon]
+impl SegmentDuration {
+    #[builder]
+    pub fn new(duration: Duration, movie_timescale: u32) -> Self {
+        Self {
+            duration,
+            movie_timescale,
+        }
+    }
+
+    pub fn scaled(&self) -> u64 {
+        scaled_duration(self.duration, self.movie_timescale as u64)
+    }
+}
+
+#[derive(Default)]
+pub struct MediaDuration {
+    duration: Duration,
+    media_timescale: u32,
+}
+
+#[bon]
+impl MediaDuration {
+    #[builder]
+    pub fn new(duration: Duration, media_timescale: u32) -> Self {
+        Self {
+            duration,
+            media_timescale,
+        }
+    }
+
+    pub fn scaled(&self) -> i64 {
+        scaled_duration(self.duration, self.media_timescale as u64) as i64
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct EditEntry {
     /// Duration of this edit segment (in movie timescale units)
@@ -31,6 +76,22 @@ pub struct EditEntry {
     pub media_time: i64,
     /// Playback rate for this segment (1.0 = normal speed)
     pub media_rate: f32,
+}
+
+#[bon]
+impl EditEntry {
+    #[builder]
+    pub fn new(
+        segment_duration: SegmentDuration,
+        #[builder(default = Default::default())] media_time: MediaDuration,
+        #[builder(default = 1.0)] media_rate: f32,
+    ) -> Self {
+        Self {
+            segment_duration: segment_duration.scaled(),
+            media_time: media_time.scaled(),
+            media_rate,
+        }
+    }
 }
 
 impl Parse for EditListAtom {
