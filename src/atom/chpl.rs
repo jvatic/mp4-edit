@@ -21,6 +21,18 @@ pub const CHPL: &[u8; 4] = b"chpl";
 #[derive(Clone, Deref)]
 pub struct ChapterEntries(Vec<ChapterEntry>);
 
+impl ChapterEntries {
+    pub fn into_vec(self) -> Vec<ChapterEntry> {
+        self.0
+    }
+}
+
+impl From<Vec<ChapterEntry>> for ChapterEntries {
+    fn from(entries: Vec<ChapterEntry>) -> Self {
+        ChapterEntries(entries)
+    }
+}
+
 impl fmt::Debug for ChapterEntries {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.0.len() <= 10 {
