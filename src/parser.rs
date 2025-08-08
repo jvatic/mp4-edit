@@ -831,7 +831,12 @@ impl<'a> TrakAtomRef<'a> {
             .and_then(|minf| minf.sample_table())
             .and_then(|stbl| stbl.sample_size())
             .map(|s| {
-                let num_bits = s.entry_sizes.iter().sum::<u32>() * 8;
+                let num_bits = s
+                    .entry_sizes
+                    .iter()
+                    .map(|s| s.clone() as usize)
+                    .sum::<usize>()
+                    .saturating_mul(8);
 
                 let bitrate = (num_bits as f64) / duration_secds;
                 bitrate.round() as u32
