@@ -127,7 +127,7 @@ impl ChapterTrack {
     fn create_track_header(&self) -> Atom {
         let tkhd = TrackHeaderAtom {
             version: 0,
-            flags: [0, 0, 0x07], // Track enabled, in movie, in preview
+            flags: [0, 0, 2],
             creation_time: self.creation_time,
             modification_time: self.modification_time,
             track_id: self.track_id,

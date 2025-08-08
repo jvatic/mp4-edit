@@ -646,6 +646,20 @@ impl Metadata {
         Some(())
     }
 
+    pub fn moov(&self) -> Option<MoovAtomRef<'_>> {
+        self.atoms
+            .iter()
+            .find(|a| a.header.atom_type == MOOV)
+            .map(MoovAtomRef)
+    }
+
+    pub fn moov_mut(&mut self) -> Option<MoovAtomRefMut<'_>> {
+        self.atoms
+            .iter_mut()
+            .find(|a| a.header.atom_type == MOOV)
+            .map(MoovAtomRefMut)
+    }
+
     /// Iterate through TRAK atoms
     pub fn tracks_iter(&self) -> impl Iterator<Item = TrakAtomRef<'_>> {
         self.atoms
@@ -851,6 +865,48 @@ pub enum UpdateChunkOffsetError {
     SampleToChunkAtomNotFound,
     #[error("chunk offset atom not found")]
     ChunkOffsetAtomNotFound,
+}
+
+pub struct MoovAtomRef<'a>(&'a Atom);
+
+impl<'a> MoovAtomRef<'a> {
+    pub fn children(&self) -> impl Iterator<Item = &'a Atom> {
+        self.0.children.iter()
+    }
+
+    pub fn header(&self) -> Option<&'a MovieHeaderAtom> {
+        let atom = self
+            .0
+            .children
+            .iter()
+            .find(|a| a.header.atom_type == MVHD)?;
+        match atom.data.as_ref()? {
+            AtomData::MovieHeader(data) => Some(data),
+            _ => None,
+        }
+    }
+}
+
+pub struct MoovAtomRefMut<'a>(&'a mut Atom);
+
+impl<'a> MoovAtomRefMut<'a> {
+    pub fn as_ref(&self) -> MoovAtomRef<'_> {
+        MoovAtomRef(self.0)
+    }
+
+    pub fn children(&mut self) -> impl Iterator<Item = &'_ mut Atom> {
+        self.0.children.iter_mut()
+    }
+
+    pub fn header(&mut self) -> Option<&'_ mut MovieHeaderAtom> {
+        self.children()
+            .find(|a| a.header.atom_type == MDHD)
+            .and_then(|a| a.data.as_mut())
+            .and_then(|data| match data {
+                AtomData::MovieHeader(data) => Some(data),
+                _ => None,
+            })
+    }
 }
 
 pub struct TrakAtomRef<'a>(&'a Atom);
