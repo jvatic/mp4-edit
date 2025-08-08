@@ -19,6 +19,7 @@ use crate::atom::stsd::{
     BtrtExtension, DecoderSpecificInfo, SampleEntryData, SampleEntryType, StsdExtension,
 };
 use crate::atom::stts::TimeToSampleEntry;
+use crate::atom::tref::TrackReference;
 use crate::atom::util::DebugEllipsis;
 use crate::atom::AtomHeader;
 use crate::chunk_offset_builder::{ChunkInfo, ChunkOffsetBuilder};
@@ -95,6 +96,8 @@ pub enum ParseErrorKind {
     AtomParsing,
     #[display("Insufficient data")]
     InsufficientData,
+    #[display("moov atom is missing")]
+    MissingMoov,
 }
 
 impl ParseError {
@@ -674,6 +677,21 @@ impl Metadata {
             .map(TrakAtomRefMut)
     }
 
+    /// Iterate through TRAK atoms with handler type Audio
+    pub fn audio_track_iter_mut(&mut self) -> impl Iterator<Item = TrakAtomRefMut<'_>> {
+        self.tracks_iter_mut().filter(|trak| {
+            match trak
+                .as_ref()
+                .media()
+                .and_then(|mdia| mdia.handler_reference())
+                .and_then(|hdlr| Some(&hdlr.handler_type))
+            {
+                Some(HandlerType::Audio) => true,
+                _ => false,
+            }
+        })
+    }
+
     /// Retains only the TRAK atoms specified by the predicate
     pub fn tracks_retain<P>(mut self, mut pred: P) -> Self
     where
@@ -687,6 +705,25 @@ impl Metadata {
                     .retain(|a| a.header.atom_type != TRAK || pred(TrakAtomRef(a)));
             });
         self
+    }
+
+    /// Adds trak atom to moov
+    ///
+    /// Returns an error if moov isn't found
+    pub fn add_track(&mut self, trak: Atom) -> Result<(), ParseError> {
+        let moov = self
+            .atoms
+            .iter_mut()
+            .find(|a| a.header.atom_type == MOOV)
+            .ok_or_else(|| ParseError {
+                kind: ParseErrorKind::MissingMoov,
+                location: None,
+                source: None,
+            })?;
+
+        moov.children.push(trak);
+
+        Ok(())
     }
 
     /// Returns the sum of all metadata atom sizes in bytes
@@ -853,6 +890,11 @@ impl<'a> TrakAtomRef<'a> {
         Some(MdiaAtomRef(atom))
     }
 
+    pub fn track_id(&self) -> Option<u32> {
+        let tkhd = self.header()?;
+        Some(tkhd.track_id)
+    }
+
     /// Returns the sum of all sample sizes
     pub fn size(&self) -> usize {
         self.media()
@@ -926,6 +968,16 @@ impl<'a> TrakAtomRefMut<'a> {
             .iter_mut()
             .find(|a| a.header.atom_type == MDIA)?;
         Some(MdiaAtomRefMut(atom))
+    }
+
+    pub fn add_track_reference(&mut self, references: impl Into<Vec<TrackReference>>) {
+        self.0.children.push(Atom {
+            header: AtomHeader::new(FourCC(*TREF)),
+            data: Some(AtomData::TrackReference(TrackReferenceAtom {
+                references: references.into(),
+            })),
+            children: Vec::new(),
+        })
     }
 
     /// Updates track metadata with the new bitrate
