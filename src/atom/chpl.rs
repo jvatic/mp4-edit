@@ -4,6 +4,7 @@ use futures_io::AsyncRead;
 use std::{
     fmt,
     io::{BufRead, BufReader, Read},
+    time::Duration,
 };
 
 use crate::{
@@ -58,6 +59,18 @@ pub struct ChapterEntry {
     pub start_time: u64,
     /// Chapter title as UTF-8 string
     pub title: String,
+}
+
+const NANOS_PER_SECOND: u128 = 1_000_000_000;
+
+impl ChapterEntry {
+    pub fn new(title: String, start_time: Duration, timescale: u32) -> Self {
+        let start_time_nanos = start_time.as_nanos();
+        let timescale_nanos = timescale as u128;
+
+        let start_time = (start_time_nanos * timescale_nanos / NANOS_PER_SECOND) as u64;
+        ChapterEntry { start_time, title }
+    }
 }
 
 /// Chapter List Atom - contains chapter information for media
