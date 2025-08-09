@@ -764,7 +764,12 @@ impl Metadata {
     pub fn add_or_replace_chpl(&mut self, chpl: ChapterListAtom) {
         let udta = self
             .atoms_iter_mut()
-            .find(|atom| atom.header.atom_type == UDTA);
+            .find(|atom| atom.header.atom_type == MOOV)
+            .and_then(|moov| {
+                moov.children
+                    .iter_mut()
+                    .find(|atom| atom.header.atom_type == UDTA)
+            });
         let udta = match udta {
             Some(udta) => udta,
             None => {
@@ -778,6 +783,7 @@ impl Metadata {
                     data: None,
                     children: Vec::new(),
                 };
+                // TODO: add udta to MOOV
                 self.atoms.push(udta);
                 self.atoms.last_mut().unwrap()
             }
