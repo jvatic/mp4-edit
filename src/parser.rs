@@ -629,36 +629,51 @@ impl Metadata {
         self
     }
 
-    pub fn ftyp_mut<F>(&mut self, mut f: F) -> Option<()>
-    where
-        F: FnMut(&mut FileTypeAtom),
-    {
-        let ftyp = self
-            .atoms
-            .iter_mut()
-            .find(|a| a.header.atom_type == FTYP)?
-            .data
-            .as_mut()?;
-        if let AtomData::FileType(ftyp) = ftyp {
-            f(ftyp);
+    fn atom_position(&self, typ: &[u8; 4]) -> Option<usize> {
+        self.atoms.iter().position(|a| a.header.atom_type == typ)
+    }
+
+    fn find_atom(&self, typ: &[u8; 4]) -> Option<&'_ Atom> {
+        self.atoms.iter().find(|a| a.header.atom_type == typ)
+    }
+
+    pub fn ftyp(&mut self) -> FtypAtomRef<'_> {
+        FtypAtomRef(self.find_atom(FTYP))
+    }
+
+    pub fn ftyp_mut(&mut self) -> FtypAtomRefMut<'_> {
+        if let Some(index) = self.atom_position(FTYP) {
+            FtypAtomRefMut(&mut self.atoms[index])
         } else {
-            return None;
+            let index = 0;
+            self.atoms.insert(
+                index,
+                Atom::builder()
+                    .header(AtomHeader::new(FourCC(*FTYP)))
+                    .data(FileTypeAtom::default())
+                    .build(),
+            );
+            FtypAtomRefMut(&mut self.atoms[index])
         }
-        Some(())
     }
 
     pub fn moov(&self) -> Option<MoovAtomRef<'_>> {
-        self.atoms
-            .iter()
-            .find(|a| a.header.atom_type == MOOV)
-            .map(MoovAtomRef)
+        self.find_atom(MOOV).map(MoovAtomRef)
     }
 
-    pub fn moov_mut(&mut self) -> Option<MoovAtomRefMut<'_>> {
-        self.atoms
-            .iter_mut()
-            .find(|a| a.header.atom_type == MOOV)
-            .map(MoovAtomRefMut)
+    pub fn moov_mut(&mut self) -> MoovAtomRefMut<'_> {
+        if let Some(index) = self.atom_position(FTYP) {
+            MoovAtomRefMut(&mut self.atoms[index])
+        } else {
+            let index = self.atom_position(FTYP).map(|i| i + 1).unwrap_or_default();
+            self.atoms.insert(
+                index,
+                Atom::builder()
+                    .header(AtomHeader::new(FourCC(*MOOV)))
+                    .build(),
+            );
+            MoovAtomRefMut(&mut self.atoms[index])
+        }
     }
 
     /// Iterate through TRAK atoms
@@ -868,6 +883,31 @@ pub enum UpdateChunkOffsetError {
     SampleToChunkAtomNotFound,
     #[error("chunk offset atom not found")]
     ChunkOffsetAtomNotFound,
+}
+
+pub struct FtypAtomRefMut<'a>(&'a mut Atom);
+
+impl<'a> FtypAtomRefMut<'a> {
+    pub fn into_ref(self) -> FtypAtomRef<'a> {
+        FtypAtomRef(Some(self.0))
+    }
+
+    pub fn replace(&mut self, data: FileTypeAtom) {
+        self.0.data = Some(data.into())
+    }
+}
+
+pub struct FtypAtomRef<'a>(Option<&'a Atom>);
+
+impl<'a> FtypAtomRef<'a> {
+    pub fn data(&self) -> Option<&'a FileTypeAtom> {
+        self.0
+            .and_then(|ftyp| ftyp.data.as_ref())
+            .and_then(|data| match data {
+                AtomData::FileType(data) => Some(data),
+                _ => None,
+            })
+    }
 }
 
 pub struct MoovAtomRef<'a>(&'a Atom);

@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context};
+use bon::Builder;
 use futures_io::AsyncRead;
 use std::io::Read;
 
@@ -13,13 +14,16 @@ pub const FTYP: &[u8; 4] = b"ftyp";
 
 /// File Type Atom (ftyp) - ISO/IEC 14496-12
 /// This atom identifies the specifications to which this file complies.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Builder)]
 pub struct FileTypeAtom {
     /// Major brand - identifies the 'best use' of the file
+    #[builder(into)]
     pub major_brand: FourCC,
     /// Minor version - an informative integer for the minor version of the major brand
+    #[builder(default = Default::default())]
     pub minor_version: u32,
     /// Compatible brands - a list of brands compatible with this file
+    #[builder(default = vec![major_brand], into)]
     pub compatible_brands: Vec<FourCC>,
 }
 
