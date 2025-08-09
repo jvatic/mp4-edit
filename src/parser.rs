@@ -673,14 +673,12 @@ impl Metadata {
     /// Iterate through TRAK atoms with handler type Audio
     pub fn audio_track_iter(&self) -> impl Iterator<Item = TrakAtomRef<'_>> {
         self.tracks_iter().filter(|trak| {
-            match trak
-                .media()
-                .and_then(|mdia| mdia.handler_reference())
-                .and_then(|hdlr| Some(&hdlr.handler_type))
-            {
-                Some(HandlerType::Audio) => true,
-                _ => false,
-            }
+            matches!(
+                trak.media()
+                    .and_then(|mdia| mdia.handler_reference())
+                    .map(|hdlr| &hdlr.handler_type),
+                Some(HandlerType::Audio)
+            )
         })
     }
 
@@ -695,15 +693,13 @@ impl Metadata {
     /// Iterate through TRAK atoms with handler type Audio
     pub fn audio_track_iter_mut(&mut self) -> impl Iterator<Item = TrakAtomRefMut<'_>> {
         self.tracks_iter_mut().filter(|trak| {
-            match trak
-                .as_ref()
-                .media()
-                .and_then(|mdia| mdia.handler_reference())
-                .and_then(|hdlr| Some(&hdlr.handler_type))
-            {
-                Some(HandlerType::Audio) => true,
-                _ => false,
-            }
+            matches!(
+                trak.as_ref()
+                    .media()
+                    .and_then(|mdia| mdia.handler_reference())
+                    .map(|hdlr| &hdlr.handler_type),
+                Some(HandlerType::Audio)
+            )
         })
     }
 
@@ -810,28 +806,28 @@ impl Metadata {
         // mdat is located directly after metadata atoms, so metadata size + 8 bytes for the mdat header
         let mdat_content_offset = self.metadata_size() + 8;
 
-        let (chunk_offsets, original_chunk_offsets) =
-            self.tracks_iter()
-                .fold(Ok((ChunkOffsetBuilder::new(), Vec::new())), |acc, trak| {
-                    let (mut builder, mut chunk_offsets) = acc?;
-                    let stbl = trak
-                        .media()
-                        .and_then(|mdia| mdia.media_information())
-                        .and_then(|minf| minf.sample_table())
-                        .ok_or_else(|| UpdateChunkOffsetError::SampleTableNotFound)?;
-                    let stsz = stbl
-                        .sample_size()
-                        .ok_or_else(|| UpdateChunkOffsetError::SampleSizeAtomNotFound)?;
-                    let stsc = stbl
-                        .sample_to_chunk()
-                        .ok_or_else(|| UpdateChunkOffsetError::SampleToChunkAtomNotFound)?;
-                    let stco = stbl
-                        .chunk_offset()
-                        .ok_or_else(|| UpdateChunkOffsetError::ChunkOffsetAtomNotFound)?;
-                    builder.add_track(stsc, stsz);
-                    chunk_offsets.push(stco.chunk_offsets.inner());
-                    Ok((builder, chunk_offsets))
-                })?;
+        let (chunk_offsets, original_chunk_offsets) = self.tracks_iter().try_fold(
+            (ChunkOffsetBuilder::new(), Vec::new()),
+            |(mut builder, mut chunk_offsets), trak| {
+                let stbl = trak
+                    .media()
+                    .and_then(|mdia| mdia.media_information())
+                    .and_then(|minf| minf.sample_table())
+                    .ok_or(UpdateChunkOffsetError::SampleTableNotFound)?;
+                let stsz = stbl
+                    .sample_size()
+                    .ok_or(UpdateChunkOffsetError::SampleSizeAtomNotFound)?;
+                let stsc = stbl
+                    .sample_to_chunk()
+                    .ok_or(UpdateChunkOffsetError::SampleToChunkAtomNotFound)?;
+                let stco = stbl
+                    .chunk_offset()
+                    .ok_or(UpdateChunkOffsetError::ChunkOffsetAtomNotFound)?;
+                builder.add_track(stsc, stsz);
+                chunk_offsets.push(stco.chunk_offsets.inner());
+                Ok((builder, chunk_offsets))
+            },
+        )?;
 
         let mut chunk_offsets = chunk_offsets
             .build_chunk_offsets_ordered(original_chunk_offsets, mdat_content_offset as u64);
@@ -841,10 +837,10 @@ impl Metadata {
                 .media()
                 .and_then(|mdia| mdia.media_information())
                 .and_then(|minf| minf.sample_table())
-                .ok_or_else(|| UpdateChunkOffsetError::SampleTableNotFound)?;
+                .ok_or(UpdateChunkOffsetError::SampleTableNotFound)?;
             let stco = stbl
                 .chunk_offset()
-                .ok_or_else(|| UpdateChunkOffsetError::ChunkOffsetAtomNotFound)?;
+                .ok_or(UpdateChunkOffsetError::ChunkOffsetAtomNotFound)?;
             let chunk_offsets = std::mem::take(&mut chunk_offsets[track_idx]);
             stco.chunk_offsets = ChunkOffsets::from(chunk_offsets);
         }
@@ -991,7 +987,7 @@ impl<'a> TrakAtomRef<'a> {
                 let num_bits = s
                     .entry_sizes
                     .iter()
-                    .map(|s| s.clone() as usize)
+                    .map(|s| *s as usize)
                     .sum::<usize>()
                     .saturating_mul(8);
 
@@ -1005,7 +1001,7 @@ pub struct TrakAtomRefMut<'a>(&'a mut Atom);
 
 impl<'a> TrakAtomRefMut<'a> {
     pub fn as_ref(&self) -> TrakAtomRef<'_> {
-        TrakAtomRef(&self.0)
+        TrakAtomRef(self.0)
     }
 
     pub fn into_ref(self) -> TrakAtomRef<'a> {
@@ -1074,7 +1070,7 @@ impl<'a> TrakAtomRefMut<'a> {
             .children
             .iter_mut()
             .find(|a| a.header.atom_type == MDIA)
-            .map(|atom| MdiaAtomRefMut(atom));
+            .map(MdiaAtomRefMut);
         let stbl = mdia
             .and_then(|mdia| mdia.media_information())
             .and_then(|minf| minf.sample_table());
@@ -1173,7 +1169,7 @@ pub struct MdiaAtomRefMut<'a>(&'a mut Atom);
 
 impl<'a> MdiaAtomRefMut<'a> {
     pub fn as_ref(&self) -> MdiaAtomRef<'_> {
-        MdiaAtomRef(&self.0)
+        MdiaAtomRef(self.0)
     }
 
     pub fn into_ref(self) -> MdiaAtomRef<'a> {
@@ -1243,7 +1239,7 @@ pub struct MinfAtomRefMut<'a>(&'a mut Atom);
 
 impl<'a> MinfAtomRefMut<'a> {
     pub fn as_ref(&self) -> MinfAtomRef<'_> {
-        MinfAtomRef(&self.0)
+        MinfAtomRef(self.0)
     }
 
     pub fn into_ref(self) -> MinfAtomRef<'a> {
@@ -1342,7 +1338,7 @@ pub struct StblAtomRefMut<'a>(&'a mut Atom);
 
 impl<'a> StblAtomRefMut<'a> {
     pub fn as_ref(&self) -> StblAtomRef<'_> {
-        StblAtomRef(&self.0)
+        StblAtomRef(self.0)
     }
 
     pub fn into_ref(self) -> StblAtomRef<'a> {

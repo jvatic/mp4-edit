@@ -63,7 +63,7 @@ impl From<[u8; 3]> for LanguageCode {
 
 impl LanguageCode {
     /// Convert the language code to packed bytes format
-    fn to_packed_bytes(&self) -> [u8; 2] {
+    fn serialize(&self) -> [u8; 2] {
         let chars = match self {
             LanguageCode::English => ['e', 'n', 'g'],
             LanguageCode::Spanish => ['s', 'p', 'a'],
@@ -303,7 +303,7 @@ impl SerializeAtom for MediaHeaderAtom {
         }
 
         // Language (2 bytes) + pre_defined (2 bytes)
-        let lang_bytes = self.language.to_packed_bytes();
+        let lang_bytes = self.language.serialize();
         data.extend_from_slice(&lang_bytes);
         data.extend_from_slice(&self.pre_defined.to_be_bytes());
 
