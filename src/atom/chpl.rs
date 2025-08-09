@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context};
+use bon::bon;
 use derive_more::Deref;
 use futures_io::AsyncRead;
 use std::{
@@ -61,9 +62,12 @@ pub struct ChapterEntry {
     pub title: String,
 }
 
+#[bon]
 impl ChapterEntry {
-    pub fn new(title: String, start_time: Duration, timescale: u32) -> Self {
-        let start_time = scaled_duration(start_time, timescale as u64);
+    #[builder]
+    pub fn new(#[builder(into, finish_fn)] title: String, start_time: Duration) -> Self {
+        // convert to 100-nanosecond units
+        let start_time = (start_time.as_nanos() / 100).min(u64::MAX as u128) as u64;
         ChapterEntry { start_time, title }
     }
 }
@@ -77,6 +81,16 @@ pub struct ChapterListAtom {
     pub flags: [u8; 3],
     /// List of chapter entries
     pub chapters: ChapterEntries,
+}
+
+impl ChapterListAtom {
+    pub fn new(chapters: impl Into<ChapterEntries>) -> Self {
+        Self {
+            version: 1,
+            flags: [0u8; 3],
+            chapters: chapters.into(),
+        }
+    }
 }
 
 impl Parse for ChapterListAtom {
