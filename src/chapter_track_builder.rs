@@ -49,8 +49,8 @@ impl InputChapter {
 /// Configuration for QuickTime text sample entry formatting
 #[derive(Debug, Clone)]
 pub struct TextSampleConfig {
-    /// Size in bytes for each text sample (QuickTime standard is often 45 bytes)
-    pub sample_size: u16,
+    /// Minimum padding bytes to add after text content (for compatibility)
+    pub min_padding: u16,
     /// Font size for chapter text display
     pub font_size: u8,
     /// Default text box dimensions [top, left, bottom, right]
@@ -64,7 +64,7 @@ pub struct TextSampleConfig {
 impl Default for TextSampleConfig {
     fn default() -> Self {
         Self {
-            sample_size: 45,
+            min_padding: 4, // Small padding for compatibility
             font_size: 13,
             text_box: [0, 0, 256, 0],
             text_color: [1, 0, 1, 0],      // Magenta with no alpha
@@ -82,6 +82,7 @@ pub struct ChapterTrack {
     modification_time: u64,
     sample_data: Vec<Vec<u8>>,
     sample_durations: Vec<u32>,
+    sample_sizes: Vec<u32>, // Individual sample sizes
     media_duration: u64,
     movie_duration: u64,
     text_config: TextSampleConfig,
@@ -103,8 +104,14 @@ impl ChapterTrack {
         #[builder(default = TextSampleConfig::default())] text_config: TextSampleConfig,
         #[builder(default = "SubtitleHandler".to_string(), into)] handler_name: String,
     ) -> Self {
-        let (sample_data, sample_durations) =
-            Self::create_samples_and_durations(&chapters, total_duration, timescale, &text_config);
+        let (sample_data, sample_durations, sample_sizes) =
+            Self::create_samples_durations_and_sizes(
+                &chapters,
+                total_duration,
+                timescale,
+                &text_config,
+            );
+
         Self {
             language,
             timescale,
@@ -113,6 +120,7 @@ impl ChapterTrack {
             modification_time,
             sample_data,
             sample_durations,
+            sample_sizes,
             // Calculate duration in media timescale (for MDHD and STTS)
             media_duration: scaled_duration(total_duration, timescale as u64),
             // Calculate duration in movie timescale (for TKHD)
@@ -122,26 +130,30 @@ impl ChapterTrack {
         }
     }
 
-    /// Create chapter marker samples with configurable size
+    /// Create chapter marker samples with variable sizes based on content
     /// This creates a contiguous timeline by extending chapters to fill gaps
-    fn create_samples_and_durations(
+    fn create_samples_durations_and_sizes(
         chapters: &[InputChapter],
         total_duration: Duration,
         timescale: u32,
         text_config: &TextSampleConfig,
-    ) -> (Vec<Vec<u8>>, Vec<u32>) {
+    ) -> (Vec<Vec<u8>>, Vec<u32>, Vec<u32>) {
         if chapters.is_empty() {
-            return (vec![], vec![]);
+            return (vec![], vec![], vec![]);
         }
 
         let total_duration_ms = total_duration.as_millis() as u64;
         let mut samples = Vec::new();
         let mut durations = Vec::new();
+        let mut sizes = Vec::new();
 
         for (i, chapter) in chapters.iter().enumerate() {
-            // Create chapter marker data with configurable size
-            let chapter_marker = Self::create_chapter_marker_data(&chapter.title, text_config);
+            // Create chapter marker data with variable size based on content
+            let chapter_marker = Self::create_variable_chapter_marker(&chapter.title, text_config);
+            let sample_size = chapter_marker.len() as u32;
+
             samples.push(chapter_marker);
+            sizes.push(sample_size);
 
             // Calculate the end time for this chapter
             let chapter_end_ms = if i + 1 < chapters.len() {
@@ -160,32 +172,31 @@ impl ChapterTrack {
             durations.push(chapter_duration_scaled);
         }
 
-        (samples, durations)
+        (samples, durations, sizes)
     }
 
-    /// Create standardized chapter marker data matching QuickTime format
-    fn create_chapter_marker_data(title: &str, config: &TextSampleConfig) -> Vec<u8> {
-        let mut data = Vec::with_capacity(config.sample_size as usize);
-
+    /// Create variable-size chapter marker data based on actual text content
+    fn create_variable_chapter_marker(title: &str, config: &TextSampleConfig) -> Vec<u8> {
         // QuickTime text sample format:
         // - 2 bytes: text length (big-endian)
         // - N bytes: UTF-8 text
-        // - Padding to reach target sample size
+        // - Optional padding for compatibility
 
         let title_bytes = title.as_bytes();
-        let max_text_len = (config.sample_size as usize).saturating_sub(2);
-        let text_len = title_bytes.len().min(max_text_len) as u16;
+        let text_len = title_bytes.len() as u16;
 
-        // Write text length
+        // Calculate total size: text length field + text content + minimum padding
+        let total_size = 2 + title_bytes.len() + config.min_padding as usize;
+        let mut data = Vec::with_capacity(total_size);
+
+        // Write text length (big-endian)
         data.extend_from_slice(&text_len.to_be_bytes());
 
         // Write text data
-        data.extend_from_slice(&title_bytes[..text_len as usize]);
+        data.extend_from_slice(title_bytes);
 
-        // Pad to exact sample size
-        while data.len() < config.sample_size as usize {
-            data.push(0);
-        }
+        // Add minimum padding for compatibility
+        data.resize(data.len() + config.min_padding as usize, 0);
 
         data
     }
@@ -204,14 +215,37 @@ impl ChapterTrack {
         &self.sample_data
     }
 
+    /// Returns the individual sample sizes
+    pub fn sample_sizes(&self) -> &[u32] {
+        &self.sample_sizes
+    }
+
     /// Returns the total size of all samples combined
     pub fn total_sample_size(&self) -> usize {
-        self.sample_data.iter().map(|s| s.len()).sum()
+        self.sample_sizes.iter().map(|&s| s as usize).sum()
     }
 
     /// Returns the number of chapter samples
     pub fn sample_count(&self) -> u32 {
         self.sample_data.len() as u32
+    }
+
+    /// Check if all samples have the same size (for STSZ optimization)
+    pub fn has_uniform_sample_size(&self) -> bool {
+        if self.sample_sizes.is_empty() {
+            return true;
+        }
+        let first_size = self.sample_sizes[0];
+        self.sample_sizes.iter().all(|&size| size == first_size)
+    }
+
+    /// Get the uniform sample size if all samples are the same size
+    pub fn uniform_sample_size(&self) -> Option<u32> {
+        if self.has_uniform_sample_size() {
+            self.sample_sizes.first().copied()
+        } else {
+            None
+        }
     }
 
     /// Creates a TRAK atom for the chapter track at the specified chunk offset
@@ -447,12 +481,22 @@ impl ChapterTrack {
     }
 
     fn create_sample_size(&self) -> Atom {
-        // Use constant sample size from configuration
-        let stsz = SampleSizeAtom::builder()
-            .sample_size(self.text_config.sample_size as u32)
-            .sample_count(self.sample_count())
-            .entry_sizes(vec![]) // Empty when using constant size
-            .build();
+        // Use variable sample sizes - this is the key improvement
+        let stsz = if let Some(uniform_size) = self.uniform_sample_size() {
+            // Optimization: if all samples have the same size, use uniform mode
+            SampleSizeAtom::builder()
+                .sample_size(uniform_size)
+                .sample_count(self.sample_count())
+                .entry_sizes(vec![]) // Empty when using constant size
+                .build()
+        } else {
+            // Use individual sample sizes for variable-length content
+            SampleSizeAtom::builder()
+                .sample_size(0) // 0 indicates variable sizes
+                .sample_count(self.sample_count())
+                .entry_sizes(self.sample_sizes.clone())
+                .build()
+        };
 
         Atom {
             header: AtomHeader::new(stsz.atom_type()),
@@ -476,56 +520,6 @@ impl ChapterTrack {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_chapter_track_with_custom_config() {
-        let chapters = vec![
-            InputChapter {
-                title: "Opening Credits".to_string(),
-                offset_ms: 0,
-                duration_ms: 19758,
-            },
-            InputChapter {
-                title: "Dedication".to_string(),
-                offset_ms: 19758,
-                duration_ms: 4510,
-            },
-            InputChapter {
-                title: "Epigraph".to_string(),
-                offset_ms: 24268,
-                duration_ms: 12364,
-            },
-        ];
-
-        let total_duration = Duration::from_millis(36632);
-
-        let custom_config = TextSampleConfig {
-            sample_size: 64,
-            font_size: 16,
-            text_box: [0, 0, 512, 0],
-            text_color: [0, 1, 0, 255],      // Green text
-            font_name: [116, 101, 115, 116], // "test"
-        };
-
-        let track = ChapterTrack::builder()
-            .track_id(3)
-            .timescale(48000)
-            .movie_timescale(1000)
-            .total_duration(total_duration)
-            .text_config(custom_config)
-            .handler_name("ChapterHandler")
-            .language(LanguageCode::English)
-            .build(chapters);
-
-        // Verify custom configuration is applied
-        assert_eq!(track.sample_count(), 3);
-        for sample in track.individual_samples() {
-            assert_eq!(sample.len(), 64); // Custom sample size
-        }
-        assert_eq!(track.handler_name, "ChapterHandler");
-        assert_eq!(track.language, LanguageCode::English);
-    }
-
     #[test]
     fn test_chapter_track_with_your_audiobook_data() {
         let chapters = vec![
@@ -670,30 +664,5 @@ mod tests {
             track.sample_count(),
             track.sample_durations
         );
-    }
-
-    #[test]
-    fn test_chapter_marker_format_with_config() {
-        let config = TextSampleConfig {
-            sample_size: 32,
-            ..Default::default()
-        };
-
-        let title = "Test Chapter";
-        let data = ChapterTrack::create_chapter_marker_data(title, &config);
-
-        assert_eq!(data.len(), 32);
-
-        // Verify text length encoding (big-endian)
-        let text_len = u16::from_be_bytes([data[0], data[1]]);
-        assert_eq!(text_len, title.len() as u16);
-
-        // Verify text content
-        let text_data = &data[2..2 + text_len as usize];
-        assert_eq!(text_data, title.as_bytes());
-
-        // Verify padding
-        let padding = &data[2 + text_len as usize..];
-        assert!(padding.iter().all(|&b| b == 0));
     }
 }
