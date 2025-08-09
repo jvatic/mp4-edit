@@ -662,20 +662,17 @@ fn parse_text_sample_entry(data: &[u8]) -> Result<TextSampleEntry, anyhow::Error
 
     // Read background color (3 * 2 bytes = 6 bytes)
     let mut background_color = [0u16; 3];
-    for i in 0..3 {
-        cursor
-            .read_exact(&mut buf2)
-            .context("read background color")?;
-        background_color[i] = u16::from_be_bytes(buf2);
+    for item in background_color.iter_mut() {
+        *item = u16::from_be_bytes(buf2);
     }
 
     // Read default text box (4 * 2 bytes = 8 bytes)
     let mut default_text_box = [0u16; 4];
-    for i in 0..4 {
+    for item in default_text_box.iter_mut() {
         cursor
             .read_exact(&mut buf2)
             .context("read default text box")?;
-        default_text_box[i] = u16::from_be_bytes(buf2);
+        *item = u16::from_be_bytes(buf2);
     }
 
     // For simplicity, we'll store any remaining data as raw bytes
