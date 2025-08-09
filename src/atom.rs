@@ -42,6 +42,8 @@ pub mod containers {
     pub const META_VERSION_FLAGS_SIZE: usize = 4;
 }
 
+use bon::bon;
+
 use crate::writer::SerializeAtom;
 
 pub use self::{
@@ -123,7 +125,21 @@ pub struct Atom {
     pub children: Vec<Atom>,
 }
 
+#[bon]
 impl Atom {
+    #[builder]
+    pub fn new(
+        header: AtomHeader,
+        #[builder(into)] data: Option<AtomData>,
+        #[builder(default = Vec::new())] children: Vec<Atom>,
+    ) -> Self {
+        Self {
+            header,
+            data,
+            children,
+        }
+    }
+
     /// Recursively retains only the atoms that satisfy the predicate,
     /// one level of depth at a time (least to most nested).
     pub fn children_flat_retain_mut<P>(&mut self, mut pred: P)
