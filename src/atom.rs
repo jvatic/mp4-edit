@@ -100,9 +100,9 @@ pub struct AtomHeader {
 }
 
 impl AtomHeader {
-    pub fn new(atom_type: FourCC) -> Self {
+    pub fn new(atom_type: impl Into<FourCC>) -> Self {
         Self {
-            atom_type,
+            atom_type: atom_type.into(),
             offset: 0,
             header_size: 0,
             data_size: 0,

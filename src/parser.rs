@@ -508,25 +508,6 @@ impl<R> MdatParser<R> {
         self.meta
     }
 
-    /// Retains only the metadata atoms that satisfy the predicate
-    /// (applies to top level and nested atoms)
-    pub fn atoms_flat_retain_mut<P>(mut self, pred: P) -> Self
-    where
-        P: FnMut(&mut Atom) -> bool,
-    {
-        self.meta = self.meta.atoms_flat_retain_mut(pred);
-        self
-    }
-
-    /// Retains only the TRAK atoms specified by the predicate
-    pub fn tracks_retain<P>(mut self, pred: P) -> Self
-    where
-        P: FnMut(TrakAtomRef) -> bool,
-    {
-        self.meta = self.meta.tracks_retain(pred);
-        self
-    }
-
     pub fn mdat_header(&self) -> Option<&AtomHeader> {
         self.mdat.as_ref()
     }
@@ -557,11 +538,9 @@ impl<R> MdatParser<R> {
             chunk_info: Vec::new(),
         };
 
-        for trak in self.meta.tracks_iter() {
+        for trak in self.meta.moov().into_tracks_iter() {
             if let Some((trak, stco, stsc, stsz, stts)) = (|| {
-                let mdia = trak.media()?;
-                let minf = mdia.media_information()?;
-                let stbl = minf.sample_table()?;
+                let stbl = trak.media().media_information().sample_table();
                 let chunk_offset = stbl.chunk_offset()?;
                 let sample_entries = stbl.sample_to_chunk()?;
                 let sample_sizes = stbl.sample_size()?;
@@ -618,7 +597,7 @@ impl Metadata {
 
     /// Retains only the metadata atoms that satisfy the predicate
     /// (applies to top level and nested atoms)
-    pub fn atoms_flat_retain_mut<P>(mut self, mut pred: P) -> Self
+    pub fn atoms_flat_retain_mut<P>(&mut self, mut pred: P)
     where
         P: FnMut(&mut Atom) -> bool,
     {
@@ -626,15 +605,14 @@ impl Metadata {
         for atom in self.atoms.iter_mut() {
             atom.children_flat_retain_mut(|a| pred(a));
         }
-        self
     }
 
     fn atom_position(&self, typ: &[u8; 4]) -> Option<usize> {
         self.atoms.iter().position(|a| a.header.atom_type == typ)
     }
 
-    fn find_atom(&self, typ: &[u8; 4]) -> Option<&'_ Atom> {
-        self.atoms.iter().find(|a| a.header.atom_type == typ)
+    fn find_atom(&self, typ: &[u8; 4]) -> AtomRef<'_> {
+        AtomRef(self.atoms.iter().find(|a| a.header.atom_type == typ))
     }
 
     pub fn ftyp(&mut self) -> FtypAtomRef<'_> {
@@ -643,7 +621,7 @@ impl Metadata {
 
     pub fn ftyp_mut(&mut self) -> FtypAtomRefMut<'_> {
         if let Some(index) = self.atom_position(FTYP) {
-            FtypAtomRefMut(&mut self.atoms[index])
+            FtypAtomRefMut(AtomRefMut(&mut self.atoms[index]))
         } else {
             let index = 0;
             self.atoms.insert(
@@ -653,17 +631,17 @@ impl Metadata {
                     .data(FileTypeAtom::default())
                     .build(),
             );
-            FtypAtomRefMut(&mut self.atoms[index])
+            FtypAtomRefMut(AtomRefMut(&mut self.atoms[index]))
         }
     }
 
-    pub fn moov(&self) -> Option<MoovAtomRef<'_>> {
-        self.find_atom(MOOV).map(MoovAtomRef)
+    pub fn moov(&self) -> MoovAtomRef<'_> {
+        MoovAtomRef(self.find_atom(MOOV))
     }
 
     pub fn moov_mut(&mut self) -> MoovAtomRefMut<'_> {
-        if let Some(index) = self.atom_position(FTYP) {
-            MoovAtomRefMut(&mut self.atoms[index])
+        if let Some(index) = self.atom_position(MOOV) {
+            MoovAtomRefMut(AtomRefMut(&mut self.atoms[index]))
         } else {
             let index = self.atom_position(FTYP).map(|i| i + 1).unwrap_or_default();
             self.atoms.insert(
@@ -672,84 +650,8 @@ impl Metadata {
                     .header(AtomHeader::new(FourCC(*MOOV)))
                     .build(),
             );
-            MoovAtomRefMut(&mut self.atoms[index])
+            MoovAtomRefMut(AtomRefMut(&mut self.atoms[index]))
         }
-    }
-
-    /// Iterate through TRAK atoms
-    pub fn tracks_iter(&self) -> impl Iterator<Item = TrakAtomRef<'_>> {
-        self.atoms
-            .iter()
-            .filter(|a| a.header.atom_type == MOOV)
-            .flat_map(|a| a.children.iter().filter(|a| a.header.atom_type == TRAK))
-            .map(TrakAtomRef)
-    }
-
-    /// Iterate through TRAK atoms with handler type Audio
-    pub fn audio_track_iter(&self) -> impl Iterator<Item = TrakAtomRef<'_>> {
-        self.tracks_iter().filter(|trak| {
-            matches!(
-                trak.media()
-                    .and_then(|mdia| mdia.handler_reference())
-                    .map(|hdlr| &hdlr.handler_type),
-                Some(HandlerType::Audio)
-            )
-        })
-    }
-
-    pub fn tracks_iter_mut(&mut self) -> impl Iterator<Item = TrakAtomRefMut<'_>> {
-        self.atoms
-            .iter_mut()
-            .filter(|a| a.header.atom_type == MOOV)
-            .flat_map(|a| a.children.iter_mut().filter(|a| a.header.atom_type == TRAK))
-            .map(TrakAtomRefMut)
-    }
-
-    /// Iterate through TRAK atoms with handler type Audio
-    pub fn audio_track_iter_mut(&mut self) -> impl Iterator<Item = TrakAtomRefMut<'_>> {
-        self.tracks_iter_mut().filter(|trak| {
-            matches!(
-                trak.as_ref()
-                    .media()
-                    .and_then(|mdia| mdia.handler_reference())
-                    .map(|hdlr| &hdlr.handler_type),
-                Some(HandlerType::Audio)
-            )
-        })
-    }
-
-    /// Retains only the TRAK atoms specified by the predicate
-    pub fn tracks_retain<P>(mut self, mut pred: P) -> Self
-    where
-        P: FnMut(TrakAtomRef) -> bool,
-    {
-        self.atoms
-            .iter_mut()
-            .filter(|a| a.header.atom_type == MOOV)
-            .for_each(|a| {
-                a.children
-                    .retain(|a| a.header.atom_type != TRAK || pred(TrakAtomRef(a)));
-            });
-        self
-    }
-
-    /// Adds trak atom to moov
-    ///
-    /// Returns an error if moov isn't found
-    pub fn add_track(&mut self, trak: Atom) -> Result<(), ParseError> {
-        let moov = self
-            .atoms
-            .iter_mut()
-            .find(|a| a.header.atom_type == MOOV)
-            .ok_or_else(|| ParseError {
-                kind: ParseErrorKind::MissingMoov,
-                location: None,
-                source: None,
-            })?;
-
-        moov.children.push(trak);
-
-        Ok(())
     }
 
     /// Returns the sum of all metadata atom sizes in bytes
@@ -763,55 +665,15 @@ impl Metadata {
 
     /// Returns the sum of all track sizes in bytes
     pub fn mdat_size(&self) -> usize {
-        self.tracks_iter().map(|trak| trak.size()).sum::<usize>()
+        self.moov()
+            .into_tracks_iter()
+            .map(|trak| trak.size())
+            .sum::<usize>()
     }
 
     /// Returns the sum of metadata_size and mdat_size
     pub fn file_size(&self) -> usize {
         self.metadata_size() + self.mdat_size()
-    }
-
-    /// Adds or replaces the chapter list atom in the metadata
-    pub fn add_or_replace_chpl(&mut self, chpl: ChapterListAtom) {
-        let udta = self
-            .atoms_iter_mut()
-            .find(|atom| atom.header.atom_type == MOOV)
-            .and_then(|moov| {
-                moov.children
-                    .iter_mut()
-                    .find(|atom| atom.header.atom_type == UDTA)
-            });
-        let udta = match udta {
-            Some(udta) => udta,
-            None => {
-                let udta = Atom {
-                    header: AtomHeader {
-                        atom_type: FourCC::from(*UDTA),
-                        offset: 0,
-                        header_size: 0,
-                        data_size: 0,
-                    },
-                    data: None,
-                    children: Vec::new(),
-                };
-                // TODO: add udta to MOOV
-                self.atoms.push(udta);
-                self.atoms.last_mut().unwrap()
-            }
-        };
-
-        udta.children
-            .retain_mut(|atom| atom.header.atom_type != CHPL);
-        udta.children.push(Atom {
-            header: AtomHeader {
-                atom_type: FourCC::from(*CHPL),
-                offset: 0,
-                header_size: 0,
-                data_size: 0,
-            },
-            data: Some(AtomData::ChapterList(chpl)),
-            children: Vec::new(),
-        });
     }
 
     /// Updates chunk offsets for each track
@@ -821,14 +683,10 @@ impl Metadata {
         // mdat is located directly after metadata atoms, so metadata size + 8 bytes for the mdat header
         let mdat_content_offset = self.metadata_size() + 8;
 
-        let (chunk_offsets, original_chunk_offsets) = self.tracks_iter().try_fold(
+        let (chunk_offsets, original_chunk_offsets) = self.moov().into_tracks_iter().try_fold(
             (ChunkOffsetBuilder::new(), Vec::new()),
             |(mut builder, mut chunk_offsets), trak| {
-                let stbl = trak
-                    .media()
-                    .and_then(|mdia| mdia.media_information())
-                    .and_then(|minf| minf.sample_table())
-                    .ok_or(UpdateChunkOffsetError::SampleTableNotFound)?;
+                let stbl = trak.media().media_information().sample_table();
                 let stsz = stbl
                     .sample_size()
                     .ok_or(UpdateChunkOffsetError::SampleSizeAtomNotFound)?;
@@ -847,11 +705,11 @@ impl Metadata {
         let mut chunk_offsets = chunk_offsets
             .build_chunk_offsets_ordered(original_chunk_offsets, mdat_content_offset as u64);
 
-        for (track_idx, trak) in self.tracks_iter_mut().enumerate() {
+        for (track_idx, trak) in self.moov_mut().tracks().enumerate() {
             let mut stbl = trak
-                .media()
-                .and_then(|mdia| mdia.media_information())
-                .and_then(|minf| minf.sample_table())
+                .into_media()
+                .and_then(|mdia| mdia.into_media_information())
+                .and_then(|minf| minf.into_sample_table())
                 .ok_or(UpdateChunkOffsetError::SampleTableNotFound)?;
             let stco = stbl
                 .chunk_offset()
@@ -865,7 +723,7 @@ impl Metadata {
 
     /// Updates bitrate for each track
     pub fn update_bitrate(&mut self) {
-        self.tracks_iter_mut().for_each(|mut trak| {
+        self.moov_mut().tracks().for_each(|mut trak| {
             if let Some(bitrate) = trak.as_ref().bitrate() {
                 trak.update_bitrate(bitrate);
             }
@@ -885,23 +743,149 @@ pub enum UpdateChunkOffsetError {
     ChunkOffsetAtomNotFound,
 }
 
-pub struct FtypAtomRefMut<'a>(&'a mut Atom);
+pub struct AtomIter<'a> {
+    iter: Option<std::slice::Iter<'a, Atom>>,
+}
 
-impl<'a> FtypAtomRefMut<'a> {
-    pub fn into_ref(self) -> FtypAtomRef<'a> {
-        FtypAtomRef(Some(self.0))
-    }
-
-    pub fn replace(&mut self, data: FileTypeAtom) {
-        self.0.data = Some(data.into())
+impl<'a> AtomIter<'a> {
+    pub fn from_atom(atom_opt: Option<&'a Atom>) -> Self {
+        Self {
+            iter: atom_opt.map(|atom| atom.children.iter()),
+        }
     }
 }
 
-pub struct FtypAtomRef<'a>(Option<&'a Atom>);
+impl<'a> Iterator for AtomIter<'a> {
+    type Item = &'a Atom;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.as_mut().and_then(|iter| iter.next())
+    }
+}
+
+impl<'a> DoubleEndedIterator for AtomIter<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.iter.as_mut().and_then(|iter| iter.next_back())
+    }
+}
+
+impl<'a> ExactSizeIterator for AtomIter<'a> {
+    fn len(&self) -> usize {
+        self.iter
+            .as_ref()
+            .map(|iter| iter.len())
+            .unwrap_or_default()
+    }
+}
+
+pub struct AtomIterMut<'a> {
+    children: &'a mut [Atom],
+    index: usize,
+}
+
+impl<'a> AtomIterMut<'a> {
+    pub fn from_atom(atom: &'a mut Atom) -> Self {
+        Self {
+            children: &mut atom.children,
+            index: 0,
+        }
+    }
+}
+
+impl<'a> Iterator for AtomIterMut<'a> {
+    type Item = &'a mut Atom;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index >= self.children.len() {
+            return None;
+        }
+
+        let children = std::mem::take(&mut self.children);
+        let (current, rest) = children.split_at_mut(self.index + 1);
+        self.children = rest;
+        let old_index = self.index;
+        self.index = 0;
+
+        current.get_mut(old_index)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AtomRef<'a>(Option<&'a Atom>);
+
+impl<'a> AtomRef<'a> {
+    fn inner(&self) -> Option<&'a Atom> {
+        self.0
+    }
+
+    fn find_child(&self, typ: &[u8; 4]) -> Option<&'a Atom> {
+        self.children().find(|atom| atom.header.atom_type == typ)
+    }
+
+    fn children(&self) -> AtomIter<'a> {
+        AtomIter::from_atom(self.0)
+    }
+
+    fn child_position(&self, typ: &[u8; 4]) -> Option<usize> {
+        self.children()
+            .position(|atom| atom.header.atom_type == typ)
+    }
+
+    fn child_rposition(&self, typ: &[u8; 4]) -> Option<usize> {
+        self.children()
+            .rposition(|atom| atom.header.atom_type == typ)
+    }
+}
+
+#[derive(Debug)]
+struct AtomRefMut<'a>(&'a mut Atom);
+
+impl<'a> AtomRefMut<'a> {
+    fn as_ref(&self) -> AtomRef<'_> {
+        AtomRef(Some(self.0))
+    }
+
+    fn into_ref(self) -> AtomRef<'a> {
+        AtomRef(Some(self.0))
+    }
+
+    fn atom_mut(&mut self) -> &'_ mut Atom {
+        self.0
+    }
+
+    fn find_child(&mut self, typ: &[u8; 4]) -> Option<&'_ mut Atom> {
+        self.children().find(|atom| atom.header.atom_type == typ)
+    }
+
+    fn into_child(self, typ: &[u8; 4]) -> Option<&'a mut Atom> {
+        self.into_children()
+            .find(|atom| atom.header.atom_type == typ)
+    }
+
+    fn remove_child(&mut self, typ: &[u8; 4]) {
+        self.0.children.retain_mut(|a| a.header.atom_type != typ);
+    }
+
+    fn children(&mut self) -> impl Iterator<Item = &'_ mut Atom> {
+        self.0.children.iter_mut()
+    }
+
+    fn into_children(self) -> impl Iterator<Item = &'a mut Atom> {
+        AtomIterMut::from_atom(self.0)
+    }
+
+    fn insert_child(&mut self, index: usize, child: Atom) {
+        self.0.children.insert(index, child);
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FtypAtomRef<'a>(AtomRef<'a>);
 
 impl<'a> FtypAtomRef<'a> {
     pub fn data(&self) -> Option<&'a FileTypeAtom> {
         self.0
+            .inner()
             .and_then(|ftyp| ftyp.data.as_ref())
             .and_then(|data| match data {
                 AtomData::FileType(data) => Some(data),
@@ -910,35 +894,73 @@ impl<'a> FtypAtomRef<'a> {
     }
 }
 
-pub struct MoovAtomRef<'a>(&'a Atom);
+#[derive(Debug)]
+pub struct FtypAtomRefMut<'a>(AtomRefMut<'a>);
+
+impl<'a> FtypAtomRefMut<'a> {
+    pub fn as_ref(&self) -> FtypAtomRef<'_> {
+        FtypAtomRef(self.0.as_ref())
+    }
+
+    pub fn into_ref(self) -> FtypAtomRef<'a> {
+        FtypAtomRef(self.0.into_ref())
+    }
+
+    pub fn replace(&mut self, data: FileTypeAtom) {
+        self.0.atom_mut().data = Some(data.into())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct MoovAtomRef<'a>(AtomRef<'a>);
 
 impl<'a> MoovAtomRef<'a> {
     pub fn children(&self) -> impl Iterator<Item = &'a Atom> {
-        self.0.children.iter()
+        self.0.children()
     }
 
     pub fn header(&self) -> Option<&'a MovieHeaderAtom> {
-        let atom = self
-            .0
-            .children
-            .iter()
-            .find(|a| a.header.atom_type == MVHD)?;
+        let atom = self.children().find(|a| a.header.atom_type == MVHD)?;
         match atom.data.as_ref()? {
             AtomData::MovieHeader(data) => Some(data),
             _ => None,
         }
     }
+
+    /// Iterate through TRAK atoms
+    pub fn into_tracks_iter(self) -> impl Iterator<Item = TrakAtomRef<'a>> {
+        self.children()
+            .filter(|a| a.header.atom_type == TRAK)
+            .map(TrakAtomRef::new)
+    }
+
+    /// Iterate through TRAK atoms with handler type Audio
+    pub fn into_audio_track_iter(self) -> impl Iterator<Item = TrakAtomRef<'a>> {
+        self.into_tracks_iter().filter(|trak| {
+            matches!(
+                trak.media()
+                    .handler_reference()
+                    .map(|hdlr| &hdlr.handler_type),
+                Some(HandlerType::Audio)
+            )
+        })
+    }
 }
 
-pub struct MoovAtomRefMut<'a>(&'a mut Atom);
+#[derive(Debug)]
+pub struct MoovAtomRefMut<'a>(AtomRefMut<'a>);
 
 impl<'a> MoovAtomRefMut<'a> {
     pub fn as_ref(&self) -> MoovAtomRef<'_> {
-        MoovAtomRef(self.0)
+        MoovAtomRef(self.0.as_ref())
+    }
+
+    pub fn into_ref(self) -> MoovAtomRef<'a> {
+        MoovAtomRef(self.0.into_ref())
     }
 
     pub fn children(&mut self) -> impl Iterator<Item = &'_ mut Atom> {
-        self.0.children.iter_mut()
+        self.0.children()
     }
 
     pub fn header(&mut self) -> Option<&'_ mut MovieHeaderAtom> {
@@ -950,9 +972,92 @@ impl<'a> MoovAtomRefMut<'a> {
                 _ => None,
             })
     }
+
+    pub fn user_data(&mut self) -> UserDataAtomRefMut<'_> {
+        if let Some(index) = self.0.as_ref().child_position(UDTA) {
+            return UserDataAtomRefMut(AtomRefMut(&mut self.0 .0.children[index]));
+        }
+
+        let last_trak_index = self.0.as_ref().child_rposition(TRAK);
+        let mvhd_index = self.0.as_ref().child_position(MVHD);
+        let index = last_trak_index
+            .or(mvhd_index)
+            .map(|i| i + 1)
+            .unwrap_or_default();
+
+        self.0.insert_child(
+            index,
+            Atom::builder().header(AtomHeader::new(*UDTA)).build(),
+        );
+        UserDataAtomRefMut(AtomRefMut(&mut self.0 .0.children[index]))
+    }
+
+    pub fn tracks(&mut self) -> impl Iterator<Item = TrakAtomRefMut<'_>> {
+        self.0
+            .children()
+            .filter(|a| a.header.atom_type == TRAK)
+            .map(TrakAtomRefMut::new)
+    }
+
+    /// Iterate through TRAK atoms with handler type Audio
+    pub fn audio_tracks(&mut self) -> impl Iterator<Item = TrakAtomRefMut<'_>> {
+        self.tracks().filter(|trak| {
+            matches!(
+                trak.as_ref()
+                    .media()
+                    .handler_reference()
+                    .map(|hdlr| &hdlr.handler_type),
+                Some(HandlerType::Audio)
+            )
+        })
+    }
+
+    /// Retains only the TRAK atoms specified by the predicate
+    pub fn tracks_retain<P>(self, mut pred: P) -> Self
+    where
+        P: FnMut(TrakAtomRef) -> bool,
+    {
+        self.0
+             .0
+            .children
+            .retain(|a| a.header.atom_type != TRAK || pred(TrakAtomRef::new(a)));
+        self
+    }
+
+    /// Adds trak atom to moov
+    ///
+    /// Insetion position is either after the last TRAK or MVHD, or at the beginning
+    pub fn add_track(&mut self, trak: Atom) {
+        let last_trak_index = self.0.as_ref().child_rposition(TRAK);
+        let mvhd_index = self.0.as_ref().child_position(MVHD);
+        let index = last_trak_index
+            .or(mvhd_index)
+            .map(|i| i + 1)
+            .unwrap_or_default();
+        self.0.insert_child(index, trak);
+    }
 }
 
-pub struct TrakAtomRef<'a>(&'a Atom);
+pub struct UserDataAtomRefMut<'a>(AtomRefMut<'a>);
+
+impl<'a> UserDataAtomRefMut<'a> {
+    /// Adds or replaces the CHPL (chapter list) atom
+    pub fn add_or_replace_chpl(&mut self, chpl: ChapterListAtom) {
+        self.0.remove_child(CHPL);
+        let meta_index = self.0.as_ref().child_position(META);
+        let index = meta_index.map(|i| i + 1).unwrap_or_default();
+        self.0.insert_child(
+            index,
+            Atom::builder()
+                .header(AtomHeader::new(*CHPL))
+                .data(chpl)
+                .build(),
+        );
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct TrakAtomRef<'a>(AtomRef<'a>);
 
 impl<'a> fmt::Debug for TrakAtomRef<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -963,30 +1068,26 @@ impl<'a> fmt::Debug for TrakAtomRef<'a> {
 }
 
 impl<'a> TrakAtomRef<'a> {
+    fn new(atom: &'a Atom) -> Self {
+        Self(AtomRef(Some(atom)))
+    }
+
     pub fn children(&self) -> impl Iterator<Item = &'a Atom> {
-        self.0.children.iter()
+        self.0.children()
     }
 
     /// Finds the TKHD atom
     pub fn header(&self) -> Option<&'a TrackHeaderAtom> {
-        let atom = self
-            .0
-            .children
-            .iter()
-            .find(|a| a.header.atom_type == TKHD)?;
+        let atom = self.0.find_child(TKHD)?;
         match atom.data.as_ref()? {
             AtomData::TrackHeader(data) => Some(data),
             _ => None,
         }
     }
 
-    pub fn media(&self) -> Option<MdiaAtomRef<'a>> {
-        let atom = self
-            .0
-            .children
-            .iter()
-            .find(|a| a.header.atom_type == MDIA)?;
-        Some(MdiaAtomRef(atom))
+    /// Finds the MDIA atom
+    pub fn media(&self) -> MdiaAtomRef<'a> {
+        MdiaAtomRef(AtomRef(self.0.find_child(MDIA)))
     }
 
     pub fn track_id(&self) -> Option<u32> {
@@ -997,9 +1098,9 @@ impl<'a> TrakAtomRef<'a> {
     /// Returns the sum of all sample sizes
     pub fn size(&self) -> usize {
         self.media()
-            .and_then(|m| m.media_information())
-            .and_then(|m| m.sample_table())
-            .and_then(|st| st.sample_size())
+            .media_information()
+            .sample_table()
+            .sample_size()
             .map(|s| {
                 if s.entry_sizes.is_empty() {
                     s.sample_size * s.sample_count
@@ -1016,13 +1117,13 @@ impl<'a> TrakAtomRef<'a> {
     pub fn bitrate(&self) -> Option<u32> {
         let duration_secds = self
             .media()
-            .and_then(|m| m.header())
+            .header()
             .map(|mdhd| (mdhd.duration as f64) / (mdhd.timescale as f64))?;
 
         self.media()
-            .and_then(|mdia| mdia.media_information())
-            .and_then(|minf| minf.sample_table())
-            .and_then(|stbl| stbl.sample_size())
+            .media_information()
+            .sample_table()
+            .sample_size()
             .map(|s| {
                 let num_bits = s
                     .entry_sizes
@@ -1037,42 +1138,59 @@ impl<'a> TrakAtomRef<'a> {
     }
 }
 
-pub struct TrakAtomRefMut<'a>(&'a mut Atom);
+#[derive(Debug)]
+pub struct TrakAtomRefMut<'a>(AtomRefMut<'a>);
 
 impl<'a> TrakAtomRefMut<'a> {
+    fn new(atom: &'a mut Atom) -> Self {
+        Self(AtomRefMut(atom))
+    }
+
+    fn insert_child(&mut self, index: usize, child: Atom) {
+        self.0.insert_child(index, child);
+    }
+
     pub fn as_ref(&self) -> TrakAtomRef<'_> {
-        TrakAtomRef(self.0)
+        TrakAtomRef(self.0.as_ref())
     }
 
     pub fn into_ref(self) -> TrakAtomRef<'a> {
-        TrakAtomRef(self.0)
+        TrakAtomRef(self.0.into_ref())
+    }
+
+    pub fn children(&mut self) -> impl Iterator<Item = &'_ mut Atom> {
+        self.0.children()
     }
 
     pub fn header(&mut self) -> Option<&mut TrackHeaderAtom> {
-        let atom = self
-            .0
-            .children
-            .iter_mut()
-            .find(|a| a.header.atom_type == TKHD)?;
+        let atom = self.0.find_child(TKHD)?;
+        debug_assert!(matches!(atom.data, Some(AtomData::TrackHeader(_))));
         match atom.data.as_mut()? {
             AtomData::TrackHeader(data) => Some(data),
             _ => None,
         }
     }
 
-    pub fn media(self) -> Option<MdiaAtomRefMut<'a>> {
-        let atom = self
-            .0
-            .children
-            .iter_mut()
-            .find(|a| a.header.atom_type == MDIA)?;
-        Some(MdiaAtomRefMut(atom))
+    pub fn media(&mut self) -> Option<MdiaAtomRefMut<'_>> {
+        let atom = self.0.find_child(MDIA)?;
+        Some(MdiaAtomRefMut(AtomRefMut(atom)))
+    }
+
+    pub fn into_media(self) -> Option<MdiaAtomRefMut<'a>> {
+        let atom = self.0.into_child(MDIA)?;
+        Some(MdiaAtomRefMut(AtomRefMut(atom)))
     }
 
     pub fn add_track_reference(&mut self, references: impl Into<Vec<TrackReference>>) {
-        self.0.children.insert(
-            // try and insert after track header but before mdia
-            1.min(self.0.children.len()),
+        // try and insert after track header but before mdia
+        let tkhd_index = self.0.as_ref().child_position(TKHD);
+        let mdia_index = self.0.as_ref().child_position(MDIA);
+        let index = tkhd_index
+            .map(|i| i + 1)
+            .or_else(|| mdia_index.map(|i| i - 1))
+            .unwrap_or_default();
+        self.insert_child(
+            index,
             Atom {
                 header: AtomHeader::new(FourCC(*TREF)),
                 data: Some(AtomData::TrackReference(TrackReferenceAtom {
@@ -1084,9 +1202,15 @@ impl<'a> TrakAtomRefMut<'a> {
     }
 
     pub fn add_edit_list(&mut self, entries: impl Into<Vec<EditEntry>>) {
-        self.0.children.insert(
-            // try and insert after track header but before mdia
-            1.min(self.0.children.len()),
+        // try and insert after track header but before mdia
+        let tkhd_index = self.0.as_ref().child_position(TKHD);
+        let mdia_index = self.0.as_ref().child_position(MDIA);
+        let index = tkhd_index
+            .map(|i| i + 1)
+            .or_else(|| mdia_index.map(|i| i - 1))
+            .unwrap_or_default();
+        self.insert_child(
+            index,
             Atom {
                 header: AtomHeader::new(FourCC(*EDTS)),
                 data: None,
@@ -1106,14 +1230,13 @@ impl<'a> TrakAtomRefMut<'a> {
     /// Updates track metadata with the new bitrate
     pub fn update_bitrate(&mut self, bitrate: u32) {
         let mdia = self
-            .0
-            .children
-            .iter_mut()
+            .children()
             .find(|a| a.header.atom_type == MDIA)
+            .map(AtomRefMut)
             .map(MdiaAtomRefMut);
         let stbl = mdia
-            .and_then(|mdia| mdia.media_information())
-            .and_then(|minf| minf.sample_table());
+            .and_then(|mdia| mdia.into_media_information())
+            .and_then(|minf| minf.into_sample_table());
         if let Some(mut stbl) = stbl {
             if let Some(stsd) = stbl.sample_description() {
                 stsd.entries.retain_mut(|entry| {
@@ -1161,20 +1284,17 @@ impl<'a> TrakAtomRefMut<'a> {
     }
 }
 
-pub struct MdiaAtomRef<'a>(&'a Atom);
+#[derive(Debug, Clone, Copy)]
+pub struct MdiaAtomRef<'a>(AtomRef<'a>);
 
 impl<'a> MdiaAtomRef<'a> {
     pub fn children(&self) -> impl Iterator<Item = &'a Atom> {
-        self.0.children.iter()
+        self.0.children()
     }
 
     /// Finds the MDHD atom
     pub fn header(&self) -> Option<&'a MediaHeaderAtom> {
-        let atom = self
-            .0
-            .children
-            .iter()
-            .find(|a| a.header.atom_type == MDHD)?;
+        let atom = self.0.find_child(MDHD)?;
         match atom.data.as_ref()? {
             AtomData::MediaHeader(data) => Some(data),
             _ => None,
@@ -1183,11 +1303,7 @@ impl<'a> MdiaAtomRef<'a> {
 
     /// Finds the HDLR atom
     pub fn handler_reference(&self) -> Option<&'a HandlerReferenceAtom> {
-        let atom = self
-            .0
-            .children
-            .iter()
-            .find(|a| a.header.atom_type == HDLR)?;
+        let atom = self.0.find_child(HDLR)?;
         match atom.data.as_ref()? {
             AtomData::HandlerReference(data) => Some(data),
             _ => None,
@@ -1195,38 +1311,35 @@ impl<'a> MdiaAtomRef<'a> {
     }
 
     /// Finds the MINF atom
-    pub fn media_information(&self) -> Option<MinfAtomRef<'a>> {
-        let atom = self
-            .0
-            .children
-            .iter()
-            .find(|a| a.header.atom_type == MINF)?;
-        Some(MinfAtomRef(atom))
+    pub fn media_information(&self) -> MinfAtomRef<'a> {
+        let atom = self.0.find_child(MINF);
+        MinfAtomRef(AtomRef(atom))
     }
 }
 
-pub struct MdiaAtomRefMut<'a>(&'a mut Atom);
+#[derive(Debug)]
+pub struct MdiaAtomRefMut<'a>(AtomRefMut<'a>);
 
 impl<'a> MdiaAtomRefMut<'a> {
     pub fn as_ref(&self) -> MdiaAtomRef<'_> {
-        MdiaAtomRef(self.0)
+        MdiaAtomRef(self.0.as_ref())
     }
 
     pub fn into_ref(self) -> MdiaAtomRef<'a> {
-        MdiaAtomRef(self.0)
+        MdiaAtomRef(self.0.into_ref())
     }
 
-    pub fn children(self) -> impl Iterator<Item = &'a mut Atom> {
-        self.0.children.iter_mut()
+    pub fn children(&mut self) -> impl Iterator<Item = &'_ mut Atom> {
+        self.0.children()
+    }
+
+    pub fn into_children(self) -> impl Iterator<Item = &'a mut Atom> {
+        self.0.into_children()
     }
 
     /// Finds the MDHD atom
     pub fn header(&mut self) -> Option<&mut MediaHeaderAtom> {
-        let atom = self
-            .0
-            .children
-            .iter_mut()
-            .find(|a| a.header.atom_type == MDHD)?;
+        let atom = self.0.find_child(MDHD)?;
         match atom.data.as_mut()? {
             AtomData::MediaHeader(data) => Some(data),
             _ => None,
@@ -1235,11 +1348,7 @@ impl<'a> MdiaAtomRefMut<'a> {
 
     /// Finds the HDLR atom
     pub fn handler_reference(&mut self) -> Option<&mut HandlerReferenceAtom> {
-        let atom = self
-            .0
-            .children
-            .iter_mut()
-            .find(|a| a.header.atom_type == HDLR)?;
+        let atom = self.0.find_child(HDLR)?;
         match atom.data.as_mut()? {
             AtomData::HandlerReference(data) => Some(data),
             _ => None,
@@ -1247,74 +1356,73 @@ impl<'a> MdiaAtomRefMut<'a> {
     }
 
     /// Finds the MINF atom
-    pub fn media_information(self) -> Option<MinfAtomRefMut<'a>> {
-        let atom = self
-            .0
-            .children
-            .iter_mut()
-            .find(|a| a.header.atom_type == MINF)?;
-        Some(MinfAtomRefMut(atom))
+    pub fn media_information(&mut self) -> Option<MinfAtomRefMut<'_>> {
+        let atom = self.0.find_child(MINF)?;
+        Some(MinfAtomRefMut(AtomRefMut(atom)))
+    }
+
+    /// Finds the MINF atom
+    pub fn into_media_information(self) -> Option<MinfAtomRefMut<'a>> {
+        let atom = self.0.into_child(MINF)?;
+        Some(MinfAtomRefMut(AtomRefMut(atom)))
     }
 }
 
-pub struct MinfAtomRef<'a>(&'a Atom);
+#[derive(Debug, Clone, Copy)]
+pub struct MinfAtomRef<'a>(AtomRef<'a>);
 
 impl<'a> MinfAtomRef<'a> {
     pub fn children(&self) -> impl Iterator<Item = &'a Atom> {
-        self.0.children.iter()
+        self.0.children()
     }
 
     /// Finds the STBL atom
-    pub fn sample_table(&self) -> Option<StblAtomRef<'a>> {
-        let atom = self
-            .0
-            .children
-            .iter()
-            .find(|a| a.header.atom_type == STBL)?;
-        Some(StblAtomRef(atom))
+    pub fn sample_table(&self) -> StblAtomRef<'a> {
+        let atom = self.0.find_child(STBL);
+        StblAtomRef(AtomRef(atom))
     }
 }
 
-pub struct MinfAtomRefMut<'a>(&'a mut Atom);
+#[derive(Debug)]
+pub struct MinfAtomRefMut<'a>(AtomRefMut<'a>);
 
 impl<'a> MinfAtomRefMut<'a> {
     pub fn as_ref(&self) -> MinfAtomRef<'_> {
-        MinfAtomRef(self.0)
+        MinfAtomRef(self.0.as_ref())
     }
 
     pub fn into_ref(self) -> MinfAtomRef<'a> {
-        MinfAtomRef(self.0)
+        MinfAtomRef(self.0.into_ref())
     }
 
-    pub fn children(self) -> impl Iterator<Item = &'a mut Atom> {
-        self.0.children.iter_mut()
+    pub fn into_children(self) -> impl Iterator<Item = &'a mut Atom> {
+        self.0.into_children()
     }
 
     /// Finds the STBL atom
-    pub fn sample_table(self) -> Option<StblAtomRefMut<'a>> {
-        let atom = self
-            .0
-            .children
-            .iter_mut()
-            .find(|a| a.header.atom_type == STBL)?;
-        Some(StblAtomRefMut(atom))
+    pub fn sample_table(&mut self) -> Option<StblAtomRefMut<'_>> {
+        let atom = self.0.find_child(STBL)?;
+        Some(StblAtomRefMut(AtomRefMut(atom)))
+    }
+
+    /// Finds the STBL atom
+    pub fn into_sample_table(self) -> Option<StblAtomRefMut<'a>> {
+        let atom = self.0.into_child(STBL)?;
+        Some(StblAtomRefMut(AtomRefMut(atom)))
     }
 }
 
-pub struct StblAtomRef<'a>(&'a Atom);
+#[derive(Debug)]
+pub struct StblAtomRef<'a>(AtomRef<'a>);
 
 impl<'a> StblAtomRef<'a> {
     pub fn children(&self) -> impl Iterator<Item = &'a Atom> {
-        self.0.children.iter()
+        self.0.children()
     }
 
     /// Finds the STSD atom
     pub fn sample_description(&self) -> Option<&'a SampleDescriptionTableAtom> {
-        let atom = self
-            .0
-            .children
-            .iter()
-            .find(|a| a.header.atom_type == STSD)?;
+        let atom = self.0.find_child(STSD)?;
         match atom.data.as_ref()? {
             AtomData::SampleDescriptionTable(data) => Some(data),
             _ => None,
@@ -1323,11 +1431,7 @@ impl<'a> StblAtomRef<'a> {
 
     /// Finds the STTS atom
     pub fn time_to_sample(&self) -> Option<&'a TimeToSampleAtom> {
-        let atom = self
-            .0
-            .children
-            .iter()
-            .find(|a| a.header.atom_type == STTS)?;
+        let atom = self.0.find_child(STTS)?;
         match atom.data.as_ref()? {
             AtomData::TimeToSample(data) => Some(data),
             _ => None,
@@ -1336,11 +1440,7 @@ impl<'a> StblAtomRef<'a> {
 
     /// Finds the STSC atom
     pub fn sample_to_chunk(&self) -> Option<&'a SampleToChunkAtom> {
-        let atom = self
-            .0
-            .children
-            .iter()
-            .find(|a| a.header.atom_type == STSC)?;
+        let atom = self.0.find_child(STSC)?;
         match atom.data.as_ref()? {
             AtomData::SampleToChunk(data) => Some(data),
             _ => None,
@@ -1349,11 +1449,7 @@ impl<'a> StblAtomRef<'a> {
 
     /// Finds the STSZ atom
     pub fn sample_size(&self) -> Option<&'a SampleSizeAtom> {
-        let atom = self
-            .0
-            .children
-            .iter()
-            .find(|a| a.header.atom_type == STSZ)?;
+        let atom = self.0.find_child(STSZ)?;
         match atom.data.as_ref()? {
             AtomData::SampleSize(data) => Some(data),
             _ => None,
@@ -1362,11 +1458,7 @@ impl<'a> StblAtomRef<'a> {
 
     /// Finds the STCO atom
     pub fn chunk_offset(&self) -> Option<&'a ChunkOffsetAtom> {
-        let atom = self
-            .0
-            .children
-            .iter()
-            .find(|a| a.header.atom_type == STCO)?;
+        let atom = self.0.find_child(STCO)?;
         match atom.data.as_ref()? {
             AtomData::ChunkOffset(data) => Some(data),
             _ => None,
@@ -1374,28 +1466,25 @@ impl<'a> StblAtomRef<'a> {
     }
 }
 
-pub struct StblAtomRefMut<'a>(&'a mut Atom);
+#[derive(Debug)]
+pub struct StblAtomRefMut<'a>(AtomRefMut<'a>);
 
 impl<'a> StblAtomRefMut<'a> {
     pub fn as_ref(&self) -> StblAtomRef<'_> {
-        StblAtomRef(self.0)
+        StblAtomRef(self.0.as_ref())
     }
 
     pub fn into_ref(self) -> StblAtomRef<'a> {
-        StblAtomRef(self.0)
+        StblAtomRef(self.0.into_ref())
     }
 
-    pub fn children(self) -> impl Iterator<Item = &'a mut Atom> {
-        self.0.children.iter_mut()
+    pub fn into_children(self) -> impl Iterator<Item = &'a mut Atom> {
+        self.0.into_children()
     }
 
     /// Finds the STSD atom
     pub fn sample_description(&mut self) -> Option<&mut SampleDescriptionTableAtom> {
-        let atom = self
-            .0
-            .children
-            .iter_mut()
-            .find(|a| a.header.atom_type == STSD)?;
+        let atom = self.0.find_child(STSD)?;
         match atom.data.as_mut()? {
             AtomData::SampleDescriptionTable(data) => Some(data),
             _ => None,
@@ -1404,11 +1493,7 @@ impl<'a> StblAtomRefMut<'a> {
 
     /// Finds the STTS atom
     pub fn time_to_sample(&mut self) -> Option<&mut TimeToSampleAtom> {
-        let atom = self
-            .0
-            .children
-            .iter_mut()
-            .find(|a| a.header.atom_type == STTS)?;
+        let atom = self.0.find_child(STTS)?;
         match atom.data.as_mut()? {
             AtomData::TimeToSample(data) => Some(data),
             _ => None,
@@ -1417,11 +1502,7 @@ impl<'a> StblAtomRefMut<'a> {
 
     /// Finds the STSC atom
     pub fn sample_to_chunk(&mut self) -> Option<&mut SampleToChunkAtom> {
-        let atom = self
-            .0
-            .children
-            .iter_mut()
-            .find(|a| a.header.atom_type == STSC)?;
+        let atom = self.0.find_child(STSC)?;
         match atom.data.as_mut()? {
             AtomData::SampleToChunk(data) => Some(data),
             _ => None,
@@ -1430,11 +1511,7 @@ impl<'a> StblAtomRefMut<'a> {
 
     /// Finds the STSZ atom
     pub fn sample_size(&mut self) -> Option<&mut SampleSizeAtom> {
-        let atom = self
-            .0
-            .children
-            .iter_mut()
-            .find(|a| a.header.atom_type == STSZ)?;
+        let atom = self.0.find_child(STSZ)?;
         match atom.data.as_mut()? {
             AtomData::SampleSize(data) => Some(data),
             _ => None,
@@ -1443,11 +1520,7 @@ impl<'a> StblAtomRefMut<'a> {
 
     /// Finds the STCO atom
     pub fn chunk_offset(&mut self) -> Option<&mut ChunkOffsetAtom> {
-        let atom = self
-            .0
-            .children
-            .iter_mut()
-            .find(|a| a.header.atom_type == STCO)?;
+        let atom = self.0.find_child(STCO)?;
         match atom.data.as_mut()? {
             AtomData::ChunkOffset(data) => Some(data),
             _ => None,
@@ -1556,7 +1629,7 @@ impl<'a, R: AsyncRead + Unpin + Send> ChunkParser<'a, R> {
         // Create the chunk
         Ok(Chunk {
             trak_idx: track_idx,
-            trak: TrakAtomRef(self.tracks[track_idx].0),
+            trak: self.tracks[track_idx],
             sample_sizes: chunk_sample_sizes,
             sample_durations,
             data,
@@ -1599,7 +1672,7 @@ impl<'a> Chunk<'a> {
         let timescale = self
             .trak
             .media()
-            .and_then(|h| h.header())
+            .header()
             .map(|h| h.timescale)
             .expect("trak.mdia.mvhd is missing");
         self.sample_sizes
