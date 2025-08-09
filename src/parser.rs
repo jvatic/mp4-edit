@@ -17,7 +17,8 @@ use crate::atom::hdlr::HandlerType;
 use crate::atom::stco_co64::ChunkOffsets;
 use crate::atom::stsc::SampleToChunkEntry;
 use crate::atom::stsd::{
-    BtrtExtension, DecoderSpecificInfo, SampleEntryData, SampleEntryType, StsdExtension,
+    AudioSampleEntry, BtrtExtension, DecoderSpecificInfo, EsdsExtension, SampleEntry,
+    SampleEntryData, SampleEntryType, StsdExtension,
 };
 use crate::atom::stts::TimeToSampleEntry;
 use crate::atom::tref::TrackReference;
@@ -719,9 +720,9 @@ impl Metadata {
         Ok(())
     }
 
-    /// Updates bitrate for each track
-    pub fn update_bitrate(&mut self) {
-        self.moov_mut().tracks().for_each(|mut trak| {
+    /// Updates bitrate for each audio track
+    pub fn update_audio_bitrate(&mut self) {
+        self.moov_mut().audio_tracks().for_each(|mut trak| {
             if let Some(bitrate) = trak.as_ref().bitrate() {
                 trak.update_bitrate(bitrate);
             }
@@ -851,6 +852,10 @@ impl<'a> AtomRefMut<'a> {
         self.0
     }
 
+    fn get_child(&mut self, index: usize) -> AtomRefMut<'_> {
+        AtomRefMut(&mut self.0.children[index])
+    }
+
     fn find_child(&mut self, typ: &[u8; 4]) -> Option<&'_ mut Atom> {
         self.children().find(|atom| atom.header.atom_type == typ)
     }
@@ -861,7 +866,7 @@ impl<'a> AtomRefMut<'a> {
     }
 
     fn remove_child(&mut self, typ: &[u8; 4]) {
-        self.0.children.retain_mut(|a| a.header.atom_type != typ);
+        self.0.children.retain(|a| a.header.atom_type != typ);
     }
 
     fn children(&mut self) -> impl Iterator<Item = &'_ mut Atom> {
@@ -1169,9 +1174,21 @@ impl<'a> TrakAtomRefMut<'a> {
         }
     }
 
-    pub fn media(&mut self) -> Option<MdiaAtomRefMut<'_>> {
-        let atom = self.0.find_child(MDIA)?;
-        Some(MdiaAtomRefMut(AtomRefMut(atom)))
+    /// Finds or creates the MDIA atom
+    pub fn media(&mut self) -> MdiaAtomRefMut<'_> {
+        if let Some(index) = self.0.as_ref().child_position(MDIA) {
+            return MdiaAtomRefMut(self.0.get_child(index));
+        }
+        let index = vec![TREF, EDTS, TKHD]
+            .into_iter()
+            .find_map(|typ| self.0.as_ref().child_position(typ))
+            .map(|i| i + 1)
+            .unwrap_or_default();
+        self.0.insert_child(
+            index,
+            Atom::builder().header(AtomHeader::new(*MDIA)).build(),
+        );
+        MdiaAtomRefMut(self.0.get_child(index))
     }
 
     pub fn into_media(self) -> Option<MdiaAtomRefMut<'a>> {
@@ -1218,57 +1235,54 @@ impl<'a> TrakAtomRefMut<'a> {
 
     /// Updates track metadata with the new bitrate
     pub fn update_bitrate(&mut self, bitrate: u32) {
-        let mdia = self
-            .children()
-            .find(|a| a.header.atom_type == MDIA)
-            .map(AtomRefMut)
-            .map(MdiaAtomRefMut);
-        let stbl = mdia
-            .and_then(|mdia| mdia.into_media_information())
-            .and_then(|minf| minf.into_sample_table());
-        if let Some(mut stbl) = stbl {
-            if let Some(stsd) = stbl.sample_description() {
-                stsd.entries.retain_mut(|entry| {
-                    if !matches!(entry.data, SampleEntryData::Audio(_)) {
-                        return true;
-                    }
+        let mut mdia = self.media();
+        let mut minf = mdia.media_information();
+        let mut stbl = minf.sample_table();
+        let stsd = stbl.sample_description();
 
-                    entry.entry_type = SampleEntryType::Mp4a;
+        let entry = stsd.find_or_create_entry(
+            |entry| matches!(entry.data, SampleEntryData::Audio(_)),
+            || SampleEntry {
+                entry_type: SampleEntryType::Mp4a,
+                data_reference_index: 0,
+                data: SampleEntryData::Audio(AudioSampleEntry::default()),
+            },
+        );
 
-                    if let SampleEntryData::Audio(audio) = &mut entry.data {
-                        let mut sample_frequency = None;
-                        audio.extensions.retain_mut(|ext| match ext {
-                            StsdExtension::Esds(esds) => {
-                                if let Some(c) =
-                                    esds.es_descriptor.decoder_config_descriptor.as_mut()
-                                {
-                                    c.avg_bitrate = bitrate;
-                                    c.max_bitrate = bitrate;
-                                    if let Some(DecoderSpecificInfo::Audio(a, _)) =
-                                        c.decoder_specific_info.as_ref()
-                                    {
-                                        sample_frequency = Some(a.sampling_frequency.as_hz());
-                                    }
-                                };
-                                true
-                            }
-                            StsdExtension::Btrt(_) => false,
-                            StsdExtension::Unknown { .. } => false,
-                        });
-                        audio.extensions.push(StsdExtension::Btrt(BtrtExtension {
-                            buffer_size_db: 0,
-                            avg_bitrate: bitrate,
-                            max_bitrate: bitrate,
-                        }));
+        entry.entry_type = SampleEntryType::Mp4a;
 
-                        if let Some(hz) = sample_frequency {
-                            audio.sample_rate = hz as f32;
-                        }
-                    }
-
-                    true
-                });
+        if let SampleEntryData::Audio(audio) = &mut entry.data {
+            let mut sample_frequency = None;
+            audio
+                .extensions
+                .retain(|ext| matches!(ext, StsdExtension::Esds(_)));
+            let esds = audio.find_or_create_extension(
+                |ext| matches!(ext, StsdExtension::Esds(_)),
+                || StsdExtension::Esds(EsdsExtension::default()),
+            );
+            if let StsdExtension::Esds(esds) = esds {
+                let cfg = esds
+                    .es_descriptor
+                    .decoder_config_descriptor
+                    .get_or_insert_default();
+                cfg.avg_bitrate = bitrate;
+                cfg.max_bitrate = bitrate;
+                if let Some(DecoderSpecificInfo::Audio(a, _)) = cfg.decoder_specific_info.as_ref() {
+                    sample_frequency = Some(a.sampling_frequency.as_hz());
+                }
             }
+            audio.extensions.push(StsdExtension::Btrt(BtrtExtension {
+                buffer_size_db: 0,
+                avg_bitrate: bitrate,
+                max_bitrate: bitrate,
+            }));
+
+            if let Some(hz) = sample_frequency {
+                audio.sample_rate = hz as f32;
+            }
+        } else {
+            // this indicates a programming error since we won't get here with parsed data
+            unreachable!("STSD constructed with invalid data")
         }
     }
 }
@@ -1344,10 +1358,21 @@ impl<'a> MdiaAtomRefMut<'a> {
         }
     }
 
-    /// Finds the MINF atom
-    pub fn media_information(&mut self) -> Option<MinfAtomRefMut<'_>> {
-        let atom = self.0.find_child(MINF)?;
-        Some(MinfAtomRefMut(AtomRefMut(atom)))
+    /// Finds or creates the MINF atom
+    pub fn media_information(&mut self) -> MinfAtomRefMut<'_> {
+        if let Some(index) = self.0.as_ref().child_position(MINF) {
+            return MinfAtomRefMut(self.0.get_child(index));
+        }
+        let index = vec![HDLR, MDHD]
+            .into_iter()
+            .find_map(|typ| self.0.as_ref().child_position(typ))
+            .map(|i| i + 1)
+            .unwrap_or_default();
+        self.0.insert_child(
+            index,
+            Atom::builder().header(AtomHeader::new(*MINF)).build(),
+        );
+        MinfAtomRefMut(self.0.get_child(index))
     }
 
     /// Finds the MINF atom
@@ -1388,10 +1413,21 @@ impl<'a> MinfAtomRefMut<'a> {
         self.0.into_children()
     }
 
-    /// Finds the STBL atom
-    pub fn sample_table(&mut self) -> Option<StblAtomRefMut<'_>> {
-        let atom = self.0.find_child(STBL)?;
-        Some(StblAtomRefMut(AtomRefMut(atom)))
+    /// Finds or creates the STBL atom
+    pub fn sample_table(&mut self) -> StblAtomRefMut<'_> {
+        if let Some(index) = self.0.as_ref().child_position(STBL) {
+            return StblAtomRefMut(self.0.get_child(index));
+        }
+        let index = vec![DINF, SMHD]
+            .into_iter()
+            .find_map(|typ| self.0.as_ref().child_position(typ))
+            .map(|i| i + 1)
+            .unwrap_or_default();
+        self.0.insert_child(
+            index,
+            Atom::builder().header(AtomHeader::new(*STBL)).build(),
+        );
+        StblAtomRefMut(self.0.get_child(index))
     }
 
     /// Finds the STBL atom
@@ -1471,13 +1507,30 @@ impl<'a> StblAtomRefMut<'a> {
         self.0.into_children()
     }
 
-    /// Finds the STSD atom
-    pub fn sample_description(&mut self) -> Option<&mut SampleDescriptionTableAtom> {
-        let atom = self.0.find_child(STSD)?;
-        match atom.data.as_mut()? {
-            AtomData::SampleDescriptionTable(data) => Some(data),
-            _ => None,
+    /// Finds or creates the STSD atom
+    pub fn sample_description(&mut self) -> &'_ mut SampleDescriptionTableAtom {
+        if let Some(index) = self.0.as_ref().child_position(STSD) {
+            let stsd = self.0.get_child(index);
+            if let Some(AtomData::SampleDescriptionTable(data)) = stsd.0.data.as_mut() {
+                return data;
+            }
+            // this indicates programming error since we'll never end up here with a parsed Atom
+            unreachable!("STSD constructed with invalid data")
         }
+
+        let index = 0;
+        self.0.insert_child(
+            index,
+            Atom::builder()
+                .header(AtomHeader::new(*STSD))
+                .data(SampleDescriptionTableAtom::default())
+                .build(),
+        );
+        let stsd = self.0.get_child(index);
+        if let Some(AtomData::SampleDescriptionTable(data)) = stsd.0.data.as_mut() {
+            return data;
+        }
+        unreachable!()
     }
 
     /// Finds the STTS atom

@@ -22,14 +22,14 @@ pub enum StsdExtension {
     },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq)]
 pub struct EsdsExtension {
     pub version: u8,
     pub flags: [u8; 3],
     pub es_descriptor: EsDescriptor,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq)]
 pub struct EsDescriptor {
     pub es_id: u16,
     pub stream_dependence_flag: bool,
@@ -40,7 +40,7 @@ pub struct EsDescriptor {
     pub sl_config_descriptor: Option<SlConfigDescriptor>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq)]
 pub struct DecoderConfigDescriptor {
     pub object_type_indication: u8,
     pub stream_type: u8,

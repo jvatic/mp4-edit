@@ -144,7 +144,7 @@ pub struct VideoSampleEntry {
     pub extensions: Vec<StsdExtension>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct AudioSampleEntry {
     /// Version (usually 0)
     pub version: u16,
@@ -164,6 +164,20 @@ pub struct AudioSampleEntry {
     pub sample_rate: f32,
     /// Extension data (codec-specific atoms)
     pub extensions: Vec<StsdExtension>,
+}
+
+impl AudioSampleEntry {
+    pub fn find_or_create_extension<P, D>(&mut self, pred: P, default_fn: D) -> &mut StsdExtension
+    where
+        P: Fn(&StsdExtension) -> bool,
+        D: FnOnce() -> StsdExtension,
+    {
+        if let Some(index) = self.extensions.iter().position(pred) {
+            return &mut self.extensions[index];
+        }
+        self.extensions.push(default_fn());
+        self.extensions.last_mut().unwrap()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -190,7 +204,7 @@ pub struct TextSampleEntry {
     pub extensions: Vec<StsdExtension>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SampleDescriptionTableAtom {
     /// Version of the stsd atom format (0)
     pub version: u8,
@@ -207,6 +221,20 @@ impl From<Vec<SampleEntry>> for SampleDescriptionTableAtom {
             flags: [0u8; 3],
             entries,
         }
+    }
+}
+
+impl SampleDescriptionTableAtom {
+    pub fn find_or_create_entry<P, D>(&mut self, pred: P, default_fn: D) -> &mut SampleEntry
+    where
+        P: Fn(&SampleEntry) -> bool,
+        D: FnOnce() -> SampleEntry,
+    {
+        if let Some(index) = self.entries.iter().position(pred) {
+            return &mut self.entries[index];
+        }
+        self.entries.push(default_fn());
+        self.entries.last_mut().unwrap()
     }
 }
 

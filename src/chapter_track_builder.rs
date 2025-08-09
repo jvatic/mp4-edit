@@ -18,7 +18,7 @@ use crate::atom::{
     stts::{TimeToSampleAtom, TimeToSampleEntry},
     tkhd::TrackHeaderAtom,
     util::time::{mp4_timestamp_now, scaled_duration},
-    Atom, AtomData, AtomHeader, DataReferenceAtom, EditListAtom, FourCC,
+    Atom, AtomData, AtomHeader, DataReferenceAtom, EditListAtom,
 };
 use crate::writer::SerializeAtom;
 
