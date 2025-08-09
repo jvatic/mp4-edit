@@ -255,7 +255,7 @@ impl ChapterTrack {
         let media_atom = self.create_media_atom(chunk_offset);
 
         Atom {
-            header: AtomHeader::new(FourCC(*TRAK)),
+            header: AtomHeader::new(*TRAK),
             data: None,
             children: vec![track_header, edit_list, media_atom],
         }
@@ -286,10 +286,10 @@ impl ChapterTrack {
 
     fn create_edit_list_atom(&self) -> Atom {
         Atom {
-            header: AtomHeader::new(FourCC(*EDTS)),
+            header: AtomHeader::new(*EDTS),
             data: None,
             children: vec![Atom {
-                header: AtomHeader::new(FourCC(*ELST)),
+                header: AtomHeader::new(*ELST),
                 data: Some(AtomData::EditList(EditListAtom {
                     version: 0,
                     flags: [0u8; 3],
@@ -310,7 +310,7 @@ impl ChapterTrack {
         let minf = self.create_media_information(chunk_offset);
 
         Atom {
-            header: AtomHeader::new(FourCC(*MDIA)),
+            header: AtomHeader::new(*MDIA),
             data: None,
             children: vec![mdhd, hdlr, minf],
         }
@@ -364,7 +364,7 @@ impl ChapterTrack {
         };
 
         let dinf = Atom {
-            header: AtomHeader::new(FourCC(*DINF)),
+            header: AtomHeader::new(*DINF),
             data: None,
             children: vec![Atom {
                 header: AtomHeader::new(dref.atom_type()),
@@ -374,7 +374,7 @@ impl ChapterTrack {
         };
 
         Atom {
-            header: AtomHeader::new(FourCC(*MINF)),
+            header: AtomHeader::new(*MINF),
             data: None,
             children: vec![
                 Atom {
@@ -396,7 +396,7 @@ impl ChapterTrack {
         let stco = self.create_chunk_offset(chunk_offset);
 
         Atom {
-            header: AtomHeader::new(FourCC(*STBL)),
+            header: AtomHeader::new(*STBL),
             data: None,
             children: vec![stsd, stts, stsc, stsz, stco],
         }

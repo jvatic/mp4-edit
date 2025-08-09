@@ -72,6 +72,14 @@ pub struct TrackReferenceAtom {
     pub references: Vec<TrackReference>,
 }
 
+impl TrackReferenceAtom {
+    pub fn new(references: impl Into<Vec<TrackReference>>) -> Self {
+        Self {
+            references: references.into(),
+        }
+    }
+}
+
 impl fmt::Display for TrackReferenceAtom {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.references.is_empty() {

@@ -26,6 +26,16 @@ pub struct EditListAtom {
     pub entries: Vec<EditEntry>,
 }
 
+impl EditListAtom {
+    pub fn new(entries: impl Into<Vec<EditEntry>>) -> Self {
+        Self {
+            version: 0,
+            flags: [0u8; 3],
+            entries: entries.into(),
+        }
+    }
+}
+
 pub struct SegmentDuration {
     duration: Duration,
     movie_timescale: u32,

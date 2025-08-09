@@ -627,7 +627,7 @@ impl Metadata {
             self.atoms.insert(
                 index,
                 Atom::builder()
-                    .header(AtomHeader::new(FourCC(*FTYP)))
+                    .header(AtomHeader::new(*FTYP))
                     .data(FileTypeAtom::default())
                     .build(),
             );
@@ -646,9 +646,7 @@ impl Metadata {
             let index = self.atom_position(FTYP).map(|i| i + 1).unwrap_or_default();
             self.atoms.insert(
                 index,
-                Atom::builder()
-                    .header(AtomHeader::new(FourCC(*MOOV)))
-                    .build(),
+                Atom::builder().header(AtomHeader::new(*MOOV)).build(),
             );
             MoovAtomRefMut(AtomRefMut(&mut self.atoms[index]))
         }
@@ -1191,13 +1189,10 @@ impl<'a> TrakAtomRefMut<'a> {
             .unwrap_or_default();
         self.insert_child(
             index,
-            Atom {
-                header: AtomHeader::new(FourCC(*TREF)),
-                data: Some(AtomData::TrackReference(TrackReferenceAtom {
-                    references: references.into(),
-                })),
-                children: Vec::new(),
-            },
+            Atom::builder()
+                .header(AtomHeader::new(*TREF))
+                .data(TrackReferenceAtom::new(references))
+                .build(),
         );
     }
 
@@ -1211,19 +1206,13 @@ impl<'a> TrakAtomRefMut<'a> {
             .unwrap_or_default();
         self.insert_child(
             index,
-            Atom {
-                header: AtomHeader::new(FourCC(*EDTS)),
-                data: None,
-                children: vec![Atom {
-                    header: AtomHeader::new(FourCC(*ELST)),
-                    data: Some(AtomData::EditList(EditListAtom {
-                        version: 0,
-                        flags: [0u8; 3],
-                        entries: entries.into(),
-                    })),
-                    children: Vec::new(),
-                }],
-            },
+            Atom::builder()
+                .header(AtomHeader::new(*EDTS))
+                .children(vec![Atom::builder()
+                    .header(AtomHeader::new(*ELST))
+                    .data(EditListAtom::new(entries))
+                    .build()])
+                .build(),
         );
     }
 
