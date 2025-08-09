@@ -71,7 +71,8 @@ where
     let mut metadata = input_metadata.clone();
 
     let mdat_size = metadata
-        .tracks_iter()
+        .moov()
+        .into_tracks_iter()
         .map(|trak| trak.size())
         .sum::<usize>();
 

@@ -108,19 +108,19 @@ async fn print_atoms(metadata: Metadata, mdat_header: Option<AtomHeader>) -> any
     let mut first_atom = true;
 
     let mut track_bitrate = Vec::with_capacity(1);
-    for trak in metadata.tracks_iter() {
+    for trak in metadata.moov().into_tracks_iter() {
         let num_bits = trak
             .media()
-            .and_then(|m| m.media_information())
-            .and_then(|m| m.sample_table())
-            .and_then(|st| st.sample_size())
+            .media_information()
+            .sample_table()
+            .sample_size()
             .map(|s| s.entry_sizes.iter().sum::<u32>())
             .unwrap_or_default()
             .saturating_mul(8);
 
         let duration_secds = trak
             .media()
-            .and_then(|m| m.header())
+            .header()
             .map(|mdhd| (mdhd.duration as f64) / (mdhd.timescale as f64))
             .unwrap_or_default();
 
