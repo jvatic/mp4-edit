@@ -10,7 +10,7 @@ use std::{
 
 use crate::{
     atom::{
-        util::{async_to_sync_read, time::scaled_duration, DebugEllipsis},
+        util::{async_to_sync_read, DebugEllipsis},
         FourCC,
     },
     parser::Parse,
