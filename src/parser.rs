@@ -858,8 +858,9 @@ impl<'a> AtomRefMut<'a> {
         AtomIterMut::from_atom(self.0)
     }
 
-    fn insert_child(&mut self, index: usize, child: Atom) {
+    fn insert_child(&mut self, index: usize, child: Atom) -> AtomRefMut<'_> {
         self.0.children.insert(index, child);
+        self.get_child(index)
     }
 }
 
@@ -869,26 +870,46 @@ impl<'a> AtomRefMut<'a> {
     fn find_or_insert_child(
         &mut self,
         #[builder(start_fn)] atom_type: &[u8; 4],
+        #[builder(default = Vec::new())] insert_before: Vec<&[u8; 4]>,
         #[builder(default = Vec::new())] insert_after: Vec<&[u8; 4]>,
+        insert_index: Option<usize>,
         insert_data: Option<AtomData>,
     ) -> AtomRefMut<'_> {
         if let Some(index) = self.as_ref().child_position(atom_type) {
             self.get_child(index)
         } else {
-            let index = insert_after
-                .into_iter()
-                .find_map(|typ| self.as_ref().child_position(typ))
-                .map(|i| i + 1)
-                .unwrap_or_default();
+            let index = insert_index.unwrap_or_else(|| {
+                self.get_insert_position()
+                    .before(insert_before)
+                    .after(insert_after)
+                    .call()
+            });
             self.insert_child(
                 index,
                 Atom::builder()
                     .header(AtomHeader::new(*atom_type))
                     .maybe_data(insert_data)
                     .build(),
-            );
-            self.get_child(index)
+            )
         }
+    }
+
+    #[builder]
+    fn get_insert_position(
+        &self,
+        #[builder(default = Vec::new())] before: Vec<&[u8; 4]>,
+        #[builder(default = Vec::new())] after: Vec<&[u8; 4]>,
+    ) -> usize {
+        before
+            .into_iter()
+            .find_map(|typ| self.as_ref().child_rposition(typ))
+            .or_else(|| {
+                after
+                    .into_iter()
+                    .find_map(|typ| self.as_ref().child_position(typ))
+                    .map(|i| i + 1)
+            })
+            .unwrap_or_default()
     }
 }
 
@@ -1052,18 +1073,22 @@ impl<'a> MoovAtomRefMut<'a> {
             .retain(|a| a.header.atom_type != TRAK || pred(TrakAtomRef::new(a)));
         self
     }
+}
 
+#[bon]
+impl<'a> MoovAtomRefMut<'a> {
     /// Adds trak atom to moov
-    ///
-    /// Insetion position is either after the last TRAK or MVHD, or at the beginning
-    pub fn add_track(&mut self, trak: Atom) {
-        let last_trak_index = self.0.as_ref().child_rposition(TRAK);
-        let mvhd_index = self.0.as_ref().child_position(MVHD);
-        let index = last_trak_index
-            .or(mvhd_index)
-            .map(|i| i + 1)
-            .unwrap_or_default();
-        self.0.insert_child(index, trak);
+    #[builder]
+    pub fn add_track(
+        &mut self,
+        #[builder(default = Vec::new())] children: Vec<Atom>,
+    ) -> TrakAtomRefMut<'_> {
+        let trak = Atom::builder()
+            .header(AtomHeader::new(*TRAK))
+            .children(children)
+            .build();
+        let index = self.0.get_insert_position().after(vec![TRAK, MDHD]).call();
+        TrakAtomRefMut(self.0.insert_child(index, trak))
     }
 }
 
