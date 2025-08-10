@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context};
-use derive_more::Deref;
+use derive_more::{Deref, DerefMut};
 use futures_io::AsyncRead;
 use std::{fmt, io::Read};
 
@@ -15,7 +15,7 @@ use crate::{
 
 pub const STSC: &[u8; 4] = b"stsc";
 
-#[derive(Default, Clone, Deref)]
+#[derive(Default, Clone, Deref, DerefMut)]
 pub struct SampleToChunkEntries(Vec<SampleToChunkEntry>);
 
 impl SampleToChunkEntries {
@@ -62,6 +62,120 @@ pub struct SampleToChunkAtom {
     pub flags: [u8; 3],
     /// List of sample-to-chunk entries
     pub entries: SampleToChunkEntries,
+}
+
+impl SampleToChunkAtom {
+    /// Calculates how many chunks need to be removed for the given number of samples
+    /// and updates the chunk mapping accordingly
+    pub fn trim_chunks_for_samples(&mut self, samples_to_remove: u32, total_chunks: u32) -> u32 {
+        let mut chunks_to_remove = 0u32;
+        let mut samples_accounted_for = 0u32;
+        let mut entries_to_remove = 0usize;
+
+        for (entry_idx, entry) in self.entries.iter().enumerate() {
+            let next_first_chunk = if entry_idx.saturating_add(1) < self.entries.len() {
+                self.entries[entry_idx.saturating_add(1)].first_chunk
+            } else {
+                total_chunks.saturating_add(1) // Beyond the last chunk
+            };
+
+            let chunks_in_this_entry = next_first_chunk.saturating_sub(entry.first_chunk);
+            let samples_in_this_entry =
+                chunks_in_this_entry.saturating_mul(entry.samples_per_chunk);
+
+            if samples_accounted_for.saturating_add(samples_in_this_entry) <= samples_to_remove {
+                // Remove all chunks from this entry
+                chunks_to_remove = chunks_to_remove.saturating_add(chunks_in_this_entry);
+                samples_accounted_for = samples_accounted_for.saturating_add(samples_in_this_entry);
+                entries_to_remove = entry_idx.saturating_add(1);
+            } else {
+                // Partial removal from this entry
+                let remaining_samples = samples_to_remove.saturating_sub(samples_accounted_for);
+                let chunks_to_remove_from_entry = if entry.samples_per_chunk == 0 {
+                    0u32
+                } else {
+                    // Calculate ceiling division using saturating arithmetic
+                    let numerator =
+                        remaining_samples.saturating_add(entry.samples_per_chunk.saturating_sub(1));
+                    numerator / entry.samples_per_chunk
+                };
+
+                chunks_to_remove = chunks_to_remove.saturating_add(chunks_to_remove_from_entry);
+                break;
+            }
+        }
+
+        // Remove completely consumed entries
+        self.entries.drain(0..entries_to_remove);
+
+        // Update first_chunk indices for remaining entries
+        self.update_first_chunk_indices_after_removal(chunks_to_remove);
+
+        chunks_to_remove
+    }
+
+    /// Updates all first_chunk indices after chunks have been removed
+    fn update_first_chunk_indices_after_removal(&mut self, chunks_removed: u32) {
+        for entry in self.entries.iter_mut() {
+            entry.first_chunk = entry.first_chunk.saturating_sub(chunks_removed);
+            // Ensure first_chunk is at least 1 (MP4 uses 1-based indexing)
+            if entry.first_chunk == 0 {
+                entry.first_chunk = 1;
+            }
+        }
+    }
+
+    // Calculates how many chunks need to be removed from the end for the given number of samples
+    /// and updates the chunk mapping accordingly
+    pub fn trim_chunks_from_end_for_samples(
+        &mut self,
+        samples_to_remove: u32,
+        total_chunks: u32,
+    ) -> u32 {
+        let mut chunks_to_remove = 0u32;
+        let mut samples_accounted_for = 0u32;
+        let mut entries_to_remove = 0usize;
+
+        // Work backwards through entries
+        for (entry_idx, entry) in self.entries.iter().enumerate().rev() {
+            let next_first_chunk = if entry_idx.saturating_add(1) < self.entries.len() {
+                self.entries[entry_idx.saturating_add(1)].first_chunk
+            } else {
+                total_chunks.saturating_add(1) // Beyond the last chunk
+            };
+
+            let chunks_in_this_entry = next_first_chunk.saturating_sub(entry.first_chunk);
+            let samples_in_this_entry =
+                chunks_in_this_entry.saturating_mul(entry.samples_per_chunk);
+
+            if samples_accounted_for.saturating_add(samples_in_this_entry) <= samples_to_remove {
+                // Remove all chunks from this entry
+                chunks_to_remove = chunks_to_remove.saturating_add(chunks_in_this_entry);
+                samples_accounted_for = samples_accounted_for.saturating_add(samples_in_this_entry);
+                entries_to_remove = entries_to_remove.saturating_add(1);
+            } else {
+                // Partial removal from this entry
+                let remaining_samples = samples_to_remove.saturating_sub(samples_accounted_for);
+                let chunks_to_remove_from_entry = if entry.samples_per_chunk == 0 {
+                    0u32
+                } else {
+                    // Calculate ceiling division using saturating arithmetic
+                    let numerator =
+                        remaining_samples.saturating_add(entry.samples_per_chunk.saturating_sub(1));
+                    numerator / entry.samples_per_chunk
+                };
+
+                chunks_to_remove = chunks_to_remove.saturating_add(chunks_to_remove_from_entry);
+                break;
+            }
+        }
+
+        // Remove completely consumed entries from the end
+        let new_len = self.entries.len().saturating_sub(entries_to_remove);
+        self.entries.truncate(new_len);
+
+        chunks_to_remove
+    }
 }
 
 impl From<Vec<SampleToChunkEntry>> for SampleToChunkAtom {

@@ -1,11 +1,14 @@
 use anyhow::{anyhow, Context};
 use bon::bon;
 use futures_io::AsyncRead;
-use std::{fmt, io::Read};
+use std::{fmt, io::Read, time::Duration};
 
 use crate::{
     atom::{
-        util::{async_to_sync_read, time::mp4_timestamp_now},
+        util::{
+            async_to_sync_read,
+            time::{mp4_timestamp_now, scaled_duration, unscaled_duration},
+        },
         FourCC,
     },
     parser::Parse,
@@ -132,6 +135,19 @@ pub struct MediaHeaderAtom {
     pub language: LanguageCode,
     /// Pre-defined value (should be 0)
     pub pre_defined: u16,
+}
+
+impl MediaHeaderAtom {
+    pub fn update_duration<F>(&mut self, mut closure: F) -> &mut Self
+    where
+        F: FnMut(Duration) -> Duration,
+    {
+        self.duration = scaled_duration(
+            closure(unscaled_duration(self.duration, self.timescale as u64)),
+            self.timescale as u64,
+        );
+        self
+    }
 }
 
 #[bon]

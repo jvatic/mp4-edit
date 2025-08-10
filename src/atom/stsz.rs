@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context};
 use bon::bon;
-use derive_more::Deref;
+use derive_more::{Deref, DerefMut};
 use either::Either;
 use futures_io::AsyncRead;
 use std::{
@@ -20,7 +20,7 @@ use crate::{
 
 pub const STSZ: &[u8; 4] = b"stsz";
 
-#[derive(Clone, Default, Deref)]
+#[derive(Clone, Default, Deref, DerefMut)]
 pub struct SampleEntrySizes(Vec<u32>);
 
 impl SampleEntrySizes {
@@ -82,6 +82,38 @@ pub struct SampleSizeAtom {
     /// If sample_size is 0, this contains the size of each sample, indexed by sample number.
     /// If sample_size is non-zero, this table is empty.
     pub entry_sizes: SampleEntrySizes,
+}
+
+impl SampleSizeAtom {
+    /// Removes the specified number of samples from the beginning
+    pub fn remove_samples_from_start(&mut self, samples_to_remove: u32) {
+        if self.sample_size == 0 {
+            // Variable sample sizes - remove entries from the beginning
+            let samples_to_remove_usize =
+                samples_to_remove.min(self.entry_sizes.len() as u32) as usize;
+            self.entry_sizes.drain(0..samples_to_remove_usize);
+        }
+
+        // Update total sample count for both fixed and variable size cases
+        self.sample_count = self.sample_count.saturating_sub(samples_to_remove);
+    }
+
+    /// Removes the specified number of samples from the end
+    pub fn remove_samples_from_end(&mut self, samples_to_remove: u32) {
+        if self.sample_size == 0 {
+            // Variable sample sizes - remove entries from the end
+            let samples_to_remove_usize =
+                samples_to_remove.min(self.entry_sizes.len() as u32) as usize;
+            let new_len = self
+                .entry_sizes
+                .len()
+                .saturating_sub(samples_to_remove_usize);
+            self.entry_sizes.truncate(new_len);
+        }
+
+        // Update total sample count for both fixed and variable size cases
+        self.sample_count = self.sample_count.saturating_sub(samples_to_remove);
+    }
 }
 
 #[bon]

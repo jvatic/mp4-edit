@@ -1,10 +1,16 @@
 use anyhow::{anyhow, Context};
 
 use futures_io::AsyncRead;
-use std::io::Read;
+use std::{io::Read, time::Duration};
 
 use crate::{
-    atom::{util::async_to_sync_read, FourCC},
+    atom::{
+        util::{
+            async_to_sync_read,
+            time::{scaled_duration, unscaled_duration},
+        },
+        FourCC,
+    },
     parser::Parse,
     writer::SerializeAtom,
     ParseError,
@@ -46,6 +52,19 @@ pub struct MovieHeaderAtom {
     pub current_time: u32,
     /// ID to use for the next track added to this movie
     pub next_track_id: u32,
+}
+
+impl MovieHeaderAtom {
+    pub fn update_duration<F>(&mut self, mut closure: F) -> &mut Self
+    where
+        F: FnMut(Duration) -> Duration,
+    {
+        self.duration = scaled_duration(
+            closure(unscaled_duration(self.duration, self.timescale as u64)),
+            self.timescale as u64,
+        );
+        self
+    }
 }
 
 impl Parse for MovieHeaderAtom {
