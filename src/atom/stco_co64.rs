@@ -78,6 +78,27 @@ impl ChunkOffsetAtom {
             is_64bit: false,
         }
     }
+
+    /// Returns the total number of chunks
+    pub fn chunk_count(&self) -> usize {
+        self.chunk_offsets.len()
+    }
+
+    /// Removes the specified number of chunks from the beginning
+    pub fn remove_chunks_from_start(&mut self, chunks_to_remove: u32) {
+        let chunks_to_remove_usize = chunks_to_remove.min(self.chunk_offsets.len() as u32) as usize;
+        self.chunk_offsets.drain(0..chunks_to_remove_usize);
+    }
+
+    /// Removes the specified number of chunks from the end
+    pub fn remove_chunks_from_end(&mut self, chunks_to_remove: u32) {
+        let chunks_to_remove_usize = chunks_to_remove.min(self.chunk_offsets.len() as u32) as usize;
+        let new_len = self
+            .chunk_offsets
+            .len()
+            .saturating_sub(chunks_to_remove_usize);
+        self.chunk_offsets.truncate(new_len);
+    }
 }
 
 impl Parse for ChunkOffsetAtom {

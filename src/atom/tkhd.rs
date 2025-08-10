@@ -1,10 +1,16 @@
 use anyhow::{anyhow, Context};
 
 use futures_io::AsyncRead;
-use std::io::Read;
+use std::{io::Read, time::Duration};
 
 use crate::{
-    atom::{util::async_to_sync_read, FourCC},
+    atom::{
+        util::{
+            async_to_sync_read,
+            time::{scaled_duration, unscaled_duration},
+        },
+        FourCC,
+    },
     parser::Parse,
     writer::SerializeAtom,
     ParseError,
@@ -38,6 +44,19 @@ pub struct TrackHeaderAtom {
     pub width: f32,
     /// Track height in pixels (fixed-point 16.16)
     pub height: f32,
+}
+
+impl TrackHeaderAtom {
+    pub fn update_duration<F>(&mut self, movie_timescale: u64, mut closure: F) -> &mut Self
+    where
+        F: FnMut(Duration) -> Duration,
+    {
+        self.duration = scaled_duration(
+            closure(unscaled_duration(self.duration, movie_timescale)),
+            movie_timescale,
+        );
+        self
+    }
 }
 
 impl Parse for TrackHeaderAtom {

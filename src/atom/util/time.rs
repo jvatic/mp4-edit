@@ -1,10 +1,15 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+const NANOS_PER_SECOND: u128 = 1_000_000_000;
+
 pub fn scaled_duration(duration: Duration, timescale: u64) -> u64 {
-    const NANOS_PER_SECOND: u128 = 1_000_000_000;
-    let duration_nanos = duration.as_nanos();
-    let timescale = timescale as u128;
-    (duration_nanos * timescale / NANOS_PER_SECOND) as u64
+    (duration.as_nanos() * timescale as u128 / NANOS_PER_SECOND).min(u64::MAX as u128) as u64
+}
+
+pub fn unscaled_duration(duration: u64, timescale: u64) -> Duration {
+    let duration_nanos =
+        (duration as u128 * NANOS_PER_SECOND / timescale as u128).min(u64::MAX as u128) as u64;
+    Duration::from_nanos(duration_nanos)
 }
 
 pub fn mp4_timestamp(duration: Duration) -> u64 {
