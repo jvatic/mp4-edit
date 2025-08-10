@@ -66,7 +66,7 @@ impl fmt::Display for TrackReference {
 
 /// Track Reference Atom (tref) - ISO/IEC 14496-12
 /// Contains references from this track to other tracks
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct TrackReferenceAtom {
     /// List of track references
     pub references: Vec<TrackReference>,

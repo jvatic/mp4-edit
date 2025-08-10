@@ -1,4 +1,5 @@
 use anyhow::anyhow;
+use bon::bon;
 use derive_more::Display;
 use futures_io::{AsyncRead, AsyncSeek};
 use futures_util::io::{AsyncReadExt, AsyncSeekExt, Cursor};
@@ -7,12 +8,12 @@ use std::fmt;
 use std::future::Future;
 use std::io::SeekFrom;
 use std::ops::{Deref, DerefMut};
+use std::time::Duration;
 use thiserror::Error;
 
 use crate::atom::containers::{
     DINF, EDTS, MDIA, MFRA, MINF, MOOF, MOOV, SCHI, SINF, STBL, TRAF, TRAK, UDTA,
 };
-use crate::atom::elst::EditEntry;
 use crate::atom::hdlr::HandlerType;
 use crate::atom::stco_co64::ChunkOffsets;
 use crate::atom::stsc::SampleToChunkEntry;
@@ -21,7 +22,6 @@ use crate::atom::stsd::{
     SampleEntryData, SampleEntryType, StsdExtension,
 };
 use crate::atom::stts::TimeToSampleEntry;
-use crate::atom::tref::TrackReference;
 use crate::atom::util::DebugEllipsis;
 use crate::atom::AtomHeader;
 use crate::chunk_offset_builder::{ChunkInfo, ChunkOffsetBuilder};
@@ -710,9 +710,7 @@ impl Metadata {
                 .and_then(|mdia| mdia.into_media_information())
                 .and_then(|minf| minf.into_sample_table())
                 .ok_or(UpdateChunkOffsetError::SampleTableNotFound)?;
-            let stco = stbl
-                .chunk_offset()
-                .ok_or(UpdateChunkOffsetError::ChunkOffsetAtomNotFound)?;
+            let stco = stbl.chunk_offset();
             let chunk_offsets = std::mem::take(&mut chunk_offsets[track_idx]);
             stco.chunk_offsets = ChunkOffsets::from(chunk_offsets);
         }
@@ -847,17 +845,9 @@ impl<'a> AtomRefMut<'a> {
         AtomRefMut(&mut self.0.children[index])
     }
 
-    fn find_child(&mut self, typ: &[u8; 4]) -> Option<&'_ mut Atom> {
-        self.children().find(|atom| atom.header.atom_type == typ)
-    }
-
     fn into_child(self, typ: &[u8; 4]) -> Option<&'a mut Atom> {
         self.into_children()
             .find(|atom| atom.header.atom_type == typ)
-    }
-
-    fn remove_child(&mut self, typ: &[u8; 4]) {
-        self.0.children.retain(|a| a.header.atom_type != typ);
     }
 
     fn children(&mut self) -> impl Iterator<Item = &'_ mut Atom> {
@@ -871,6 +861,62 @@ impl<'a> AtomRefMut<'a> {
     fn insert_child(&mut self, index: usize, child: Atom) {
         self.0.children.insert(index, child);
     }
+}
+
+#[bon]
+impl<'a> AtomRefMut<'a> {
+    #[builder]
+    fn find_or_insert_child(
+        &mut self,
+        #[builder(start_fn)] atom_type: &[u8; 4],
+        #[builder(default = Vec::new())] insert_after: Vec<&[u8; 4]>,
+        insert_data: Option<AtomData>,
+    ) -> AtomRefMut<'_> {
+        if let Some(index) = self.as_ref().child_position(atom_type) {
+            self.get_child(index)
+        } else {
+            let index = insert_after
+                .into_iter()
+                .find_map(|typ| self.as_ref().child_position(typ))
+                .map(|i| i + 1)
+                .unwrap_or_default();
+            self.insert_child(
+                index,
+                Atom::builder()
+                    .header(AtomHeader::new(*atom_type))
+                    .maybe_data(insert_data)
+                    .build(),
+            );
+            self.get_child(index)
+        }
+    }
+}
+
+/// Unwrap atom data enum given variant type.
+///
+/// # Example
+/// ```rust
+/// let mut data = Atom::builder()
+///     .header(AtomHeader::new(*TKHD))
+///     .data(AtomData::TrackHeader(TrackHeaderAtom::default()))
+///     .build();
+/// let _: &mut TrackHeaderAtom = unwrap_atom_data!(
+///     AtomRefMut(&mut data),
+///     AtomData::TrackHeader,
+/// );
+/// ```
+macro_rules! unwrap_atom_data {
+    ($ref:expr, $variant:path $(,)?) => {{
+        let atom = $ref.0;
+        if let Some($variant(data)) = &mut atom.data {
+            data
+        } else {
+            unreachable!(
+                "invalid {} atom: data is None or the wrong variant",
+                atom.header.atom_type,
+            )
+        }
+    }};
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -957,33 +1003,22 @@ impl<'a> MoovAtomRefMut<'a> {
         self.0.children()
     }
 
-    pub fn header(&mut self) -> Option<&'_ mut MovieHeaderAtom> {
-        self.children()
-            .find(|a| a.header.atom_type == MDHD)
-            .and_then(|a| a.data.as_mut())
-            .and_then(|data| match data {
-                AtomData::MovieHeader(data) => Some(data),
-                _ => None,
-            })
+    /// Finds or inserts MDHD atom
+    pub fn header(&mut self) -> &'_ mut MovieHeaderAtom {
+        unwrap_atom_data!(
+            self.0.find_or_insert_child(MDHD).call(),
+            AtomData::MovieHeader,
+        )
     }
 
+    /// Finds or inserts UDTA atom
     pub fn user_data(&mut self) -> UserDataAtomRefMut<'_> {
-        if let Some(index) = self.0.as_ref().child_position(UDTA) {
-            return UserDataAtomRefMut(AtomRefMut(&mut self.0 .0.children[index]));
-        }
-
-        let last_trak_index = self.0.as_ref().child_rposition(TRAK);
-        let mvhd_index = self.0.as_ref().child_position(MVHD);
-        let index = last_trak_index
-            .or(mvhd_index)
-            .map(|i| i + 1)
-            .unwrap_or_default();
-
-        self.0.insert_child(
-            index,
-            Atom::builder().header(AtomHeader::new(*UDTA)).build(),
-        );
-        UserDataAtomRefMut(AtomRefMut(&mut self.0 .0.children[index]))
+        UserDataAtomRefMut(
+            self.0
+                .find_or_insert_child(UDTA)
+                .insert_after(vec![TRAK, MVHD])
+                .call(),
+        )
     }
 
     pub fn tracks(&mut self) -> impl Iterator<Item = TrakAtomRefMut<'_>> {
@@ -1035,18 +1070,16 @@ impl<'a> MoovAtomRefMut<'a> {
 pub struct UserDataAtomRefMut<'a>(AtomRefMut<'a>);
 
 impl<'a> UserDataAtomRefMut<'a> {
-    /// Adds or replaces the CHPL (chapter list) atom
-    pub fn add_or_replace_chpl(&mut self, chpl: ChapterListAtom) {
-        self.0.remove_child(CHPL);
-        let meta_index = self.0.as_ref().child_position(META);
-        let index = meta_index.map(|i| i + 1).unwrap_or_default();
-        self.0.insert_child(
-            index,
-            Atom::builder()
-                .header(AtomHeader::new(*CHPL))
-                .data(chpl)
-                .build(),
-        );
+    /// Finds or inserts CHPL atom
+    pub fn chapter_list(&mut self) -> &'_ mut ChapterListAtom {
+        unwrap_atom_data!(
+            self.0
+                .find_or_insert_child(CHPL)
+                .insert_after(vec![META])
+                .insert_data(AtomData::ChapterList(ChapterListAtom::default()))
+                .call(),
+            AtomData::ChapterList,
+        )
     }
 }
 
@@ -1140,10 +1173,6 @@ impl<'a> TrakAtomRefMut<'a> {
         Self(AtomRefMut(atom))
     }
 
-    fn insert_child(&mut self, index: usize, child: Atom) {
-        self.0.insert_child(index, child);
-    }
-
     pub fn as_ref(&self) -> TrakAtomRef<'_> {
         TrakAtomRef(self.0.as_ref())
     }
@@ -1156,72 +1185,53 @@ impl<'a> TrakAtomRefMut<'a> {
         self.0.children()
     }
 
-    pub fn header(&mut self) -> Option<&mut TrackHeaderAtom> {
-        let atom = self.0.find_child(TKHD)?;
-        debug_assert!(matches!(atom.data, Some(AtomData::TrackHeader(_))));
-        match atom.data.as_mut()? {
-            AtomData::TrackHeader(data) => Some(data),
-            _ => None,
-        }
+    /// Finds or inserts the TKHD atom
+    pub fn header(&mut self) -> &mut TrackHeaderAtom {
+        unwrap_atom_data!(
+            self.0
+                .find_or_insert_child(TKHD)
+                .insert_data(AtomData::TrackHeader(TrackHeaderAtom::default()))
+                .call(),
+            AtomData::TrackHeader,
+        )
     }
 
     /// Finds or creates the MDIA atom
     pub fn media(&mut self) -> MdiaAtomRefMut<'_> {
-        if let Some(index) = self.0.as_ref().child_position(MDIA) {
-            return MdiaAtomRefMut(self.0.get_child(index));
-        }
-        let index = vec![TREF, EDTS, TKHD]
-            .into_iter()
-            .find_map(|typ| self.0.as_ref().child_position(typ))
-            .map(|i| i + 1)
-            .unwrap_or_default();
-        self.0.insert_child(
-            index,
-            Atom::builder().header(AtomHeader::new(*MDIA)).build(),
-        );
-        MdiaAtomRefMut(self.0.get_child(index))
+        MdiaAtomRefMut(
+            self.0
+                .find_or_insert_child(MDIA)
+                .insert_after(vec![TREF, EDTS, TKHD])
+                .call(),
+        )
     }
 
+    /// Finds the MDIA atom
     pub fn into_media(self) -> Option<MdiaAtomRefMut<'a>> {
         let atom = self.0.into_child(MDIA)?;
         Some(MdiaAtomRefMut(AtomRefMut(atom)))
     }
 
-    pub fn add_track_reference(&mut self, references: impl Into<Vec<TrackReference>>) {
-        // try and insert after track header but before mdia
-        let tkhd_index = self.0.as_ref().child_position(TKHD);
-        let mdia_index = self.0.as_ref().child_position(MDIA);
-        let index = tkhd_index
-            .map(|i| i + 1)
-            .or_else(|| mdia_index.map(|i| i - 1))
-            .unwrap_or_default();
-        self.insert_child(
-            index,
-            Atom::builder()
-                .header(AtomHeader::new(*TREF))
-                .data(TrackReferenceAtom::new(references))
-                .build(),
-        );
+    /// Finds or creates the EDTS atom
+    pub fn edit_list_container(&mut self) -> EdtsAtomRefMut<'_> {
+        EdtsAtomRefMut(
+            self.0
+                .find_or_insert_child(EDTS)
+                .insert_after(vec![TREF, TKHD])
+                .call(),
+        )
     }
 
-    pub fn add_edit_list(&mut self, entries: impl Into<Vec<EditEntry>>) {
-        // try and insert after track header but before mdia
-        let tkhd_index = self.0.as_ref().child_position(TKHD);
-        let mdia_index = self.0.as_ref().child_position(MDIA);
-        let index = tkhd_index
-            .map(|i| i + 1)
-            .or_else(|| mdia_index.map(|i| i - 1))
-            .unwrap_or_default();
-        self.insert_child(
-            index,
-            Atom::builder()
-                .header(AtomHeader::new(*EDTS))
-                .children(vec![Atom::builder()
-                    .header(AtomHeader::new(*ELST))
-                    .data(EditListAtom::new(entries))
-                    .build()])
-                .build(),
-        );
+    /// Finds or inserts the TREF atom
+    pub fn track_reference(&mut self) -> &mut TrackReferenceAtom {
+        unwrap_atom_data!(
+            self.0
+                .find_or_insert_child(TREF)
+                .insert_after(vec![TKHD])
+                .insert_data(AtomData::TrackReference(TrackReferenceAtom::default()))
+                .call(),
+            AtomData::TrackReference,
+        )
     }
 
     /// Updates track metadata with the new audio bitrate
@@ -1278,6 +1288,16 @@ impl<'a> TrakAtomRefMut<'a> {
             unreachable!("STSD constructed with invalid data")
         }
     }
+
+    /// Trims leading duration from sample table
+    pub fn trim_start(&mut self, duration: Duration) {
+        todo!()
+    }
+
+    /// Trims trailing duration from sample table
+    pub fn trim_end(&mut self, duration: Duration) {
+        todo!()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1333,45 +1353,58 @@ impl<'a> MdiaAtomRefMut<'a> {
         self.0.into_children()
     }
 
-    /// Finds the MDHD atom
-    pub fn header(&mut self) -> Option<&mut MediaHeaderAtom> {
-        let atom = self.0.find_child(MDHD)?;
-        match atom.data.as_mut()? {
-            AtomData::MediaHeader(data) => Some(data),
-            _ => None,
-        }
+    /// Finds or inserts the MDHD atom
+    pub fn header(&mut self) -> &mut MediaHeaderAtom {
+        unwrap_atom_data!(
+            self.0
+                .find_or_insert_child(MDHD)
+                .insert_data(AtomData::MediaHeader(MediaHeaderAtom::default()))
+                .call(),
+            AtomData::MediaHeader,
+        )
     }
 
-    /// Finds the HDLR atom
-    pub fn handler_reference(&mut self) -> Option<&mut HandlerReferenceAtom> {
-        let atom = self.0.find_child(HDLR)?;
-        match atom.data.as_mut()? {
-            AtomData::HandlerReference(data) => Some(data),
-            _ => None,
-        }
+    /// Finds or inserts the HDLR atom
+    pub fn handler_reference(&mut self) -> &mut HandlerReferenceAtom {
+        unwrap_atom_data!(
+            self.0
+                .find_or_insert_child(HDLR)
+                .insert_data(AtomData::HandlerReference(HandlerReferenceAtom::default()))
+                .call(),
+            AtomData::HandlerReference,
+        )
     }
 
-    /// Finds or creates the MINF atom
+    /// Finds or inserts the MINF atom
     pub fn media_information(&mut self) -> MinfAtomRefMut<'_> {
-        if let Some(index) = self.0.as_ref().child_position(MINF) {
-            return MinfAtomRefMut(self.0.get_child(index));
-        }
-        let index = vec![HDLR, MDHD]
-            .into_iter()
-            .find_map(|typ| self.0.as_ref().child_position(typ))
-            .map(|i| i + 1)
-            .unwrap_or_default();
-        self.0.insert_child(
-            index,
-            Atom::builder().header(AtomHeader::new(*MINF)).build(),
-        );
-        MinfAtomRefMut(self.0.get_child(index))
+        MinfAtomRefMut(
+            self.0
+                .find_or_insert_child(MINF)
+                .insert_after(vec![HDLR, MDHD])
+                .call(),
+        )
     }
 
     /// Finds the MINF atom
     pub fn into_media_information(self) -> Option<MinfAtomRefMut<'a>> {
         let atom = self.0.into_child(MINF)?;
         Some(MinfAtomRefMut(AtomRefMut(atom)))
+    }
+}
+
+#[derive(Debug)]
+pub struct EdtsAtomRefMut<'a>(AtomRefMut<'a>);
+
+impl<'a> EdtsAtomRefMut<'a> {
+    /// Finds or creates the ELST atom
+    pub fn edit_list(&mut self) -> &mut EditListAtom {
+        unwrap_atom_data!(
+            self.0
+                .find_or_insert_child(ELST)
+                .insert_data(AtomData::EditList(EditListAtom::default()))
+                .call(),
+            AtomData::EditList,
+        )
     }
 }
 
@@ -1406,21 +1439,14 @@ impl<'a> MinfAtomRefMut<'a> {
         self.0.into_children()
     }
 
-    /// Finds or creates the STBL atom
+    /// Finds or inserts the STBL atom
     pub fn sample_table(&mut self) -> StblAtomRefMut<'_> {
-        if let Some(index) = self.0.as_ref().child_position(STBL) {
-            return StblAtomRefMut(self.0.get_child(index));
-        }
-        let index = vec![DINF, SMHD]
-            .into_iter()
-            .find_map(|typ| self.0.as_ref().child_position(typ))
-            .map(|i| i + 1)
-            .unwrap_or_default();
-        self.0.insert_child(
-            index,
-            Atom::builder().header(AtomHeader::new(*STBL)).build(),
-        );
-        StblAtomRefMut(self.0.get_child(index))
+        StblAtomRefMut(
+            self.0
+                .find_or_insert_child(STBL)
+                .insert_after(vec![DINF, SMHD])
+                .call(),
+        )
     }
 
     /// Finds the STBL atom
@@ -1500,66 +1526,65 @@ impl<'a> StblAtomRefMut<'a> {
         self.0.into_children()
     }
 
-    /// Finds or creates the STSD atom
+    /// Finds or inserts the STSD atom
     pub fn sample_description(&mut self) -> &'_ mut SampleDescriptionTableAtom {
-        if let Some(index) = self.0.as_ref().child_position(STSD) {
-            let stsd = self.0.get_child(index);
-            if let Some(AtomData::SampleDescriptionTable(data)) = stsd.0.data.as_mut() {
-                return data;
-            }
-            // this indicates programming error since we'll never end up here with a parsed Atom
-            unreachable!("STSD constructed with invalid data")
-        }
-
-        let index = 0;
-        self.0.insert_child(
-            index,
-            Atom::builder()
-                .header(AtomHeader::new(*STSD))
-                .data(SampleDescriptionTableAtom::default())
-                .build(),
-        );
-        let stsd = self.0.get_child(index);
-        if let Some(AtomData::SampleDescriptionTable(data)) = stsd.0.data.as_mut() {
-            return data;
-        }
-        unreachable!()
+        unwrap_atom_data!(
+            self.0
+                .find_or_insert_child(STSD)
+                .insert_data(AtomData::SampleDescriptionTable(
+                    SampleDescriptionTableAtom::default(),
+                ))
+                .call(),
+            AtomData::SampleDescriptionTable,
+        )
     }
 
-    /// Finds the STTS atom
-    pub fn time_to_sample(&mut self) -> Option<&mut TimeToSampleAtom> {
-        let atom = self.0.find_child(STTS)?;
-        match atom.data.as_mut()? {
-            AtomData::TimeToSample(data) => Some(data),
-            _ => None,
-        }
+    /// Finds or inserts the STTS atom
+    pub fn time_to_sample(&mut self) -> &mut TimeToSampleAtom {
+        unwrap_atom_data!(
+            self.0
+                .find_or_insert_child(STTS)
+                .insert_after(vec![STTS, STSD])
+                .insert_data(AtomData::TimeToSample(TimeToSampleAtom::default()))
+                .call(),
+            AtomData::TimeToSample,
+        )
     }
 
-    /// Finds the STSC atom
-    pub fn sample_to_chunk(&mut self) -> Option<&mut SampleToChunkAtom> {
-        let atom = self.0.find_child(STSC)?;
-        match atom.data.as_mut()? {
-            AtomData::SampleToChunk(data) => Some(data),
-            _ => None,
-        }
+    /// Finds or inserts the STSC atom
+    pub fn sample_to_chunk(&mut self) -> &mut SampleToChunkAtom {
+        unwrap_atom_data!(
+            self.0
+                .find_or_insert_child(STSC)
+                .insert_after(vec![STTS, STSD])
+                .insert_data(AtomData::SampleToChunk(SampleToChunkAtom::default()))
+                .call(),
+            AtomData::SampleToChunk,
+        )
     }
 
-    /// Finds the STSZ atom
-    pub fn sample_size(&mut self) -> Option<&mut SampleSizeAtom> {
-        let atom = self.0.find_child(STSZ)?;
-        match atom.data.as_mut()? {
-            AtomData::SampleSize(data) => Some(data),
-            _ => None,
-        }
+    /// Finds or inserts the STSZ atom
+    pub fn sample_size(&mut self) -> &mut SampleSizeAtom {
+        unwrap_atom_data!(
+            self.0
+                .find_or_insert_child(STSZ)
+                .insert_after(vec![STSC, STSD])
+                .insert_data(AtomData::SampleSize(SampleSizeAtom::default()))
+                .call(),
+            AtomData::SampleSize,
+        )
     }
 
-    /// Finds the STCO atom
-    pub fn chunk_offset(&mut self) -> Option<&mut ChunkOffsetAtom> {
-        let atom = self.0.find_child(STCO)?;
-        match atom.data.as_mut()? {
-            AtomData::ChunkOffset(data) => Some(data),
-            _ => None,
-        }
+    /// Finds or inserts the STCO atom
+    pub fn chunk_offset(&mut self) -> &mut ChunkOffsetAtom {
+        unwrap_atom_data!(
+            self.0
+                .find_or_insert_child(STCO)
+                .insert_after(vec![STSZ, STSD])
+                .insert_data(AtomData::ChunkOffset(ChunkOffsetAtom::default()))
+                .call(),
+            AtomData::ChunkOffset,
+        )
     }
 }
 

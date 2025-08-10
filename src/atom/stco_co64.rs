@@ -16,7 +16,7 @@ use crate::{
 pub const STCO: &[u8; 4] = b"stco";
 pub const CO64: &[u8; 4] = b"co64";
 
-#[derive(Clone, Deref, DerefMut)]
+#[derive(Default, Clone, Deref, DerefMut)]
 pub struct ChunkOffsets(Vec<u64>);
 
 impl ChunkOffsets {
@@ -57,7 +57,7 @@ impl fmt::Debug for ChunkOffsets {
 }
 
 /// Chunk Offset Atom - contains file offsets of chunks
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct ChunkOffsetAtom {
     /// Version of the stco atom format (0)
     pub version: u8,

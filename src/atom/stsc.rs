@@ -15,7 +15,7 @@ use crate::{
 
 pub const STSC: &[u8; 4] = b"stsc";
 
-#[derive(Clone, Deref)]
+#[derive(Default, Clone, Deref)]
 pub struct SampleToChunkEntries(Vec<SampleToChunkEntry>);
 
 impl SampleToChunkEntries {
@@ -54,7 +54,7 @@ pub struct SampleToChunkEntry {
 }
 
 /// Sample-to-Chunk Atom - contains sample-to-chunk mapping table
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct SampleToChunkAtom {
     /// Version of the stsc atom format (0)
     pub version: u8,

@@ -15,7 +15,7 @@ use crate::{
 
 pub const STTS: &[u8; 4] = b"stts";
 
-#[derive(Clone, Deref)]
+#[derive(Default, Clone, Deref)]
 pub struct TimeToSampleEntries(Vec<TimeToSampleEntry>);
 
 impl From<Vec<TimeToSampleEntry>> for TimeToSampleEntries {
@@ -56,7 +56,7 @@ pub struct TimeToSampleEntry {
 }
 
 /// Time-to-Sample Atom - contains time-to-sample mapping table
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct TimeToSampleAtom {
     /// Version of the stts atom format (0)
     pub version: u8,

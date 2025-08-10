@@ -16,7 +16,7 @@ use crate::{
 pub const MDHD: &[u8; 4] = b"mdhd";
 
 /// Language code (ISO 639-2/T language code)
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LanguageCode {
     English,
     Spanish,
@@ -29,6 +29,7 @@ pub enum LanguageCode {
     Russian,
     Arabic,
     Portuguese,
+    #[default]
     Undetermined,
     Other([char; 3]),
 }
@@ -113,7 +114,7 @@ impl fmt::Display for LanguageCode {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct MediaHeaderAtom {
     /// Version of the mdhd atom format (0 or 1)
     pub version: u8,

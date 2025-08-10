@@ -16,7 +16,7 @@ use crate::{
 
 pub const ELST: &[u8; 4] = b"elst";
 
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct EditListAtom {
     /// Version of the elst atom format (0 or 1)
     pub version: u8,
@@ -29,9 +29,8 @@ pub struct EditListAtom {
 impl EditListAtom {
     pub fn new(entries: impl Into<Vec<EditEntry>>) -> Self {
         Self {
-            version: 0,
-            flags: [0u8; 3],
             entries: entries.into(),
+            ..Default::default()
         }
     }
 }
