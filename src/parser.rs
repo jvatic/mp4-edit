@@ -1224,8 +1224,10 @@ impl<'a> TrakAtomRefMut<'a> {
         );
     }
 
-    /// Updates track metadata with the new bitrate
-    pub fn update_bitrate(&mut self, bitrate: u32) {
+    /// Updates track metadata with the new audio bitrate
+    ///
+    /// Creates any missing atoms needed to do so
+    pub fn update_audio_bitrate(&mut self, bitrate: u32) {
         let mut mdia = self.media();
         let mut minf = mdia.media_information();
         let mut stbl = minf.sample_table();
