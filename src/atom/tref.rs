@@ -78,6 +78,11 @@ impl TrackReferenceAtom {
             references: references.into(),
         }
     }
+
+    pub fn replace_references(&mut self, references: impl Into<Vec<TrackReference>>) -> &mut Self {
+        self.references = references.into();
+        self
+    }
 }
 
 impl fmt::Display for TrackReferenceAtom {

@@ -33,6 +33,11 @@ impl EditListAtom {
             ..Default::default()
         }
     }
+
+    pub fn replace_entries(&mut self, entries: impl Into<Vec<EditEntry>>) -> &mut Self {
+        self.entries = entries.into();
+        self
+    }
 }
 
 pub struct SegmentDuration {
