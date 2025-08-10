@@ -20,7 +20,7 @@ use crate::{
 
 pub const CHPL: &[u8; 4] = b"chpl";
 
-#[derive(Clone, Deref)]
+#[derive(Default, Clone, Deref)]
 pub struct ChapterEntries(Vec<ChapterEntry>);
 
 impl ChapterEntries {
@@ -83,6 +83,16 @@ pub struct ChapterListAtom {
     pub chapters: ChapterEntries,
 }
 
+impl Default for ChapterListAtom {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            flags: [0u8; 3],
+            chapters: Default::default(),
+        }
+    }
+}
+
 impl ChapterListAtom {
     pub fn new(chapters: impl Into<ChapterEntries>) -> Self {
         Self {
@@ -90,6 +100,10 @@ impl ChapterListAtom {
             flags: [0u8; 3],
             chapters: chapters.into(),
         }
+    }
+
+    pub fn replace_chapters(&mut self, chapters: impl Into<ChapterEntries>) {
+        self.chapters = chapters.into();
     }
 }
 

@@ -204,7 +204,7 @@ pub struct TextSampleEntry {
     pub extensions: Vec<StsdExtension>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Default, Debug, Clone)]
 pub struct SampleDescriptionTableAtom {
     /// Version of the stsd atom format (0)
     pub version: u8,

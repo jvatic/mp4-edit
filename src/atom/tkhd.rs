@@ -12,7 +12,7 @@ use crate::{
 
 pub const TKHD: &[u8; 4] = b"tkhd";
 
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct TrackHeaderAtom {
     /// Version of the tkhd atom format (0 or 1)
     pub version: u8,

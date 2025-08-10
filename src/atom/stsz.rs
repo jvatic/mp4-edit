@@ -67,7 +67,7 @@ impl SampleEntrySizes {
 /// Sample Size Atom (stsz) - ISO/IEC 14496-12
 /// This atom contains the sample count and a table giving the size in bytes of each sample.
 /// Samples within the media may have different sizes, up to the limit of a 32-bit integer.
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct SampleSizeAtom {
     /// Version of this atom (0 or 1)
     pub version: u8,

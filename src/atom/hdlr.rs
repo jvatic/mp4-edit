@@ -35,6 +35,12 @@ pub enum HandlerType {
     Unknown([u8; 4]),
 }
 
+impl Default for HandlerType {
+    fn default() -> Self {
+        Self::Unknown([0u8; 4])
+    }
+}
+
 impl HandlerType {
     pub fn from_bytes(bytes: &[u8; 4]) -> Self {
         match bytes {
@@ -86,7 +92,7 @@ impl HandlerType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct HandlerReferenceAtom {
     /// Version of the hdlr atom format (0)
     pub version: u8,
