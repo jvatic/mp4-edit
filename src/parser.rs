@@ -719,15 +719,6 @@ impl Metadata {
 
         Ok(())
     }
-
-    /// Updates bitrate for each audio track
-    pub fn update_audio_bitrate(&mut self) {
-        self.moov_mut().audio_tracks().for_each(|mut trak| {
-            if let Some(bitrate) = trak.as_ref().bitrate() {
-                trak.update_bitrate(bitrate);
-            }
-        });
-    }
 }
 
 #[derive(Debug, Error)]
