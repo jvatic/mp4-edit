@@ -1,13 +1,12 @@
 use anyhow::{anyhow, Context};
 use derive_more::{Deref, DerefMut};
 use futures_io::AsyncRead;
-use std::{fmt, io::Read, time::Duration};
+use std::{fmt, io::Read};
 
 use crate::{
     atom::{
         util::{
             async_to_sync_read,
-            time::{scaled_duration, unscaled_duration},
             DebugEllipsis,
         },
         FourCC,
