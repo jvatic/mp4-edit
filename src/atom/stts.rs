@@ -71,83 +71,29 @@ pub struct TimeToSampleAtom {
 }
 
 impl TimeToSampleAtom {
-    /// Removes samples from the beginning and returns the number of samples removed
+    /// Removes samples from the beginning and returns the number of samples removed.
     ///
-    /// Duration is in media timescale units (in [crate::atom::MovieHeaderAtom])
+    /// `duration_to_trim` is in media timescale units (in [crate::atom::MovieHeaderAtom]).
+    ///
+    /// WARNING: failing to update other atoms appropriately will cause file corruption.
     pub fn trim_samples_from_start(&mut self, duration_to_trim: u64) -> u32 {
-        let mut samples_removed = 0u32;
-        let mut time_trimmed = 0u64;
-        let mut entries_to_remove = 0usize;
+        let (entries_to_remove, samples_removed) =
+            trim_samples(self.entries.iter_mut(), duration_to_trim);
 
-        for entry in self.entries.iter_mut() {
-            let entry_total_duration =
-                (entry.sample_count as u64).saturating_mul(entry.sample_duration as u64);
-
-            if time_trimmed.saturating_add(entry_total_duration) <= duration_to_trim {
-                // Remove this entire entry
-                time_trimmed = time_trimmed.saturating_add(entry_total_duration);
-                samples_removed = samples_removed.saturating_add(entry.sample_count);
-                entries_to_remove = entries_to_remove.saturating_add(1);
-            } else {
-                // Partial removal from this entry
-                let remaining_duration = duration_to_trim.saturating_sub(time_trimmed);
-                let samples_to_remove = if entry.sample_duration == 0 {
-                    0u32
-                } else {
-                    (remaining_duration / entry.sample_duration as u64).min(u32::MAX as u64) as u32
-                };
-
-                samples_removed = samples_removed.saturating_add(samples_to_remove);
-
-                if samples_to_remove > 0 {
-                    entry.sample_count = entry.sample_count.saturating_sub(samples_to_remove);
-                }
-                break;
-            }
-        }
-
-        // Remove completely consumed entries
+        // Remove completely consumed entries from the start
         self.entries.drain(0..entries_to_remove);
+
         samples_removed
     }
 
-    /// Removes samples from the end and returns the number of samples removed
+    /// Removes samples from the end and returns the number of samples removed.
     ///
-    /// Duration is in media timescale units (in [crate::atom::MovieHeaderAtom])
+    /// `duration_to_trim` is in media timescale units (in [crate::atom::MovieHeaderAtom]).
+    ///
+    /// WARNING: failing to update other atoms appropriately will cause file corruption.
     pub fn trim_samples_from_end(&mut self, duration_to_trim: u64) -> u32 {
-        let mut samples_removed = 0u32;
-        let mut time_trimmed = 0u64;
-        let mut entries_to_remove = 0usize;
-
-        // Work backwards through entries
-        for (i, entry) in self.entries.iter().enumerate().rev() {
-            let entry_total_duration =
-                (entry.sample_count as u64).saturating_mul(entry.sample_duration as u64);
-
-            if time_trimmed.saturating_add(entry_total_duration) <= duration_to_trim {
-                // Remove this entire entry
-                time_trimmed = time_trimmed.saturating_add(entry_total_duration);
-                samples_removed = samples_removed.saturating_add(entry.sample_count);
-                entries_to_remove = entries_to_remove.saturating_add(1);
-            } else {
-                // Partial removal from this entry
-                let remaining_duration = duration_to_trim.saturating_sub(time_trimmed);
-                let samples_to_remove = if entry.sample_duration == 0 {
-                    0u32
-                } else {
-                    (remaining_duration / entry.sample_duration as u64) as u32
-                };
-
-                samples_removed = samples_removed.saturating_add(samples_to_remove);
-
-                if samples_to_remove > 0 {
-                    self.entries[i].sample_count = self.entries[i]
-                        .sample_count
-                        .saturating_sub(samples_to_remove);
-                }
-                break;
-            }
-        }
+        let (entries_to_remove, samples_removed) =
+            trim_samples(self.entries.iter_mut().rev(), duration_to_trim);
 
         // Remove completely consumed entries from the end
         let new_len = self.entries.len().saturating_sub(entries_to_remove);
@@ -155,6 +101,44 @@ impl TimeToSampleAtom {
 
         samples_removed
     }
+}
+
+fn trim_samples<'a>(
+    entries: impl Iterator<Item = &'a mut TimeToSampleEntry>,
+    duration_to_trim: u64,
+) -> (usize, u32) {
+    let mut time_trimmed = 0u64;
+    let mut samples_removed = 0u32;
+    let mut entries_to_remove = 0usize;
+
+    for entry in entries {
+        let entry_total_duration =
+            (entry.sample_count as u64).saturating_mul(entry.sample_duration as u64);
+
+        if time_trimmed.saturating_add(entry_total_duration) <= duration_to_trim {
+            // Remove this entire entry
+            time_trimmed = time_trimmed.saturating_add(entry_total_duration);
+            samples_removed = samples_removed.saturating_add(entry.sample_count);
+            entries_to_remove = entries_to_remove.saturating_add(1);
+        } else {
+            // Partial removal from this entry
+            let remaining_duration = duration_to_trim.saturating_sub(time_trimmed);
+            let samples_to_remove = if entry.sample_duration == 0 {
+                0u32
+            } else {
+                (remaining_duration / entry.sample_duration as u64) as u32
+            };
+
+            samples_removed = samples_removed.saturating_add(samples_to_remove);
+
+            if samples_to_remove > 0 {
+                entry.sample_count = entry.sample_count.saturating_sub(samples_to_remove);
+            }
+            break;
+        }
+    }
+
+    (entries_to_remove, samples_removed)
 }
 
 impl From<Vec<TimeToSampleEntry>> for TimeToSampleAtom {

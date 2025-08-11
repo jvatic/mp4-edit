@@ -87,31 +87,22 @@ pub struct SampleSizeAtom {
 impl SampleSizeAtom {
     /// Removes the specified number of samples from the beginning
     pub fn remove_samples_from_start(&mut self, samples_to_remove: u32) {
-        if self.sample_size == 0 {
-            // Variable sample sizes - remove entries from the beginning
-            let samples_to_remove_usize =
-                samples_to_remove.min(self.entry_sizes.len() as u32) as usize;
-            self.entry_sizes.drain(0..samples_to_remove_usize);
+        if !self.entry_sizes.is_empty() {
+            let samples_to_remove = (samples_to_remove as usize).min(self.entry_sizes.len());
+            self.entry_sizes.drain(0..samples_to_remove);
         }
-
-        // Update total sample count for both fixed and variable size cases
         self.sample_count = self.sample_count.saturating_sub(samples_to_remove);
     }
 
     /// Removes the specified number of samples from the end
     pub fn remove_samples_from_end(&mut self, samples_to_remove: u32) {
-        if self.sample_size == 0 {
-            // Variable sample sizes - remove entries from the end
-            let samples_to_remove_usize =
-                samples_to_remove.min(self.entry_sizes.len() as u32) as usize;
+        if !self.entry_sizes.is_empty() {
             let new_len = self
                 .entry_sizes
                 .len()
-                .saturating_sub(samples_to_remove_usize);
+                .saturating_sub(samples_to_remove as usize);
             self.entry_sizes.truncate(new_len);
         }
-
-        // Update total sample count for both fixed and variable size cases
         self.sample_count = self.sample_count.saturating_sub(samples_to_remove);
     }
 }

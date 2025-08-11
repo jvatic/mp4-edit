@@ -44,7 +44,8 @@ impl<'a> ChunkOffsetBuilderTrack<'a> {
                     let next_first_chunk = if let Some(next_entry) = next_entry {
                         next_entry.first_chunk
                     } else {
-                        let remaining_samples = self.stsz.sample_count - *sample_index;
+                        let remaining_samples =
+                            self.stsz.sample_count.saturating_sub(*sample_index);
                         entry.first_chunk + remaining_samples.div_ceil(entry.samples_per_chunk)
                     };
 
