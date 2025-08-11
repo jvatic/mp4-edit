@@ -141,8 +141,8 @@ impl SampleToChunkAtom {
             };
 
             // Fill the range with this entry's samples_per_chunk
-            for chunk_idx in start_chunk..end_chunk {
-                chunk_samples[chunk_idx] = entry.samples_per_chunk;
+            for chunk in chunk_samples.iter_mut().take(end_chunk).skip(start_chunk) {
+                *chunk = entry.samples_per_chunk;
             }
         }
 
