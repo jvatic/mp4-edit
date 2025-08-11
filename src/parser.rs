@@ -705,6 +705,8 @@ impl Metadata {
         let mut chunk_offsets = chunk_offsets
             .build_chunk_offsets_ordered(original_chunk_offsets, mdat_content_offset as u64);
 
+        eprintln!("[DEBUG] update_chunk_offsets[2]");
+
         for (track_idx, trak) in self.moov_mut().tracks().enumerate() {
             let mut stbl = trak
                 .into_media()
@@ -1077,6 +1079,9 @@ impl<'a> MoovAtomRefMut<'a> {
 
     /// Trims leading duration
     pub fn trim_start(&mut self, duration: Duration) -> &mut Self {
+        // TODO: after trimming samples,
+        // - [ ] Update mdhd duration to match: sample_count × 1024
+        // - [ ] Update mvhd duration proportionally: (mdhd_duration × 600) / 44100
         let movie_timescale = self
             .header()
             .update_duration(|d| d.saturating_sub(duration))
@@ -1101,19 +1106,16 @@ impl<'a> MoovAtomRefMut<'a> {
             let samples_to_remove = stbl
                 .time_to_sample()
                 .trim_samples_from_start(duration_to_trim);
-            if samples_to_remove == 0 {
-                continue; // Nothing to actually remove
-            }
 
-            // Step 2: Calculate and remove chunks based on samples
-            let chunk_count = stbl.chunk_offset().chunk_count();
-            let chunks_to_remove = stbl
-                .sample_to_chunk()
-                .trim_chunks_for_samples(samples_to_remove, chunk_count as u32);
-
-            // Step 3: Update sample sizes
+            // Step 2: Update sample sizes
             stbl.sample_size()
                 .remove_samples_from_start(samples_to_remove);
+
+            // Step 3: Calculate and remove chunks based on samples
+            let total_chunks = stbl.chunk_offset().chunk_count();
+            let chunks_to_remove = stbl
+                .sample_to_chunk()
+                .trim_chunks_for_samples(samples_to_remove, total_chunks as u32);
 
             // Step 4: Remove chunk offsets
             stbl.chunk_offset()
@@ -1144,27 +1146,7 @@ impl<'a> MoovAtomRefMut<'a> {
                 continue; // Nothing to trim
             }
 
-            // Step 1: Determine which samples to remove based on time
-            let samples_to_remove = stbl
-                .time_to_sample()
-                .trim_samples_from_start(duration_to_trim);
-            if samples_to_remove == 0 {
-                continue; // Nothing to actually remove
-            }
-
-            // Step 2: Calculate and remove chunks based on samples
-            let chunk_count = stbl.chunk_offset().chunk_count();
-            let chunks_to_remove = stbl
-                .sample_to_chunk()
-                .trim_chunks_for_samples(samples_to_remove, chunk_count as u32);
-
-            // Step 3: Update sample sizes
-            stbl.sample_size()
-                .remove_samples_from_start(samples_to_remove);
-
-            // Step 4: Remove chunk offsets
-            stbl.chunk_offset()
-                .remove_chunks_from_start(chunks_to_remove);
+            todo!()
         }
         self
     }

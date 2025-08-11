@@ -86,17 +86,16 @@ impl ChunkOffsetAtom {
 
     /// Removes the specified number of chunks from the beginning
     pub fn remove_chunks_from_start(&mut self, chunks_to_remove: u32) {
-        let chunks_to_remove_usize = chunks_to_remove.min(self.chunk_offsets.len() as u32) as usize;
-        self.chunk_offsets.drain(0..chunks_to_remove_usize);
+        let chunks_to_remove = (chunks_to_remove as usize).min(self.chunk_offsets.len());
+        self.chunk_offsets.drain(0..chunks_to_remove);
     }
 
     /// Removes the specified number of chunks from the end
     pub fn remove_chunks_from_end(&mut self, chunks_to_remove: u32) {
-        let chunks_to_remove_usize = chunks_to_remove.min(self.chunk_offsets.len() as u32) as usize;
         let new_len = self
             .chunk_offsets
             .len()
-            .saturating_sub(chunks_to_remove_usize);
+            .saturating_sub(chunks_to_remove as usize);
         self.chunk_offsets.truncate(new_len);
     }
 }
