@@ -164,7 +164,7 @@ impl SampleToChunkAtom {
                 entries.push(SampleToChunkEntry {
                     first_chunk: current_first_chunk,
                     samples_per_chunk: current_samples_per_chunk,
-                    sample_description_index: 1, // Assuming audio track
+                    sample_description_index: 1, // TODO: preserve this round-trip
                 });
 
                 current_first_chunk = (chunk_idx as u32) + 1;
@@ -177,7 +177,7 @@ impl SampleToChunkAtom {
             entries.push(SampleToChunkEntry {
                 first_chunk: current_first_chunk,
                 samples_per_chunk: current_samples_per_chunk,
-                sample_description_index: 1,
+                sample_description_index: 1, // TODO: preserve this round-trip
             });
         }
 
