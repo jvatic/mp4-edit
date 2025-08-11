@@ -67,13 +67,69 @@ pub struct SampleToChunkAtom {
 impl SampleToChunkAtom {
     /// Calculates how many chunks need to be removed for the given number of samples
     /// and updates the chunk mapping accordingly
-    pub fn trim_chunks_for_samples(&mut self, samples_to_remove: u32, total_chunks: u32) -> u32 {
-        if samples_to_remove == 0 {
-            return 0;
+    ///
+    /// `total_chunks` - the total number of chunks in the stco/co64 atom
+    pub fn trim_samples_from_start(&mut self, samples_to_remove: u32, total_chunks: usize) -> u32 {
+        let mut chunk_samples = self.expand_chunk_samples(total_chunks);
+        let chunks_removed = self.trim_samples(samples_to_remove, chunk_samples.iter_mut());
+
+        // Remove empty chunks from our mapping
+        chunk_samples.retain(|&samples| samples > 0);
+
+        // Rebuild stsc entries from the remaining chunks
+        self.entries = self.collapse_chunk_samples(&chunk_samples).into();
+
+        chunks_removed
+    }
+
+    /// Calculates how many chunks need to be removed for the given number of samples
+    /// and updates the chunk mapping accordingly
+    ///
+    /// `total_chunks` - the total number of chunks in the stco/co64 atom
+    pub fn trim_samples_from_end(&mut self, samples_to_remove: u32, total_chunks: usize) -> u32 {
+        let mut chunk_samples = self.expand_chunk_samples(total_chunks);
+        let chunks_removed = self.trim_samples(samples_to_remove, chunk_samples.iter_mut().rev());
+
+        // Remove empty chunks from our mapping
+        chunk_samples.retain(|&samples| samples > 0);
+
+        // Rebuild stsc entries from the remaining chunks
+        self.entries = self.collapse_chunk_samples(&chunk_samples).into();
+
+        chunks_removed
+    }
+
+    fn trim_samples<'a>(
+        &mut self,
+        samples_to_remove: u32,
+        chunk_samples: impl Iterator<Item = &'a mut u32>,
+    ) -> u32 {
+        let mut remaining_samples_to_remove = samples_to_remove;
+        let mut chunks_removed = 0u32;
+
+        for samples_in_chunk in chunk_samples {
+            if remaining_samples_to_remove == 0 {
+                break;
+            }
+
+            if remaining_samples_to_remove >= *samples_in_chunk {
+                // Remove entire chunk
+                remaining_samples_to_remove -= *samples_in_chunk;
+                *samples_in_chunk = 0; // Mark as removed
+                chunks_removed += 1;
+            } else {
+                // Partial removal from this chunk
+                *samples_in_chunk -= remaining_samples_to_remove;
+                break;
+            }
         }
 
+        chunks_removed
+    }
+
+    fn expand_chunk_samples(&mut self, total_chunks: usize) -> Vec<u32> {
         // First, create a complete mapping of chunk -> samples_per_chunk
-        let mut chunk_samples = vec![0u32; total_chunks as usize];
+        let mut chunk_samples = vec![0u32; total_chunks];
 
         // Fill in the samples per chunk based on stsc entries
         for (i, entry) in self.entries.iter().enumerate() {
@@ -81,7 +137,7 @@ impl SampleToChunkAtom {
             let end_chunk = if i + 1 < self.entries.len() {
                 (self.entries[i + 1].first_chunk - 1) as usize
             } else {
-                total_chunks as usize
+                total_chunks
             };
 
             // Fill the range with this entry's samples_per_chunk
@@ -90,43 +146,10 @@ impl SampleToChunkAtom {
             }
         }
 
-        // Now remove samples from the beginning
-        let mut remaining_samples_to_remove = samples_to_remove;
-        let mut chunks_removed = 0u32;
-
-        for (chunk_idx, &samples_in_chunk) in chunk_samples.iter().enumerate() {
-            if remaining_samples_to_remove == 0 {
-                break;
-            }
-
-            if remaining_samples_to_remove >= samples_in_chunk {
-                // Remove entire chunk
-                remaining_samples_to_remove -= samples_in_chunk;
-                chunks_removed += 1;
-            } else {
-                // Partial removal from this chunk
-                chunk_samples[chunk_idx] = samples_in_chunk - remaining_samples_to_remove;
-                remaining_samples_to_remove = 0;
-                break;
-            }
-        }
-
-        // Remove the eliminated chunks from our mapping
-        let remaining_chunk_samples: Vec<u32> = chunk_samples
-            .into_iter()
-            .skip(chunks_removed as usize)
-            .collect();
-
-        // Rebuild stsc entries from the remaining chunks
-        self.entries = self
-            .build_stsc_from_chunk_samples(&remaining_chunk_samples)
-            .into();
-
-        chunks_removed
+        chunk_samples
     }
 
-    /// Build optimized stsc entries from a chunk->samples mapping
-    fn build_stsc_from_chunk_samples(&self, chunk_samples: &[u32]) -> Vec<SampleToChunkEntry> {
+    fn collapse_chunk_samples(&self, chunk_samples: &[u32]) -> Vec<SampleToChunkEntry> {
         if chunk_samples.is_empty() {
             return Vec::new();
         }

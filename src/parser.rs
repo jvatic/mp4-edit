@@ -705,8 +705,6 @@ impl Metadata {
         let mut chunk_offsets = chunk_offsets
             .build_chunk_offsets_ordered(original_chunk_offsets, mdat_content_offset as u64);
 
-        eprintln!("[DEBUG] update_chunk_offsets[2]");
-
         for (track_idx, trak) in self.moov_mut().tracks().enumerate() {
             let mut stbl = trak
                 .into_media()
@@ -1115,7 +1113,7 @@ impl<'a> MoovAtomRefMut<'a> {
             let total_chunks = stbl.chunk_offset().chunk_count();
             let chunks_to_remove = stbl
                 .sample_to_chunk()
-                .trim_chunks_for_samples(samples_to_remove, total_chunks as u32);
+                .trim_samples_from_start(samples_to_remove, total_chunks);
 
             // Step 4: Remove chunk offsets
             stbl.chunk_offset()
@@ -1146,7 +1144,23 @@ impl<'a> MoovAtomRefMut<'a> {
                 continue; // Nothing to trim
             }
 
-            todo!()
+            // Step 1: Determine which samples to remove based on time
+            let samples_to_remove = stbl
+                .time_to_sample()
+                .trim_samples_from_end(duration_to_trim);
+
+            // Step 2: Update sample sizes
+            stbl.sample_size()
+                .remove_samples_from_end(samples_to_remove);
+
+            // Step 3: Calculate and remove chunks based on samples
+            let total_chunks = stbl.chunk_offset().chunk_count();
+            let chunks_to_remove = stbl
+                .sample_to_chunk()
+                .trim_samples_from_end(samples_to_remove, total_chunks);
+
+            // Step 4: Remove chunk offsets
+            stbl.chunk_offset().remove_chunks_from_end(chunks_to_remove);
         }
         self
     }
