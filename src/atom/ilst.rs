@@ -1,4 +1,5 @@
 use anyhow::bail;
+use bon::bon;
 use core::fmt;
 use derive_more::Deref;
 use futures_io::AsyncRead;
@@ -14,8 +15,17 @@ use crate::{
 
 pub const ILST: &[u8; 4] = b"ilst";
 
+const DATA_TYPE_TEXT: u32 = 1;
+const DATA_TYPE_JPEG: u32 = 13;
+
 #[derive(Clone, Deref)]
 pub struct RawData(Vec<u8>);
+
+impl RawData {
+    pub fn new(data: impl Into<Vec<u8>>) -> Self {
+        RawData(data.into())
+    }
+}
 
 impl fmt::Debug for RawData {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -40,10 +50,10 @@ pub enum ListItemData {
 impl ListItemData {
     fn new(data_type: u32, data: Vec<u8>) -> Self {
         match data_type {
-            1 => String::from_utf8(data)
+            DATA_TYPE_TEXT => String::from_utf8(data)
                 .map(Self::Text)
                 .unwrap_or_else(|e| Self::Raw(RawData(e.into_bytes()))),
-            13 => Self::Jpeg(RawData(data)),
+            DATA_TYPE_JPEG => Self::Jpeg(RawData(data)),
             _ => Self::Raw(RawData(data)),
         }
     }
@@ -65,12 +75,38 @@ pub struct DataAtom {
     pub data: ListItemData,
 }
 
+impl DataAtom {
+    pub fn new(data: ListItemData) -> Self {
+        Self {
+            data_type: 0,
+            reserved: 0,
+            data,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MetadataItem {
     pub item_type: FourCC,
     pub mean: Option<Vec<u8>>,
     pub name: Option<Vec<u8>>,
     pub data_atoms: Vec<DataAtom>,
+}
+
+#[bon]
+impl MetadataItem {
+    #[builder]
+    pub fn new(
+        #[builder(into, start_fn)] item_type: FourCC,
+        #[builder(into)] data_atoms: Vec<DataAtom>,
+    ) -> Self {
+        Self {
+            item_type,
+            mean: None,
+            name: None,
+            data_atoms,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -117,13 +153,18 @@ impl SerializeAtom for ItemListAtom {
             }
 
             for data_atom in item.data_atoms {
+                let data_type = match &data_atom.data {
+                    ListItemData::Text(_) => DATA_TYPE_TEXT,
+                    ListItemData::Jpeg(_) => DATA_TYPE_JPEG,
+                    _ => data_atom.data_type,
+                };
                 let data: Vec<u8> = data_atom.data.to_bytes();
                 let data_size = 16 + data.len() as u32; // header + type flags + reserved + data
 
                 // Write data atom
                 item_data.extend_from_slice(&data_size.to_be_bytes());
                 item_data.extend_from_slice(b"data");
-                item_data.extend_from_slice(&data_atom.data_type.to_be_bytes());
+                item_data.extend_from_slice(&data_type.to_be_bytes());
                 item_data.extend_from_slice(&data_atom.reserved.to_be_bytes());
                 item_data.extend_from_slice(&data);
             }
