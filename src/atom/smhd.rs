@@ -60,7 +60,7 @@ fn parse_smhd_data<R: Read>(mut reader: R) -> Result<SoundMediaHeaderAtom, anyho
 
     // Convert from fixed-point 8.8 to float
     // In 8.8 format, the value is multiplied by 256
-    let balance = (balance_fixed as f32) / 256.0;
+    let balance = f32::from(balance_fixed) / 256.0;
 
     // Read reserved field (2 bytes)
     let mut reserved_buf = [0u8; 2];
@@ -91,10 +91,10 @@ impl SerializeAtom for SoundMediaHeaderAtom {
         let mut data = Vec::new();
 
         // Version and flags (4 bytes)
-        let version_flags = (self.version as u32) << 24
-            | (self.flags[0] as u32) << 16
-            | (self.flags[1] as u32) << 8
-            | (self.flags[2] as u32);
+        let version_flags = u32::from(self.version) << 24
+            | u32::from(self.flags[0]) << 16
+            | u32::from(self.flags[1]) << 8
+            | u32::from(self.flags[2]);
         data.extend_from_slice(&version_flags.to_be_bytes());
 
         // Balance (fixed-point 8.8 format, 2 bytes)

@@ -51,19 +51,17 @@ impl ListItemData {
     fn new(data_type: u32, data: Vec<u8>) -> Self {
         match data_type {
             DATA_TYPE_TEXT => String::from_utf8(data)
-                .map(Self::Text)
-                .unwrap_or_else(|e| Self::Raw(RawData(e.into_bytes()))),
+                .map_or_else(|e| Self::Raw(RawData(e.into_bytes())), Self::Text),
             DATA_TYPE_JPEG => Self::Jpeg(RawData(data)),
             _ => Self::Raw(RawData(data)),
         }
     }
 
     fn to_bytes(self: ListItemData) -> Vec<u8> {
-        use ListItemData::*;
+        use ListItemData::{Jpeg, Raw, Text};
         match self {
             Text(s) => s.into_bytes(),
-            Jpeg(data) => data.0,
-            Raw(data) => data.0,
+            Jpeg(data) | Raw(data) => data.0,
         }
     }
 }
@@ -139,14 +137,16 @@ impl SerializeAtom for ItemListAtom {
             let mut item_data = Vec::new();
 
             if let Some(mean_data) = &item.mean {
-                let mean_size = 8 + mean_data.len() as u32;
+                let mean_size =
+                    u32::try_from(8 + mean_data.len()).expect("mean size should fit in u32");
                 item_data.extend_from_slice(&mean_size.to_be_bytes());
                 item_data.extend_from_slice(b"mean");
                 item_data.extend_from_slice(mean_data);
             }
 
             if let Some(name_data) = &item.name {
-                let name_size = 8 + name_data.len() as u32;
+                let name_size =
+                    u32::try_from(8 + name_data.len()).expect("name size should fit in u32");
                 item_data.extend_from_slice(&name_size.to_be_bytes());
                 item_data.extend_from_slice(b"name");
                 item_data.extend_from_slice(name_data);
@@ -159,7 +159,8 @@ impl SerializeAtom for ItemListAtom {
                     _ => data_atom.data_type,
                 };
                 let data: Vec<u8> = data_atom.data.to_bytes();
-                let data_size = 16 + data.len() as u32; // header + type flags + reserved + data
+                let data_size =
+                    u32::try_from(16 + data.len()).expect("data size should fit in u32"); // header + type flags + reserved + data
 
                 // Write data atom
                 item_data.extend_from_slice(&data_size.to_be_bytes());
@@ -169,7 +170,8 @@ impl SerializeAtom for ItemListAtom {
                 item_data.extend_from_slice(&data);
             }
 
-            let item_size = 8 + item_data.len() as u32; // size + type + data
+            let item_size =
+                u32::try_from(8 + item_data.len()).expect("item size should fit in u32"); // size + type + data
 
             // Write item
             output.extend_from_slice(&item_size.to_be_bytes());
@@ -186,9 +188,8 @@ fn parse_ilst_data<R: std::io::Read>(mut reader: R) -> anyhow::Result<ItemListAt
 
     loop {
         // Try to read size
-        let size = match read_u32(&mut reader) {
-            Ok(s) => s,
-            Err(_) => break, // End of stream
+        let Ok(size) = read_u32(&mut reader) else {
+            break;
         };
 
         if size == 0 {
@@ -198,7 +199,7 @@ fn parse_ilst_data<R: std::io::Read>(mut reader: R) -> anyhow::Result<ItemListAt
         let actual_size = if size == 1 {
             read_u64(&mut reader)?
         } else {
-            size as u64
+            u64::from(size)
         };
 
         let item_type = read_fourcc(&mut reader)?;
@@ -208,7 +209,10 @@ fn parse_ilst_data<R: std::io::Read>(mut reader: R) -> anyhow::Result<ItemListAt
         let remaining_size = actual_size - header_size;
 
         // Read the item data
-        let item_data = read_bytes(&mut reader, remaining_size as usize)?;
+        let item_data = read_bytes(
+            &mut reader,
+            usize::try_from(remaining_size).expect("u64 should fit in usize"),
+        )?;
         let mut item_reader = std::io::Cursor::new(&item_data);
 
         let mut data_atoms = Vec::new();
@@ -216,9 +220,8 @@ fn parse_ilst_data<R: std::io::Read>(mut reader: R) -> anyhow::Result<ItemListAt
         let mut name_data = None;
 
         while item_reader.position() < item_data.len() as u64 {
-            let data_size = match read_u32(&mut item_reader) {
-                Ok(s) => s,
-                Err(_) => break,
+            let Ok(data_size) = read_u32(&mut item_reader) else {
+                break;
             };
 
             if data_size == 0 {
@@ -228,7 +231,7 @@ fn parse_ilst_data<R: std::io::Read>(mut reader: R) -> anyhow::Result<ItemListAt
             let data_actual_size = if data_size == 1 {
                 read_u64(&mut item_reader)?
             } else {
-                data_size as u64
+                u64::from(data_size)
             };
 
             let atom_type = read_fourcc(&mut item_reader)?;
@@ -242,8 +245,10 @@ fn parse_ilst_data<R: std::io::Read>(mut reader: R) -> anyhow::Result<ItemListAt
                 b"mean" => {
                     // Parse mean atom (for ---- items)
                     if item_type == b"----" {
-                        let mean_bytes =
-                            read_bytes(&mut item_reader, remaining_atom_size as usize)?;
+                        let mean_bytes = read_bytes(
+                            &mut item_reader,
+                            usize::try_from(remaining_atom_size).expect("u64 should fit in usize"),
+                        )?;
                         mean_data = Some(mean_bytes);
                     } else {
                         bail!("unexpected 'mean' atom in non-'----' item");
@@ -252,8 +257,10 @@ fn parse_ilst_data<R: std::io::Read>(mut reader: R) -> anyhow::Result<ItemListAt
                 b"name" => {
                     // Parse name atom (for ---- items)
                     if item_type == b"----" {
-                        let name_bytes =
-                            read_bytes(&mut item_reader, remaining_atom_size as usize)?;
+                        let name_bytes = read_bytes(
+                            &mut item_reader,
+                            usize::try_from(remaining_atom_size).expect("u64 should fit in usize"),
+                        )?;
                         name_data = Some(name_bytes);
                     } else {
                         bail!("unexpected 'name' atom in non-'----' item");
@@ -284,7 +291,10 @@ fn parse_data_atom<R: Read>(reader: &mut R, size: u64) -> anyhow::Result<DataAto
     let data_type = read_u32(reader)?;
     let reserved = read_u32(reader)?;
     let data_size = size - 8; // size - data_type - reserved
-    let data = read_bytes(reader, data_size as usize)?;
+    let data = read_bytes(
+        reader,
+        usize::try_from(data_size).expect("u64 should fit in usize"),
+    )?;
 
     Ok(DataAtom {
         data_type,

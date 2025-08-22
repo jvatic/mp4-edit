@@ -22,7 +22,7 @@ pub enum WriteErrorKind {
 }
 
 pub trait SerializeAtom: Sized {
-    /// [FourCC] representing atom type
+    /// [`FourCC`] representing atom type
     fn atom_type(&self) -> FourCC;
 
     /// Serialize an atom's body
@@ -129,7 +129,7 @@ fn serialize_atom_header(atom_type: FourCC, data_size: u64) -> Vec<u8> {
 
     // Determine if we need 64-bit size
     let total_size_with_32bit_header = 8u64 + data_size;
-    let use_64bit = total_size_with_32bit_header > u32::MAX as u64;
+    let use_64bit = total_size_with_32bit_header > u64::from(u32::MAX);
 
     if use_64bit {
         // Extended 64-bit size format: size=1 (4 bytes) + type (4 bytes) + extended_size (8 bytes) + content

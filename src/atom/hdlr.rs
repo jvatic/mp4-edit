@@ -271,10 +271,10 @@ impl SerializeAtom for HandlerReferenceAtom {
         let mut data = Vec::new();
 
         // Version and flags (4 bytes)
-        let version_flags = (self.version as u32) << 24
-            | (self.flags[0] as u32) << 16
-            | (self.flags[1] as u32) << 8
-            | (self.flags[2] as u32);
+        let version_flags = u32::from(self.version) << 24
+            | u32::from(self.flags[0]) << 16
+            | u32::from(self.flags[1]) << 8
+            | u32::from(self.flags[2]);
         data.extend_from_slice(&version_flags.to_be_bytes());
 
         // Component type (4 bytes)

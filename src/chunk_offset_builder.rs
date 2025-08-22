@@ -74,7 +74,7 @@ impl<'a> ChunkOffsetBuilderTrack<'a> {
                                      (i, size)| {
                                         sample_indices.push(i);
                                         sample_sizes.push(*size);
-                                        chunk_size += *size as u64;
+                                        chunk_size += u64::from(*size);
                                         (sample_indices, sample_sizes, chunk_size)
                                     },
                                 );
@@ -101,7 +101,7 @@ pub struct ChunkOffsetBuilder<'a> {
     tracks: Vec<ChunkOffsetBuilderTrack<'a>>,
 }
 
-impl<'a> Default for ChunkOffsetBuilder<'a> {
+impl Default for ChunkOffsetBuilder<'_> {
     fn default() -> Self {
         Self::new()
     }
@@ -119,18 +119,18 @@ impl<'a> ChunkOffsetBuilder<'a> {
     }
 
     pub fn add_track(&mut self, stsc: &'a SampleToChunkAtom, stsz: &'a SampleSizeAtom) {
-        self.tracks.push(ChunkOffsetBuilderTrack { stsc, stsz })
+        self.tracks.push(ChunkOffsetBuilderTrack { stsc, stsz });
     }
 
     /// Build interleaved chunk information including sizes and sample mappings
     pub fn build_chunk_info(&self) -> impl Iterator<Item = ChunkInfo> + 'a {
-        let mut iters = VecDeque::from_iter(
-            self.tracks
-                .clone()
-                .into_iter()
-                .enumerate()
-                .map(|(track_index, track)| track.build_chunk_info(track_index)),
-        );
+        let mut iters = self
+            .tracks
+            .clone()
+            .into_iter()
+            .enumerate()
+            .map(|(track_index, track)| track.build_chunk_info(track_index))
+            .collect::<VecDeque<_>>();
 
         // round-robin chunks from each track
         std::iter::from_fn(move || {

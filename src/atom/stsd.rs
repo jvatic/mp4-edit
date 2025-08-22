@@ -415,7 +415,7 @@ fn parse_stsd_data<R: Read>(mut reader: R) -> Result<SampleDescriptionTableAtom,
     let mut entries = Vec::with_capacity(entry_count as usize);
 
     for i in 0..entry_count {
-        let entry = parse_sample_entry(&mut reader).context(format!("parse sample entry {}", i))?;
+        let entry = parse_sample_entry(&mut reader).context(format!("parse sample entry {i}"))?;
         entries.push(entry);
     }
 
@@ -690,13 +690,13 @@ fn parse_text_sample_entry(data: &[u8]) -> Result<TextSampleEntry, anyhow::Error
 
     // Read background color (3 * 2 bytes = 6 bytes)
     let mut background_color = [0u16; 3];
-    for item in background_color.iter_mut() {
+    for item in &mut background_color {
         *item = u16::from_be_bytes(buf2);
     }
 
     // Read default text box (4 * 2 bytes = 8 bytes)
     let mut default_text_box = [0u16; 4];
-    for item in default_text_box.iter_mut() {
+    for item in &mut default_text_box {
         cursor
             .read_exact(&mut buf2)
             .context("read default text box")?;

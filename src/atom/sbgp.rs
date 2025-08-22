@@ -72,7 +72,10 @@ impl SerializeAtom for SampleToGroupAtom {
         }
 
         // Entry count (4 bytes, big-endian)
-        data.extend_from_slice(&(self.entries.len() as u32).to_be_bytes());
+        data.extend_from_slice(
+            &(u32::try_from(self.entries.len()).expect("entries len should fit in u32"))
+                .to_be_bytes(),
+        );
 
         // Entries
         for entry in self.entries {
@@ -124,13 +127,13 @@ fn parse_sbgp_data(data: &[u8]) -> Result<SampleToGroupAtom, anyhow::Error> {
         // Read sample_count
         cursor
             .read_exact(&mut buffer)
-            .with_context(|| format!("Failed to read sample_count for entry {}", i))?;
+            .with_context(|| format!("Failed to read sample_count for entry {i}"))?;
         let sample_count = u32::from_be_bytes(buffer);
 
         // Read group_description_index
         cursor
             .read_exact(&mut buffer)
-            .with_context(|| format!("Failed to read group_description_index for entry {}", i))?;
+            .with_context(|| format!("Failed to read group_description_index for entry {i}"))?;
         let group_description_index = u32::from_be_bytes(buffer);
 
         entries.push(SampleToGroupEntry {

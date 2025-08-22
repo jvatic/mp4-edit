@@ -344,7 +344,7 @@ impl From<RawData> for AtomData {
 
 impl SerializeAtom for AtomData {
     fn atom_type(&self) -> FourCC {
-        use AtomData::*;
+        use AtomData::{FileType, MovieHeader, TrackHeader, EditList, MediaHeader, HandlerReference, ItemList, SoundMediaHeader, GenericMediaHeader, SampleDescriptionTable, TrackReference, DataReference, SampleSize, ChunkOffset, TimeToSample, SampleToChunk, SampleToGroup, SampleGroupDescription, ChapterList, Free, RawData};
         match self {
             FileType(atom) => atom.atom_type(),
             MovieHeader(atom) => atom.atom_type(),
@@ -371,7 +371,7 @@ impl SerializeAtom for AtomData {
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
-        use AtomData::*;
+        use AtomData::{FileType, MovieHeader, TrackHeader, EditList, MediaHeader, HandlerReference, ItemList, SoundMediaHeader, GenericMediaHeader, SampleDescriptionTable, TrackReference, DataReference, SampleSize, ChunkOffset, TimeToSample, SampleToChunk, SampleToGroup, SampleGroupDescription, ChapterList, Free, RawData};
         match self {
             FileType(atom) => atom.into_body_bytes(),
             MovieHeader(atom) => atom.into_body_bytes(),

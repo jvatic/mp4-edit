@@ -79,8 +79,8 @@ pub struct SampleSizeAtom {
     pub sample_size: u32,
     /// Number of samples in the track
     pub sample_count: u32,
-    /// If sample_size is 0, this contains the size of each sample, indexed by sample number.
-    /// If sample_size is non-zero, this table is empty.
+    /// If `sample_size` is 0, this contains the size of each sample, indexed by sample number.
+    /// If `sample_size` is non-zero, this table is empty.
     pub entry_sizes: SampleEntrySizes,
 }
 
@@ -113,7 +113,7 @@ impl SampleSizeAtom {
     pub fn new(
         #[builder(default = 0)] sample_size: u32,
         #[builder(default = 0)] sample_count: u32,
-        /// either set sample_size and sample_count or entry_sizes
+        /// either set `sample_size` and `sample_count` or `entry_sizes`
         #[builder(into, default = SampleEntrySizes(Vec::new()))]
         entry_sizes: SampleEntrySizes,
     ) -> Self {
@@ -238,7 +238,7 @@ impl SerializeAtom for SampleSizeAtom {
         let mut data = Vec::new();
 
         // Version and flags (4 bytes total)
-        let version_flags = (self.version as u32) << 24 | (self.flags & 0x00FFFFFF);
+        let version_flags = u32::from(self.version) << 24 | (self.flags & 0x00FFFFFF);
         data.extend_from_slice(&version_flags.to_be_bytes());
 
         // Sample size (4 bytes)

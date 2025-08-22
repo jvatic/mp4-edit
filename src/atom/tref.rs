@@ -57,7 +57,7 @@ impl fmt::Display for TrackReference {
             self.reference_type,
             self.track_ids
                 .iter()
-                .map(|id| id.to_string())
+                .map(ToString::to_string)
                 .collect::<Vec<_>>()
                 .join(", ")
         )
@@ -95,7 +95,7 @@ impl fmt::Display for TrackReferenceAtom {
                 if i > 0 {
                     write!(f, ", ")?;
                 }
-                write!(f, " {}", reference)?;
+                write!(f, " {reference}")?;
             }
             write!(f, " }}")
         }

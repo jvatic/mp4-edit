@@ -67,7 +67,7 @@ impl ChapterEntry {
     #[builder]
     pub fn new(#[builder(into, finish_fn)] title: String, start_time: Duration) -> Self {
         // convert to 100-nanosecond units
-        let start_time = (start_time.as_nanos() / 100).min(u64::MAX as u128) as u64;
+        let start_time = (start_time.as_nanos() / 100).min(u128::from(u64::MAX)) as u64;
         ChapterEntry { start_time, title }
     }
 }
@@ -185,11 +185,11 @@ fn parse_chpl_data<R: Read>(mut reader: R) -> Result<ChapterListAtom, anyhow::Er
         let mut title_buf = Vec::new();
         reader
             .read_until(0x00, &mut title_buf)
-            .context(format!("read title for chapter {}", i))?;
+            .context(format!("read title for chapter {i}"))?;
         title_buf.pop(); // Remove trailing null byte
 
         let title = String::from_utf8(title_buf)
-            .context(format!("invalid UTF-8 in chapter {} title", i))?;
+            .context(format!("invalid UTF-8 in chapter {i} title"))?;
 
         chapters.push(ChapterEntry { start_time, title });
     }

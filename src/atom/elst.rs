@@ -77,7 +77,8 @@ impl MediaDuration {
     }
 
     pub fn scaled(&self) -> i64 {
-        scaled_duration(self.duration, self.media_timescale as u64) as i64
+        i64::try_from(scaled_duration(self.duration, self.media_timescale as u64))
+            .expect("scaled duration should fit in i64")
     }
 }
 
@@ -135,15 +136,25 @@ impl SerializeAtom for EditListAtom {
         data.extend_from_slice(&self.flags);
 
         // Entry count (4 bytes, big-endian)
-        data.extend_from_slice(&(self.entries.len() as u32).to_be_bytes());
+        data.extend_from_slice(
+            &(u32::try_from(self.entries.len()).expect("entries len should fit in u32"))
+                .to_be_bytes(),
+        );
 
         // Entries
         for entry in self.entries {
             match self.version {
                 0 => {
                     // Version 0: 32-bit fields
-                    data.extend_from_slice(&(entry.segment_duration as u32).to_be_bytes());
-                    data.extend_from_slice(&(entry.media_time as i32).to_be_bytes());
+                    data.extend_from_slice(
+                        &(u32::try_from(entry.segment_duration)
+                            .expect("segment_duration should fit in u32"))
+                        .to_be_bytes(),
+                    );
+                    data.extend_from_slice(
+                        &(i32::try_from(entry.media_time).expect("media_time should fit in i32"))
+                            .to_be_bytes(),
+                    );
                     // Convert f32 to fixed-point 16.16
                     let rate_fixed = (entry.media_rate * 65536.0) as u32;
                     data.extend_from_slice(&rate_fixed.to_be_bytes());
@@ -216,19 +227,19 @@ fn parse_elst_entries_v0<R: Read>(
         // Segment duration (32-bit)
         reader
             .read_exact(&mut buf)
-            .context(format!("read segment_duration for entry {}", i))?;
-        let segment_duration = u32::from_be_bytes(buf) as u64;
+            .context(format!("read segment_duration for entry {i}"))?;
+        let segment_duration = u64::from(u32::from_be_bytes(buf));
 
         // Media time (32-bit signed)
         reader
             .read_exact(&mut buf)
-            .context(format!("read media_time for entry {}", i))?;
-        let media_time = i32::from_be_bytes(buf) as i64;
+            .context(format!("read media_time for entry {i}"))?;
+        let media_time = i64::from(i32::from_be_bytes(buf));
 
         // Media rate (fixed-point 16.16)
         reader
             .read_exact(&mut buf)
-            .context(format!("read media_rate for entry {}", i))?;
+            .context(format!("read media_rate for entry {i}"))?;
         let rate_fixed = u32::from_be_bytes(buf);
         let media_rate = (rate_fixed as f32) / 65536.0;
 
@@ -254,19 +265,19 @@ fn parse_elst_entries_v1<R: Read>(
         // Segment duration (64-bit)
         reader
             .read_exact(&mut buf8)
-            .context(format!("read segment_duration for entry {}", i))?;
+            .context(format!("read segment_duration for entry {i}"))?;
         let segment_duration = u64::from_be_bytes(buf8);
 
         // Media time (64-bit signed)
         reader
             .read_exact(&mut buf8)
-            .context(format!("read media_time for entry {}", i))?;
+            .context(format!("read media_time for entry {i}"))?;
         let media_time = i64::from_be_bytes(buf8);
 
         // Media rate (fixed-point 16.16)
         reader
             .read_exact(&mut buf4)
-            .context(format!("read media_rate for entry {}", i))?;
+            .context(format!("read media_rate for entry {i}"))?;
         let rate_fixed = u32::from_be_bytes(buf4);
         let media_rate = (rate_fixed as f32) / 65536.0;
 
