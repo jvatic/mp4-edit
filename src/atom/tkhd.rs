@@ -93,11 +93,11 @@ fn parse_tkhd_v0<R: Read>(mut reader: R, flags: [u8; 3]) -> Result<TrackHeaderAt
 
     // Creation time (32-bit)
     reader.read_exact(&mut buf).context("creation_time")?;
-    let creation_time = u32::from_be_bytes(buf) as u64;
+    let creation_time = u64::from(u32::from_be_bytes(buf));
 
     // Modification time (32-bit)
     reader.read_exact(&mut buf).context("modification_time")?;
-    let modification_time = u32::from_be_bytes(buf) as u64;
+    let modification_time = u64::from(u32::from_be_bytes(buf));
 
     // Track ID
     reader.read_exact(&mut buf).context("track_id")?;
@@ -108,7 +108,7 @@ fn parse_tkhd_v0<R: Read>(mut reader: R, flags: [u8; 3]) -> Result<TrackHeaderAt
 
     // Duration (32-bit)
     reader.read_exact(&mut buf).context("duration")?;
-    let duration = u32::from_be_bytes(buf) as u64;
+    let duration = u64::from(u32::from_be_bytes(buf));
 
     // Reserved (8 bytes)
     let mut reserved = [0u8; 8];
@@ -128,7 +128,7 @@ fn parse_tkhd_v0<R: Read>(mut reader: R, flags: [u8; 3]) -> Result<TrackHeaderAt
     let mut vol_buf = [0u8; 2];
     reader.read_exact(&mut vol_buf).context("volume")?;
     let volume_fixed = u16::from_be_bytes(vol_buf);
-    let volume = (volume_fixed as f32) / 256.0;
+    let volume = f32::from(volume_fixed) / 256.0;
 
     // Reserved (2 bytes)
     let mut reserved2 = [0u8; 2];
@@ -213,7 +213,7 @@ fn parse_tkhd_v1<R: Read>(mut reader: R, flags: [u8; 3]) -> Result<TrackHeaderAt
     let mut vol_buf = [0u8; 2];
     reader.read_exact(&mut vol_buf).context("volume")?;
     let volume_fixed = u16::from_be_bytes(vol_buf);
-    let volume = (volume_fixed as f32) / 256.0;
+    let volume = f32::from(volume_fixed) / 256.0;
 
     // Reserved (2 bytes)
     let mut reserved2 = [0u8; 2];
@@ -272,17 +272,17 @@ impl SerializeAtom for TrackHeaderAtom {
         let mut data = Vec::new();
 
         // Determine version based on whether values fit in 32-bit
-        let needs_64_bit = self.creation_time > u32::MAX as u64
-            || self.modification_time > u32::MAX as u64
-            || self.duration > u32::MAX as u64;
+        let needs_64_bit = self.creation_time > u64::from(u32::MAX)
+            || self.modification_time > u64::from(u32::MAX)
+            || self.duration > u64::from(u32::MAX);
 
-        let version = if needs_64_bit { 1 } else { 0 };
+        let version = i32::from(needs_64_bit);
 
         // Version and flags (4 bytes)
         let version_flags = (version as u32) << 24
-            | (self.flags[0] as u32) << 16
-            | (self.flags[1] as u32) << 8
-            | (self.flags[2] as u32);
+            | u32::from(self.flags[0]) << 16
+            | u32::from(self.flags[1]) << 8
+            | u32::from(self.flags[2]);
         data.extend_from_slice(&version_flags.to_be_bytes());
 
         match version {

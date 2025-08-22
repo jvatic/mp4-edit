@@ -45,7 +45,7 @@ impl From<[u8; 3]> for LanguageCode {
         let char2 = (((packed >> 5) & 0x1F) + 0x60) as u8 as char;
         let char3 = ((packed & 0x1F) + 0x60) as u8 as char;
 
-        let lang_str = format!("{}{}{}", char1, char2, char3);
+        let lang_str = format!("{char1}{char2}{char3}");
 
         match lang_str.as_str() {
             "eng" => LanguageCode::English,
@@ -89,7 +89,8 @@ impl LanguageCode {
         let char2_bits = (chars[1] as u8 - 0x60) & 0x1F;
         let char3_bits = (chars[2] as u8 - 0x60) & 0x1F;
 
-        let packed = ((char1_bits as u16) << 10) | ((char2_bits as u16) << 5) | (char3_bits as u16);
+        let packed =
+            (u16::from(char1_bits) << 10) | (u16::from(char2_bits) << 5) | u16::from(char3_bits);
         packed.to_be_bytes()
     }
 }
@@ -113,7 +114,7 @@ impl fmt::Display for LanguageCode {
                 return write!(f, "{}{}{}", chars[0], chars[1], chars[2]);
             }
         };
-        write!(f, "{}", code)
+        write!(f, "{code}")
     }
 }
 
@@ -143,8 +144,8 @@ impl MediaHeaderAtom {
         F: FnMut(Duration) -> Duration,
     {
         self.duration = scaled_duration(
-            closure(unscaled_duration(self.duration, self.timescale as u64)),
-            self.timescale as u64,
+            closure(unscaled_duration(self.duration, u64::from(self.timescale))),
+            u64::from(self.timescale),
         );
         self
     }
@@ -201,13 +202,13 @@ fn parse_mdhd_data<R: Read>(mut reader: R) -> Result<MediaHeaderAtom, anyhow::Er
 
             // Creation time (32-bit)
             reader.read_exact(&mut buf4).context("read creation_time")?;
-            let creation_time = u32::from_be_bytes(buf4) as u64;
+            let creation_time = u64::from(u32::from_be_bytes(buf4));
 
             // Modification time (32-bit)
             reader
                 .read_exact(&mut buf4)
                 .context("read modification_time")?;
-            let modification_time = u32::from_be_bytes(buf4) as u64;
+            let modification_time = u64::from(u32::from_be_bytes(buf4));
 
             // Timescale (32-bit)
             reader.read_exact(&mut buf4).context("read timescale")?;
@@ -215,7 +216,7 @@ fn parse_mdhd_data<R: Read>(mut reader: R) -> Result<MediaHeaderAtom, anyhow::Er
 
             // Duration (32-bit)
             reader.read_exact(&mut buf4).context("read duration")?;
-            let duration = u32::from_be_bytes(buf4) as u64;
+            let duration = u64::from(u32::from_be_bytes(buf4));
 
             (creation_time, modification_time, timescale, duration)
         }
@@ -282,29 +283,39 @@ impl SerializeAtom for MediaHeaderAtom {
         let mut data = Vec::new();
 
         // Determine version based on whether values fit in 32-bit
-        let needs_64_bit = self.creation_time > u32::MAX as u64
-            || self.modification_time > u32::MAX as u64
-            || self.duration > u32::MAX as u64;
+        let needs_64_bit = self.creation_time > u64::from(u32::MAX)
+            || self.modification_time > u64::from(u32::MAX)
+            || self.duration > u64::from(u32::MAX);
 
-        let version = if needs_64_bit { 1 } else { 0 };
+        let version = i32::from(needs_64_bit);
 
         // Version and flags (4 bytes)
         let version_flags = (version as u32) << 24
-            | (self.flags[0] as u32) << 16
-            | (self.flags[1] as u32) << 8
-            | (self.flags[2] as u32);
+            | u32::from(self.flags[0]) << 16
+            | u32::from(self.flags[1]) << 8
+            | u32::from(self.flags[2]);
         data.extend_from_slice(&version_flags.to_be_bytes());
 
         match version {
             0 => {
                 // Creation time (32-bit)
-                data.extend_from_slice(&(self.creation_time as u32).to_be_bytes());
+                data.extend_from_slice(
+                    &(u32::try_from(self.creation_time).expect("creation_time should fit in u32"))
+                        .to_be_bytes(),
+                );
                 // Modification time (32-bit)
-                data.extend_from_slice(&(self.modification_time as u32).to_be_bytes());
+                data.extend_from_slice(
+                    &(u32::try_from(self.modification_time)
+                        .expect("modification_time should fit in u32"))
+                    .to_be_bytes(),
+                );
                 // Timescale (32-bit)
                 data.extend_from_slice(&self.timescale.to_be_bytes());
                 // Duration (32-bit)
-                data.extend_from_slice(&(self.duration as u32).to_be_bytes());
+                data.extend_from_slice(
+                    &(u32::try_from(self.duration).expect("duration should fit in u32"))
+                        .to_be_bytes(),
+                );
             }
             1 => {
                 // Creation time (64-bit)

@@ -210,7 +210,7 @@ impl AudioSpecificConfig {
             if data.len() < 5 {
                 return Err(ParseError::TooShort);
             }
-            let explicit = ((data[2] as u32) << 16) | ((data[3] as u32) << 8) | (data[4] as u32);
+            let explicit = (u32::from(data[2]) << 16) | (u32::from(data[3]) << 8) | u32::from(data[4]);
             sf = SamplingFrequency::Explicit(explicit);
             (5, sf)
         } else {

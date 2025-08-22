@@ -56,7 +56,7 @@ use crate::{
 
 pub const MDAT: &[u8; 4] = b"mdat";
 
-/// Async trait for parsing atoms from an AsyncRead stream
+/// Async trait for parsing atoms from an `AsyncRead` stream
 pub trait Parse: Sized {
     fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
@@ -322,7 +322,9 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
         let mut header = [0u8; 8];
         self.reader.read_exact(&mut header).await?;
 
-        let size = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as u64;
+        let size = u64::from(u32::from_be_bytes([
+            header[0], header[1], header[2], header[3],
+        ]));
         let atom_type: [u8; 4] = header[4..8].try_into().unwrap();
 
         // Handle extended size (64-bit) if needed
@@ -582,7 +584,7 @@ impl Metadata {
         Self { atoms }
     }
 
-    /// Transforms into (reader, current_offset, atoms)
+    /// Transforms into (reader, `current_offset`, atoms)
     pub fn into_atoms(self) -> Vec<Atom> {
         self.atoms
     }
@@ -604,7 +606,7 @@ impl Metadata {
         P: FnMut(&mut Atom) -> bool,
     {
         self.atoms.retain_mut(|a| pred(a));
-        for atom in self.atoms.iter_mut() {
+        for atom in &mut self.atoms {
             atom.children_flat_retain_mut(|a| pred(a));
         }
     }
@@ -671,7 +673,7 @@ impl Metadata {
             .sum::<usize>()
     }
 
-    /// Returns the sum of metadata_size and mdat_size
+    /// Returns the sum of `metadata_size` and `mdat_size`
     pub fn file_size(&self) -> usize {
         self.metadata_size() + self.mdat_size()
     }
@@ -708,8 +710,8 @@ impl Metadata {
         for (track_idx, trak) in self.moov_mut().tracks().enumerate() {
             let mut stbl = trak
                 .into_media()
-                .and_then(|mdia| mdia.into_media_information())
-                .and_then(|minf| minf.into_sample_table())
+                .and_then(MdiaAtomRefMut::into_media_information)
+                .and_then(MinfAtomRefMut::into_sample_table)
                 .ok_or(UpdateChunkOffsetError::SampleTableNotFound)?;
             let stco = stbl.chunk_offset();
             let chunk_offsets = std::mem::take(&mut chunk_offsets[track_idx]);
@@ -748,21 +750,23 @@ impl<'a> Iterator for AtomIter<'a> {
     type Item = &'a Atom;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.as_mut().and_then(|iter| iter.next())
+        self.iter.as_mut().and_then(std::iter::Iterator::next)
     }
 }
 
-impl<'a> DoubleEndedIterator for AtomIter<'a> {
+impl DoubleEndedIterator for AtomIter<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
-        self.iter.as_mut().and_then(|iter| iter.next_back())
+        self.iter
+            .as_mut()
+            .and_then(std::iter::DoubleEndedIterator::next_back)
     }
 }
 
-impl<'a> ExactSizeIterator for AtomIter<'a> {
+impl ExactSizeIterator for AtomIter<'_> {
     fn len(&self) -> usize {
         self.iter
             .as_ref()
-            .map(|iter| iter.len())
+            .map(ExactSizeIterator::len)
             .unwrap_or_default()
     }
 }
@@ -969,7 +973,7 @@ impl<'a> FtypAtomRefMut<'a> {
     }
 
     pub fn replace(&mut self, data: FileTypeAtom) {
-        self.0.atom_mut().data = Some(data.into())
+        self.0.atom_mut().data = Some(data.into());
     }
 }
 
@@ -1080,18 +1084,20 @@ impl<'a> MoovAtomRefMut<'a> {
         // TODO: after trimming samples,
         // - [ ] Update mdhd duration to match: sample_count × 1024
         // - [ ] Update mvhd duration proportionally: (mdhd_duration × 600) / 44100
-        let movie_timescale = self
-            .header()
-            .update_duration(|d| d.saturating_sub(duration))
-            .timescale as u64;
+        let movie_timescale = u64::from(
+            self.header()
+                .update_duration(|d| d.saturating_sub(duration))
+                .timescale,
+        );
         for mut trak in self.tracks() {
             trak.header()
                 .update_duration(movie_timescale, |d| d.saturating_sub(duration));
             let mut mdia = trak.media();
-            let media_timescale = mdia
-                .header()
-                .update_duration(|d| d.saturating_sub(duration))
-                .timescale as u64;
+            let media_timescale = u64::from(
+                mdia.header()
+                    .update_duration(|d| d.saturating_sub(duration))
+                    .timescale,
+            );
             let mut minf = mdia.media_information();
             let mut stbl = minf.sample_table();
 
@@ -1124,18 +1130,20 @@ impl<'a> MoovAtomRefMut<'a> {
 
     /// Trims trailing duration
     pub fn trim_end(&mut self, duration: Duration) -> &mut Self {
-        let movie_timescale = self
-            .header()
-            .update_duration(|d| d.saturating_sub(duration))
-            .timescale as u64;
+        let movie_timescale = u64::from(
+            self.header()
+                .update_duration(|d| d.saturating_sub(duration))
+                .timescale,
+        );
         for mut trak in self.tracks() {
             trak.header()
                 .update_duration(movie_timescale, |d| d.saturating_sub(duration));
             let mut mdia = trak.media();
-            let media_timescale = mdia
-                .header()
-                .update_duration(|d| d.saturating_sub(duration))
-                .timescale as u64;
+            let media_timescale = u64::from(
+                mdia.header()
+                    .update_duration(|d| d.saturating_sub(duration))
+                    .timescale,
+            );
             let mut minf = mdia.media_information();
             let mut stbl = minf.sample_table();
 
@@ -1185,7 +1193,7 @@ impl<'a> MoovAtomRefMut<'a> {
 
 pub struct UserDataAtomRefMut<'a>(AtomRefMut<'a>);
 
-impl<'a> UserDataAtomRefMut<'a> {
+impl UserDataAtomRefMut<'_> {
     /// Finds or inserts CHPL atom
     pub fn chapter_list(&mut self) -> &'_ mut ChapterListAtom {
         unwrap_atom_data!(
@@ -1202,7 +1210,7 @@ impl<'a> UserDataAtomRefMut<'a> {
 #[derive(Clone, Copy)]
 pub struct TrakAtomRef<'a>(AtomRef<'a>);
 
-impl<'a> fmt::Debug for TrakAtomRef<'a> {
+impl fmt::Debug for TrakAtomRef<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TrakAtomRef")
             .field("track_id", &self.header().unwrap().track_id)
@@ -1244,14 +1252,13 @@ impl<'a> TrakAtomRef<'a> {
             .media_information()
             .sample_table()
             .sample_size()
-            .map(|s| {
+            .map_or(0, |s| {
                 if s.entry_sizes.is_empty() {
                     s.sample_size * s.sample_count
                 } else {
                     s.entry_sizes.iter().sum::<u32>()
                 }
-            })
-            .unwrap_or(0) as usize
+            }) as usize
     }
 
     /// Calculates the track's bitrate
@@ -1261,7 +1268,7 @@ impl<'a> TrakAtomRef<'a> {
         let duration_secds = self
             .media()
             .header()
-            .map(|mdhd| (mdhd.duration as f64) / (mdhd.timescale as f64))?;
+            .map(|mdhd| (mdhd.duration as f64) / f64::from(mdhd.timescale))?;
 
         self.media()
             .media_information()
@@ -1501,7 +1508,7 @@ impl<'a> MdiaAtomRefMut<'a> {
 #[derive(Debug)]
 pub struct EdtsAtomRefMut<'a>(AtomRefMut<'a>);
 
-impl<'a> EdtsAtomRefMut<'a> {
+impl EdtsAtomRefMut<'_> {
     /// Finds or creates the ELST atom
     pub fn edit_list(&mut self) -> &mut EditListAtom {
         unwrap_atom_data!(
@@ -1700,13 +1707,13 @@ pub struct ChunkParser<'a, R> {
     tracks: Vec<TrakAtomRef<'a>>,
     /// Chunk offsets for each track
     chunk_offsets: Vec<&'a [u64]>,
-    /// [SampleToChunkEntry]s for each track
+    /// [`SampleToChunkEntry`]s for each track
     sample_to_chunk: Vec<&'a [SampleToChunkEntry]>,
     /// Sample sizes for each track
     sample_sizes: Vec<&'a [u32]>,
-    /// [TimeToSampleEntry]s for each track
+    /// [`TimeToSampleEntry`]s for each track
     time_to_sample: Vec<&'a [TimeToSampleEntry]>,
-    /// [ChunkInfo]s for each track
+    /// [`ChunkInfo`]s for each track
     chunk_info: Vec<VecDeque<ChunkInfo>>,
 }
 
@@ -1803,7 +1810,7 @@ impl<'a, R: AsyncRead + Unpin + Send> ChunkParser<'a, R> {
     }
 }
 
-impl<'a> fmt::Debug for Chunk<'a> {
+impl fmt::Debug for Chunk<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Chunk")
             .field("trak", &self.trak)
@@ -1865,7 +1872,7 @@ pub struct Sample<'a> {
     pub data: &'a [u8],
 }
 
-impl<'a> fmt::Debug for Sample<'a> {
+impl fmt::Debug for Sample<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Sample")
             .field("size", &self.size)

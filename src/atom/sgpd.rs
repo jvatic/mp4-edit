@@ -104,7 +104,9 @@ impl SerializeAtom for SampleGroupDescriptionAtom {
                             data.extend_from_slice(&desc_length.to_be_bytes());
                         } else {
                             data.extend_from_slice(
-                                &(entry.description_data.len() as u32).to_be_bytes(),
+                                &(u32::try_from(entry.description_data.len())
+                                    .expect("description_data len should fit in u32"))
+                                .to_be_bytes(),
                             );
                         }
                     }
@@ -176,7 +178,7 @@ fn parse_sgpd_data(data: &[u8]) -> Result<SampleGroupDescriptionAtom, anyhow::Er
             if let Some(def_len) = default_length {
                 if def_len == 0 {
                     cursor.read_exact(&mut buffer).with_context(|| {
-                        format!("Failed to read description_length for entry {}", i)
+                        format!("Failed to read description_length for entry {i}")
                     })?;
                     description_length = Some(u32::from_be_bytes(buffer));
                 }
@@ -189,7 +191,9 @@ fn parse_sgpd_data(data: &[u8]) -> Result<SampleGroupDescriptionAtom, anyhow::Er
                 // For version 0, read remaining data for this entry
                 // This is tricky without knowing the exact format, so we'll read all remaining data
                 // In practice, this might need more sophisticated parsing based on grouping_type
-                let remaining = data.len() - cursor.position() as usize;
+                let remaining = data.len()
+                    - usize::try_from(cursor.position())
+                        .expect("cursor position should fit in usize");
                 if entry_count == 1 {
                     remaining
                 } else {
@@ -228,7 +232,7 @@ fn parse_sgpd_data(data: &[u8]) -> Result<SampleGroupDescriptionAtom, anyhow::Er
         let mut description_data = vec![0u8; data_size];
         cursor
             .read_exact(&mut description_data)
-            .with_context(|| format!("Failed to read description_data for entry {}", i))?;
+            .with_context(|| format!("Failed to read description_data for entry {i}"))?;
 
         entries.push(SampleGroupDescriptionEntry {
             description_length,

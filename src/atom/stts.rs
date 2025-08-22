@@ -72,7 +72,7 @@ pub struct TimeToSampleAtom {
 impl TimeToSampleAtom {
     /// Removes samples from the beginning and returns the number of samples removed.
     ///
-    /// `duration_to_trim` is in media timescale units (in [crate::atom::MovieHeaderAtom]).
+    /// `duration_to_trim` is in media timescale units (in [`crate::atom::MovieHeaderAtom`]).
     ///
     /// WARNING: failing to update other atoms appropriately will cause file corruption.
     pub fn trim_samples_from_start(&mut self, duration_to_trim: u64) -> u32 {
@@ -87,7 +87,7 @@ impl TimeToSampleAtom {
 
     /// Removes samples from the end and returns the number of samples removed.
     ///
-    /// `duration_to_trim` is in media timescale units (in [crate::atom::MovieHeaderAtom]).
+    /// `duration_to_trim` is in media timescale units (in [`crate::atom::MovieHeaderAtom`]).
     ///
     /// WARNING: failing to update other atoms appropriately will cause file corruption.
     pub fn trim_samples_from_end(&mut self, duration_to_trim: u64) -> u32 {
@@ -112,7 +112,7 @@ fn trim_samples<'a>(
 
     for entry in entries {
         let entry_total_duration =
-            (entry.sample_count as u64).saturating_mul(entry.sample_duration as u64);
+            u64::from(entry.sample_count).saturating_mul(u64::from(entry.sample_duration));
 
         if time_trimmed.saturating_add(entry_total_duration) <= duration_to_trim {
             // Remove this entire entry
@@ -125,7 +125,7 @@ fn trim_samples<'a>(
             let samples_to_remove = if entry.sample_duration == 0 {
                 0u32
             } else {
-                (remaining_duration / entry.sample_duration as u64) as u32
+                (remaining_duration / u64::from(entry.sample_duration)) as u32
             };
 
             samples_removed = samples_removed.saturating_add(samples_to_remove);
@@ -197,14 +197,14 @@ fn parse_stts_data<R: Read>(mut reader: R) -> Result<TimeToSampleAtom, anyhow::E
         let mut sample_count_buf = [0u8; 4];
         reader
             .read_exact(&mut sample_count_buf)
-            .context(format!("read sample count for entry {}", i))?;
+            .context(format!("read sample count for entry {i}"))?;
         let sample_count = u32::from_be_bytes(sample_count_buf);
 
         // Read sample duration (4 bytes)
         let mut sample_duration_buf = [0u8; 4];
         reader
             .read_exact(&mut sample_duration_buf)
-            .context(format!("read sample duration for entry {}", i))?;
+            .context(format!("read sample duration for entry {i}"))?;
         let sample_duration = u32::from_be_bytes(sample_duration_buf);
 
         entries.push(TimeToSampleEntry {
@@ -229,10 +229,10 @@ impl SerializeAtom for TimeToSampleAtom {
         let mut data = Vec::new();
 
         // Version and flags (4 bytes)
-        let version_flags = (self.version as u32) << 24
-            | (self.flags[0] as u32) << 16
-            | (self.flags[1] as u32) << 8
-            | (self.flags[2] as u32);
+        let version_flags = u32::from(self.version) << 24
+            | u32::from(self.flags[0]) << 16
+            | u32::from(self.flags[1]) << 8
+            | u32::from(self.flags[2]);
         data.extend_from_slice(&version_flags.to_be_bytes());
 
         // Entry count (4 bytes)

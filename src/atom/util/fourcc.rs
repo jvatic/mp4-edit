@@ -28,15 +28,14 @@ impl fmt::Display for FourCC {
             f,
             "{}",
             std::str::from_utf8(&self.0)
-                .map(|s| s.to_owned())
-                .unwrap_or_else(|_| convert_mac_roman_to_utf8(&self.0))
+                .map_or_else(|_| convert_mac_roman_to_utf8(&self.0), ToOwned::to_owned)
         )
     }
 }
 
 impl fmt::Debug for FourCC {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "FourCC({})", self)
+        write!(f, "FourCC({self})")
     }
 }
 

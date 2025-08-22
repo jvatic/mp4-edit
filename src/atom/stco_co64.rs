@@ -193,7 +193,7 @@ fn parse_stco_data<R: Read>(
             let mut offset_buf = [0u8; 8];
             reader
                 .read_exact(&mut offset_buf)
-                .context(format!("read chunk offset {}", i))?;
+                .context(format!("read chunk offset {i}"))?;
             let offset = u64::from_be_bytes(offset_buf);
             chunk_offsets.push(offset);
         }
@@ -203,8 +203,8 @@ fn parse_stco_data<R: Read>(
             let mut offset_buf = [0u8; 4];
             reader
                 .read_exact(&mut offset_buf)
-                .context(format!("read chunk offset {}", i))?;
-            let offset = u32::from_be_bytes(offset_buf) as u64;
+                .context(format!("read chunk offset {i}"))?;
+            let offset = u64::from(u32::from_be_bytes(offset_buf));
             chunk_offsets.push(offset);
         }
     }

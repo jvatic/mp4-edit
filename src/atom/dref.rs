@@ -134,7 +134,9 @@ impl SerializeAtom for DataReferenceAtom {
             let entry_size = 8 + entry_data.len();
 
             // Write entry size (4 bytes, big-endian)
-            data.extend_from_slice(&(entry_size as u32).to_be_bytes());
+            data.extend_from_slice(
+                &(u32::try_from(entry_size).expect("entry_size should fit in u32")).to_be_bytes(),
+            );
 
             // Write entry type (4 bytes)
             data.extend_from_slice(entry_type);

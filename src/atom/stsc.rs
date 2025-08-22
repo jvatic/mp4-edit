@@ -273,21 +273,21 @@ fn parse_stsc_data<R: Read>(mut reader: R) -> Result<SampleToChunkAtom, anyhow::
         let mut first_chunk_buf = [0u8; 4];
         reader
             .read_exact(&mut first_chunk_buf)
-            .context(format!("read first_chunk for entry {}", i))?;
+            .context(format!("read first_chunk for entry {i}"))?;
         let first_chunk = u32::from_be_bytes(first_chunk_buf);
 
         // Read samples per chunk (4 bytes)
         let mut samples_per_chunk_buf = [0u8; 4];
         reader
             .read_exact(&mut samples_per_chunk_buf)
-            .context(format!("read samples_per_chunk for entry {}", i))?;
+            .context(format!("read samples_per_chunk for entry {i}"))?;
         let samples_per_chunk = u32::from_be_bytes(samples_per_chunk_buf);
 
         // Read sample description index (4 bytes)
         let mut sample_description_index_buf = [0u8; 4];
         reader
             .read_exact(&mut sample_description_index_buf)
-            .context(format!("read sample_description_index for entry {}", i))?;
+            .context(format!("read sample_description_index for entry {i}"))?;
         let sample_description_index = u32::from_be_bytes(sample_description_index_buf);
 
         // Validate entry

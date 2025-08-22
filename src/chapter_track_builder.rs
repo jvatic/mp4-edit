@@ -3,7 +3,7 @@ use std::time::Duration;
 use bon::bon;
 
 use crate::atom::{
-    containers::*,
+    containers::{TRAK, EDTS, MDIA, DINF, MINF, STBL},
     dref::{DataReferenceEntry, DataReferenceEntryInner},
     elst::{EditEntry, ELST},
     gmhd::GenericMediaHeaderAtom,
@@ -122,9 +122,9 @@ impl ChapterTrack {
             sample_durations,
             sample_sizes,
             // Calculate duration in media timescale (for MDHD and STTS)
-            media_duration: scaled_duration(total_duration, timescale as u64),
+            media_duration: scaled_duration(total_duration, u64::from(timescale)),
             // Calculate duration in movie timescale (for TKHD)
-            movie_duration: scaled_duration(total_duration, movie_timescale as u64),
+            movie_duration: scaled_duration(total_duration, u64::from(movie_timescale)),
             text_config,
             handler_name,
         }
@@ -167,7 +167,7 @@ impl ChapterTrack {
             // Calculate the actual duration this chapter should span
             let actual_duration_ms = chapter_end_ms - chapter.offset_ms;
             let chapter_duration_seconds = actual_duration_ms as f64 / 1000.0;
-            let chapter_duration_scaled = (chapter_duration_seconds * timescale as f64) as u32;
+            let chapter_duration_scaled = (chapter_duration_seconds * f64::from(timescale)) as u32;
 
             durations.push(chapter_duration_scaled);
         }
@@ -357,7 +357,7 @@ impl ChapterTrack {
             flags: [0u8; 3],
             entry_count: 1,
             entries: vec![DataReferenceEntry {
-                inner: DataReferenceEntryInner::Url("".to_string()),
+                inner: DataReferenceEntryInner::Url(String::new()),
                 version: 0,
                 flags: [0, 0, 1], // Self-contained flag
             }],

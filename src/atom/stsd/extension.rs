@@ -450,7 +450,7 @@ fn read_descriptor_length(cursor: &mut Cursor<&[u8]>) -> Result<u32, ParseError>
     let mut length = 0u32;
     for _ in 0..4 {
         let byte = read_u8(cursor)?;
-        length = (length << 7) | (byte & 0x7F) as u32;
+        length = (length << 7) | u32::from(byte & 0x7F);
         if (byte & 0x80) == 0 {
             break;
         }
