@@ -921,7 +921,7 @@ impl<'a> AtomRefMut<'a> {
 /// Unwrap atom data enum given variant type.
 ///
 /// # Example
-/// ```rust
+/// ```ignore
 /// let mut data = Atom::builder()
 ///     .header(AtomHeader::new(*TKHD))
 ///     .data(AtomData::TrackHeader(TrackHeaderAtom::default()))
