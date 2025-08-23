@@ -3,7 +3,7 @@ use std::time::Duration;
 use bon::bon;
 
 use crate::atom::{
-    containers::{TRAK, EDTS, MDIA, DINF, MINF, STBL},
+    containers::{DINF, EDTS, MDIA, MINF, STBL, TRAK},
     dref::{DataReferenceEntry, DataReferenceEntryInner},
     elst::{EditEntry, ELST},
     gmhd::GenericMediaHeaderAtom,
@@ -521,7 +521,7 @@ impl ChapterTrack {
 mod tests {
     use super::*;
     #[test]
-    fn test_chapter_track_with_your_audiobook_data() {
+    fn test_chapter_track_builder() {
         let chapters = vec![
             InputChapter {
                 title: "Opening Credits".to_string(),
@@ -537,101 +537,6 @@ mod tests {
                 title: "Epigraph".to_string(),
                 offset_ms: 24268,
                 duration_ms: 12364,
-            },
-            InputChapter {
-                title: "Introduction: Beyond Schoolhouse Rock!".to_string(),
-                offset_ms: 36632,
-                duration_ms: 2341811,
-            },
-            InputChapter {
-                title: "Part I: The Waterfall".to_string(),
-                offset_ms: 2378443,
-                duration_ms: 5063,
-            },
-            InputChapter {
-                title: "Chapter 1: Archaeology".to_string(),
-                offset_ms: 2383506,
-                duration_ms: 1852858,
-            },
-            InputChapter {
-                title: "Chapter 2: Seventeen Years".to_string(),
-                offset_ms: 4236364,
-                duration_ms: 2190547,
-            },
-            InputChapter {
-                title: "Chapter 3: Concrete Boats".to_string(),
-                offset_ms: 6426911,
-                duration_ms: 2835342,
-            },
-            InputChapter {
-                title: "Chapter 4: Friendly Fire".to_string(),
-                offset_ms: 9262253,
-                duration_ms: 2716293,
-            },
-            InputChapter {
-                title: "Part II: Mechanicals at the Gate".to_string(),
-                offset_ms: 11978546,
-                duration_ms: 6156,
-            },
-            InputChapter {
-                title: "Chapter 5: The Kodak Curse".to_string(),
-                offset_ms: 11984702,
-                duration_ms: 2187967,
-            },
-            InputChapter {
-                title: "Chapter 6: Operational in Nature".to_string(),
-                offset_ms: 14172669,
-                duration_ms: 2158898,
-            },
-            InputChapter {
-                title: "Chapter 7: Stuck in Peanut Butter".to_string(),
-                offset_ms: 16331567,
-                duration_ms: 1852418,
-            },
-            InputChapter {
-                title: "Chapter 8: The Procedure Fetish".to_string(),
-                offset_ms: 18183985,
-                duration_ms: 2240423,
-            },
-            InputChapter {
-                title: "Part III: User Needs, Not Government Needs".to_string(),
-                offset_ms: 20424408,
-                duration_ms: 7280,
-            },
-            InputChapter {
-                title: "Chapter 9: The Fax Hack".to_string(),
-                offset_ms: 20431688,
-                duration_ms: 1766747,
-            },
-            InputChapter {
-                title: "Chapter 10: Byrne's Law".to_string(),
-                offset_ms: 22198435,
-                duration_ms: 2207451,
-            },
-            InputChapter {
-                title: "Chapter 11: The Insiders".to_string(),
-                offset_ms: 24405886,
-                duration_ms: 2095299,
-            },
-            InputChapter {
-                title: "Chapter 12: Up the Waterfall".to_string(),
-                offset_ms: 26501185,
-                duration_ms: 1893610,
-            },
-            InputChapter {
-                title: "Chapter 13: What We Believe Matters".to_string(),
-                offset_ms: 28394795,
-                duration_ms: 3195414,
-            },
-            InputChapter {
-                title: "Conclusion: For and By People".to_string(),
-                offset_ms: 31590209,
-                duration_ms: 3018500,
-            },
-            InputChapter {
-                title: "End Credits".to_string(),
-                offset_ms: 34608709,
-                duration_ms: 47996,
             },
         ];
 
@@ -649,15 +554,22 @@ mod tests {
             .build(chapters);
 
         // Verify we have the correct number of samples
-        assert_eq!(track.sample_count(), 22);
+        assert_eq!(track.sample_count(), 3);
 
-        // Verify each sample uses the default size
-        for sample in track.individual_samples() {
-            assert_eq!(sample.len(), 45); // Default sample size
-        }
+        // Verify sample sizes are based on chapter title length
+        let samples = track.individual_samples();
+        assert_eq!(samples.len(), 3);
+
+        // Expected sizes: 2 bytes (length) + title length + 4 bytes (min_padding)
+        // "Opening Credits" (15 chars) = 2 + 15 + 4 = 21 bytes
+        // "Dedication" (10 chars) = 2 + 10 + 4 = 16 bytes
+        // "Epigraph" (8 chars) = 2 + 8 + 4 = 14 bytes
+        assert_eq!(samples[0].len(), 21);
+        assert_eq!(samples[1].len(), 16);
+        assert_eq!(samples[2].len(), 14);
 
         // Verify we have individual duration entries for each chapter
-        assert_eq!(track.sample_durations.len(), 22);
+        assert_eq!(track.sample_durations.len(), 3);
 
         println!(
             "Generated {} chapter samples with durations: {:?}",
