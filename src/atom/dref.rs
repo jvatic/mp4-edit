@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context};
+use bon::{bon, Builder};
 use futures_io::AsyncRead;
 use std::io::Read;
 
@@ -47,14 +48,39 @@ impl DataReferenceEntryInner {
 }
 
 /// A single data reference entry
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Builder)]
 pub struct DataReferenceEntry {
     /// Entry data/type (URL string, URN, alias data, etc.)
+    #[builder(setters(vis = ""))]
     pub inner: DataReferenceEntryInner,
     /// Version of the entry format
+    #[builder(default)]
     pub version: u8,
     /// Entry flags
+    #[builder(default)]
     pub flags: [u8; 3],
+}
+
+impl<S: data_reference_entry_builder::State> DataReferenceEntryBuilder<S> {
+    pub fn url(
+        self,
+        url: impl Into<String>,
+    ) -> DataReferenceEntryBuilder<data_reference_entry_builder::SetInner<S>>
+    where
+        S::Inner: data_reference_entry_builder::IsUnset,
+    {
+        self.inner(DataReferenceEntryInner::Url(url.into()))
+    }
+
+    pub fn urn(
+        self,
+        urn: impl Into<String>,
+    ) -> DataReferenceEntryBuilder<data_reference_entry_builder::SetInner<S>>
+    where
+        S::Inner: data_reference_entry_builder::IsUnset,
+    {
+        self.inner(DataReferenceEntryInner::Urn(urn.into()))
+    }
 }
 
 impl DataReferenceEntry {
@@ -73,10 +99,58 @@ pub struct DataReferenceAtom {
     pub version: u8,
     /// Atom flags
     pub flags: [u8; 3],
-    /// Number of entries in the table
-    pub entry_count: u32,
     /// Data reference entries
     pub entries: Vec<DataReferenceEntry>,
+    /// Number of entries in the table
+    pub entry_count: u32,
+}
+
+#[bon]
+impl DataReferenceAtom {
+    #[builder]
+    pub fn new(
+        #[builder(field = Vec::new())] entries: Vec<DataReferenceEntry>,
+        #[builder(default = 0)] version: u8,
+        #[builder(default = [0u8; 3])] flags: [u8; 3],
+        #[builder(setters(vis = ""), overwritable)]
+        #[allow(unused)]
+        entries_marker: bool,
+    ) -> Self {
+        Self {
+            version,
+            flags,
+            entry_count: u32::try_from(entries.len()).expect("entries len should fit in u32"),
+            entries,
+        }
+    }
+}
+
+impl<S: data_reference_atom_builder::State> DataReferenceAtomBuilder<S> {
+    fn push_entry(
+        mut self,
+        entry: DataReferenceEntry,
+    ) -> DataReferenceAtomBuilder<data_reference_atom_builder::SetEntriesMarker<S>> {
+        self.entries.push(entry);
+        self.entries_marker(true)
+    }
+
+    pub fn entry(
+        self,
+        entry: impl Into<DataReferenceEntry>,
+    ) -> DataReferenceAtomBuilder<data_reference_atom_builder::SetEntriesMarker<S>> {
+        self.push_entry(entry.into())
+    }
+
+    pub fn entries(
+        mut self,
+        entries: impl Into<Vec<DataReferenceEntry>>,
+    ) -> DataReferenceAtomBuilder<data_reference_atom_builder::SetEntriesMarker<S>>
+    where
+        S::EntriesMarker: data_reference_atom_builder::IsUnset,
+    {
+        self.entries = entries.into();
+        self.entries_marker(true)
+    }
 }
 
 impl Parse for DataReferenceAtom {

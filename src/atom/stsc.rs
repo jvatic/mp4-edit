@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context};
+use bon::{bon, Builder};
 use derive_more::{Deref, DerefMut};
 use futures_io::AsyncRead;
 use std::{fmt, io::Read};
@@ -43,7 +44,7 @@ impl fmt::Debug for SampleToChunkEntries {
 }
 
 /// Sample-to-Chunk entry - maps samples to chunks
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Builder)]
 pub struct SampleToChunkEntry {
     /// First chunk number (1-based) that uses this entry
     pub first_chunk: u32,
@@ -64,7 +65,24 @@ pub struct SampleToChunkAtom {
     pub entries: SampleToChunkEntries,
 }
 
+#[bon]
 impl SampleToChunkAtom {
+    #[builder]
+    pub fn new(
+        #[builder(field = Vec::new())] entries: Vec<SampleToChunkEntry>,
+        #[builder(default = 0)] version: u8,
+        #[builder(default = [0u8; 3])] flags: [u8; 3],
+        #[builder(setters(vis = ""), overwritable)]
+        #[allow(unused)]
+        entries_marker: bool,
+    ) -> Self {
+        Self {
+            version,
+            flags,
+            entries: entries.into(),
+        }
+    }
+
     /// Calculates how many chunks need to be removed for the given number of samples
     /// and updates the chunk mapping accordingly
     ///
@@ -182,6 +200,34 @@ impl SampleToChunkAtom {
         }
 
         entries
+    }
+}
+
+impl<S: sample_to_chunk_atom_builder::State> SampleToChunkAtomBuilder<S> {
+    fn push_entry(
+        mut self,
+        entry: SampleToChunkEntry,
+    ) -> SampleToChunkAtomBuilder<sample_to_chunk_atom_builder::SetEntriesMarker<S>> {
+        self.entries.push(entry);
+        self.entries_marker(true)
+    }
+
+    pub fn entry(
+        self,
+        entry: impl Into<SampleToChunkEntry>,
+    ) -> SampleToChunkAtomBuilder<sample_to_chunk_atom_builder::SetEntriesMarker<S>> {
+        self.push_entry(entry.into())
+    }
+
+    pub fn entries(
+        mut self,
+        entries: impl Into<Vec<SampleToChunkEntry>>,
+    ) -> SampleToChunkAtomBuilder<sample_to_chunk_atom_builder::SetEntriesMarker<S>>
+    where
+        S::EntriesMarker: sample_to_chunk_atom_builder::IsUnset,
+    {
+        self.entries = entries.into();
+        self.entries_marker(true)
     }
 }
 

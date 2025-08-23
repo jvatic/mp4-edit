@@ -1,14 +1,12 @@
 use anyhow::{anyhow, Context};
+use bon::{bon, Builder};
 use derive_more::{Deref, DerefMut};
 use futures_io::AsyncRead;
 use std::{fmt, io::Read};
 
 use crate::{
     atom::{
-        util::{
-            async_to_sync_read,
-            DebugEllipsis,
-        },
+        util::{async_to_sync_read, DebugEllipsis},
         FourCC,
     },
     parser::Parse,
@@ -50,7 +48,7 @@ impl fmt::Debug for TimeToSampleEntries {
 }
 
 /// Time-to-Sample entry - defines duration for a consecutive group of samples
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Builder)]
 pub struct TimeToSampleEntry {
     /// Number of consecutive samples with the same duration
     pub sample_count: u32,
@@ -69,7 +67,24 @@ pub struct TimeToSampleAtom {
     pub entries: TimeToSampleEntries,
 }
 
+#[bon]
 impl TimeToSampleAtom {
+    #[builder]
+    pub fn new(
+        #[builder(field = Vec::new())] entries: Vec<TimeToSampleEntry>,
+        #[builder(default = 0)] version: u8,
+        #[builder(default = [0u8; 3])] flags: [u8; 3],
+        #[builder(setters(vis = ""), overwritable)]
+        #[allow(unused)]
+        entries_marker: bool,
+    ) -> Self {
+        Self {
+            version,
+            flags,
+            entries: entries.into(),
+        }
+    }
+
     /// Removes samples from the beginning and returns the number of samples removed.
     ///
     /// `duration_to_trim` is in media timescale units (in [`crate::atom::MovieHeaderAtom`]).
@@ -99,6 +114,27 @@ impl TimeToSampleAtom {
         self.entries.truncate(new_len);
 
         samples_removed
+    }
+}
+
+impl<S: time_to_sample_atom_builder::State> TimeToSampleAtomBuilder<S> {
+    pub fn entry(
+        mut self,
+        entry: impl Into<TimeToSampleEntry>,
+    ) -> TimeToSampleAtomBuilder<time_to_sample_atom_builder::SetEntriesMarker<S>> {
+        self.entries.push(entry.into());
+        self.entries_marker(true)
+    }
+
+    pub fn entries(
+        mut self,
+        entries: impl Into<Vec<TimeToSampleEntry>>,
+    ) -> TimeToSampleAtomBuilder<time_to_sample_atom_builder::SetEntriesMarker<S>>
+    where
+        S::EntriesMarker: time_to_sample_atom_builder::IsUnset,
+    {
+        self.entries = entries.into();
+        self.entries_marker(true)
     }
 }
 

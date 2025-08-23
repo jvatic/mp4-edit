@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context};
 
+use bon::Builder;
 use futures_io::AsyncRead;
 use std::{io::Read, time::Duration};
 
@@ -7,7 +8,7 @@ use crate::{
     atom::{
         util::{
             async_to_sync_read,
-            time::{scaled_duration, unscaled_duration},
+            time::{mp4_timestamp_now, scaled_duration, unscaled_duration},
         },
         FourCC,
     },
@@ -18,37 +19,49 @@ use crate::{
 
 pub const MVHD: &[u8; 4] = b"mvhd";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Builder)]
 pub struct MovieHeaderAtom {
     /// Version of the mvhd atom format (0 or 1)
+    #[builder(default = 0)]
     pub version: u8,
     /// Flags for the mvhd atom (usually all zeros)
+    #[builder(default = [0u8; 3])]
     pub flags: [u8; 3],
     /// When the movie was created (seconds since Jan 1, 1904 UTC)
+    #[builder(default = mp4_timestamp_now())]
     pub creation_time: u64,
     /// When the movie was last modified (seconds since Jan 1, 1904 UTC)
+    #[builder(default = mp4_timestamp_now())]
     pub modification_time: u64,
     /// Number of time units per second (e.g., 90000 for 90kHz)
     pub timescale: u32,
     /// Duration of the movie in timescale units
     pub duration: u64,
     /// Playback rate (1.0 = normal speed, 2.0 = double speed)
+    #[builder(default = 1.0)]
     pub rate: f32,
     /// Audio volume level (1.0 = full volume, 0.0 = muted)
+    #[builder(default = 1.0)]
     pub volume: f32,
     /// 3x3 transformation matrix for video display positioning/rotation
     pub matrix: Option<[i32; 9]>,
     /// Time when preview starts (in timescale units)
+    #[builder(default = 0)]
     pub preview_time: u32,
     /// Duration of the preview (in timescale units)
+    #[builder(default = 0)]
     pub preview_duration: u32,
     /// Time of poster frame to display when movie is not playing
+    #[builder(default = 0)]
     pub poster_time: u32,
     /// Start time of current selection (in timescale units)
+    #[builder(default = 0)]
     pub selection_time: u32,
     /// Duration of current selection (in timescale units)
+    #[builder(default = 0)]
     pub selection_duration: u32,
     /// Current playback time position (in timescale units)
+    #[builder(default = 0)]
     pub current_time: u32,
     /// ID to use for the next track added to this movie
     pub next_track_id: u32,

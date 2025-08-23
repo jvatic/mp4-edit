@@ -1893,3 +1893,339 @@ impl fmt::Debug for Sample<'_> {
             .finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::atom::{
+        containers::{DINF, MDIA, MINF, MOOV, STBL, TRAK},
+        dref::{DataReferenceAtom, DataReferenceEntry, DREF},
+        ftyp::{FileTypeAtom, FTYP},
+        hdlr::{HandlerReferenceAtom, HandlerType, HDLR},
+        mdhd::{MediaHeaderAtom, MDHD},
+        mvhd::{MovieHeaderAtom, MVHD},
+        smhd::{SoundMediaHeaderAtom, SMHD},
+        stco_co64::{ChunkOffsetAtom, STCO},
+        stsc::{SampleToChunkAtom, SampleToChunkEntry, STSC},
+        stsd::{SampleDescriptionTableAtom, STSD},
+        stsz::{SampleSizeAtom, STSZ},
+        stts::{TimeToSampleAtom, TimeToSampleEntry, STTS},
+        tkhd::{TrackHeaderAtom, TKHD},
+        Atom, AtomHeader,
+    };
+    use std::time::Duration;
+
+    fn create_test_metadata(movie_timescale: u32, duration: Duration) -> Metadata {
+        let atoms = vec![
+            // Create ftyp atom
+            Atom::builder()
+                .header(AtomHeader::new(*FTYP))
+                .data(
+                    FileTypeAtom::builder()
+                        .major_brand(*b"isom")
+                        .minor_version(512)
+                        .compatible_brands(
+                            vec![*b"isom", *b"iso2", *b"mp41"]
+                                .into_iter()
+                                .map(FourCC::from)
+                                .collect::<Vec<_>>(),
+                        )
+                        .build(),
+                )
+                .build(),
+            // Create moov atom with a single track
+            Atom::builder()
+                .header(AtomHeader::new(*MOOV))
+                .children(vec![
+                    // Movie header (mvhd)
+                    Atom::builder()
+                        .header(AtomHeader::new(*MVHD))
+                        .data(
+                            MovieHeaderAtom::builder()
+                                .timescale(movie_timescale)
+                                .duration(scaled_duration(duration, movie_timescale as u64))
+                                .next_track_id(2)
+                                .build(),
+                        )
+                        .build(),
+                    // Track (trak)
+                    create_test_track(movie_timescale, duration),
+                ])
+                .build(),
+        ];
+
+        Metadata::new(atoms)
+    }
+
+    fn create_test_track(movie_timescale: u32, duration: Duration) -> Atom {
+        Atom::builder()
+            .header(AtomHeader::new(*TRAK))
+            .children(vec![
+                // Track header (tkhd)
+                Atom::builder()
+                    .header(AtomHeader::new(*TKHD))
+                    .data(
+                        TrackHeaderAtom::builder()
+                            .track_id(1)
+                            .duration(scaled_duration(duration, movie_timescale as u64))
+                            .build(),
+                    )
+                    .build(),
+                // Media (mdia)
+                create_test_media(duration),
+            ])
+            .build()
+    }
+
+    fn create_test_media(duration: Duration) -> Atom {
+        create_test_media_with_timescale(duration, 44100)
+    }
+
+    fn create_test_media_with_timescale(duration: Duration, media_timescale: u32) -> Atom {
+        Atom::builder()
+            .header(AtomHeader::new(*MDIA))
+            .children(vec![
+                // Media header (mdhd)
+                Atom::builder()
+                    .header(AtomHeader::new(*MDHD))
+                    .data(
+                        MediaHeaderAtom::builder()
+                            .timescale(media_timescale)
+                            .duration(scaled_duration(duration, media_timescale as u64))
+                            .build(),
+                    )
+                    .build(),
+                // Handler reference (hdlr)
+                Atom::builder()
+                    .header(AtomHeader::new(*HDLR))
+                    .data(
+                        HandlerReferenceAtom::builder()
+                            .handler_type(HandlerType::Audio)
+                            .name("AudioHandler")
+                            .build(),
+                    )
+                    .build(),
+                // Media information (minf)
+                create_test_media_info(duration, media_timescale),
+            ])
+            .build()
+    }
+
+    fn create_test_media_info(duration: Duration, media_timescale: u32) -> Atom {
+        Atom::builder()
+            .header(AtomHeader::new(*MINF))
+            .children(vec![
+                // Sound media header (smhd)
+                Atom::builder()
+                    .header(AtomHeader::new(*SMHD))
+                    .data(SoundMediaHeaderAtom::default())
+                    .build(),
+                // Data information (dinf)
+                Atom::builder()
+                    .header(AtomHeader::new(*DINF))
+                    .children(vec![Atom::builder()
+                        .header(AtomHeader::new(*DREF))
+                        .data(
+                            DataReferenceAtom::builder()
+                                .entry(DataReferenceEntry::builder().url("").build())
+                                .build(),
+                        )
+                        .build()])
+                    .build(),
+                // Sample table (stbl)
+                create_test_sample_table(duration, media_timescale),
+            ])
+            .build()
+    }
+
+    fn create_test_sample_table(duration: Duration, media_timescale: u32) -> Atom {
+        // Create sample data for the specified duration of audio at 44.1kHz
+        // Assuming 1024 samples per chunk (typical for AAC)
+        let samples_per_chunk = 1024;
+        let sample_rate = media_timescale;
+        let duration_secs = duration.as_secs() as u32;
+        let total_samples = sample_rate * duration_secs;
+        let num_chunks = (total_samples + samples_per_chunk - 1) / samples_per_chunk;
+
+        Atom::builder()
+            .header(AtomHeader::new(*STBL))
+            .children(vec![
+                // Sample Description (stsd)
+                Atom::builder()
+                    .header(AtomHeader::new(*STSD))
+                    .data(SampleDescriptionTableAtom::default())
+                    .build(),
+                // Time to Sample (stts)
+                Atom::builder()
+                    .header(AtomHeader::new(*STTS))
+                    .data(
+                        TimeToSampleAtom::builder()
+                            .entry(
+                                TimeToSampleEntry::builder()
+                                    .sample_count(total_samples as u32)
+                                    .sample_duration(1)
+                                    .build(),
+                            )
+                            .build(),
+                    )
+                    .build(),
+                // Sample to Chunk (stsc)
+                Atom::builder()
+                    .header(AtomHeader::new(*STSC))
+                    .data(
+                        SampleToChunkAtom::builder()
+                            .entry(
+                                SampleToChunkEntry::builder()
+                                    .first_chunk(1)
+                                    .samples_per_chunk(samples_per_chunk as u32)
+                                    .sample_description_index(1)
+                                    .build(),
+                            )
+                            .build(),
+                    )
+                    .build(),
+                // Sample Size (stsz)
+                Atom::builder()
+                    .header(AtomHeader::new(*STSZ))
+                    .data(
+                        SampleSizeAtom::builder()
+                            .sample_size(0) // Variable size
+                            .entry_sizes(vec![256; total_samples as usize]) // 256 bytes per sample
+                            .build(),
+                    )
+                    .build(),
+                // Chunk Offset (stco)
+                Atom::builder()
+                    .header(AtomHeader::new(*STCO))
+                    .data(
+                        ChunkOffsetAtom::builder()
+                            .chunk_offsets(
+                                (0..num_chunks)
+                                    .map(|i| 1000 + i as u64 * 256 * samples_per_chunk as u64),
+                            )
+                            .build(),
+                    )
+                    .build(),
+            ])
+            .build()
+    }
+
+    #[test]
+    fn test_moov_trim_start() {
+        use crate::atom::util::time::scaled_duration;
+
+        // Create test metadata with 10 second duration
+        let movie_timescale = 600;
+        let original_duration = Duration::from_secs(10);
+        let mut metadata = create_test_metadata(movie_timescale, original_duration);
+
+        // Trim 2 seconds from the start
+        let trim_duration = Duration::from_secs(2);
+        let expected_remaining = original_duration - trim_duration;
+
+        // Get initial values for comparison
+        let initial_movie_duration = metadata.moov().header().map(|h| h.duration).unwrap_or(0);
+        let initial_track_duration = metadata
+            .moov()
+            .into_tracks_iter()
+            .next()
+            .and_then(|t| t.header().map(|h| h.duration))
+            .unwrap_or(0);
+        let initial_media_duration = metadata
+            .moov()
+            .into_tracks_iter()
+            .next()
+            .map(|t| t.media().header().map(|h| h.duration).unwrap_or(0))
+            .unwrap_or(0);
+
+        // Perform the trim operation
+        metadata.moov_mut().trim_start(trim_duration);
+
+        // Verify movie header duration was updated
+        let new_movie_duration = metadata.moov().header().map(|h| h.duration).unwrap_or(0);
+        let expected_movie_duration = scaled_duration(expected_remaining, movie_timescale as u64);
+        assert_eq!(
+            new_movie_duration, expected_movie_duration,
+            "Movie duration should be updated after trim_start"
+        );
+        assert!(
+            new_movie_duration < initial_movie_duration,
+            "Movie duration should be reduced"
+        );
+
+        // Verify track header duration was updated
+        let new_track_duration = metadata
+            .moov()
+            .into_tracks_iter()
+            .next()
+            .and_then(|t| t.header().map(|h| h.duration))
+            .unwrap_or(0);
+        let expected_track_duration = scaled_duration(expected_remaining, movie_timescale as u64);
+        assert_eq!(
+            new_track_duration, expected_track_duration,
+            "Track duration should be updated after trim_start"
+        );
+        assert!(
+            new_track_duration < initial_track_duration,
+            "Track duration should be reduced"
+        );
+
+        // Verify media header duration was updated
+        let new_media_duration = metadata
+            .moov()
+            .into_tracks_iter()
+            .next()
+            .map(|t| t.media().header().map(|h| h.duration).unwrap_or(0))
+            .unwrap_or(0);
+        let media_timescale = 44100u64;
+        let expected_media_duration = scaled_duration(expected_remaining, media_timescale);
+        assert_eq!(
+            new_media_duration, expected_media_duration,
+            "Media duration should be updated after trim_start"
+        );
+        assert!(
+            new_media_duration < initial_media_duration,
+            "Media duration should be reduced"
+        );
+
+        // Verify sample table was trimmed
+        let track = metadata.moov().into_tracks_iter().next().unwrap();
+        let stbl = track.media().media_information().sample_table();
+
+        // Check that some samples were removed
+        if let Some(stsz) = stbl.sample_size() {
+            let remaining_samples = stsz.entry_sizes.len();
+            // We expect fewer samples after trimming 2 seconds
+            let samples_per_second = 44100;
+            let expected_remaining_samples = samples_per_second * (10 - 2); // 8 seconds worth
+                                                                            // Allow some tolerance for rounding
+            assert!(
+                remaining_samples <= expected_remaining_samples as usize + 1024,
+                "Sample count should be reduced after trimming"
+            );
+            assert!(
+                remaining_samples >= expected_remaining_samples as usize - 1024,
+                "Sample count should not be reduced too much"
+            );
+        }
+
+        // Verify time-to-sample was updated
+        if let Some(stts) = stbl.time_to_sample() {
+            let total_sample_count: u64 = stts.entries.iter().map(|e| e.sample_count as u64).sum();
+            assert!(
+                total_sample_count > 0,
+                "Should still have samples after trimming"
+            );
+            // The exact count depends on how the trimming algorithm works
+        }
+
+        // Verify chunk offsets were updated
+        if let Some(stco) = stbl.chunk_offset() {
+            assert!(
+                !stco.chunk_offsets.is_empty(),
+                "Should still have chunks after trimming"
+            );
+            // Some chunks should have been removed from the start
+        }
+    }
+}

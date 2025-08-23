@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context};
 
+use bon::Builder;
 use futures_io::AsyncRead;
 use std::{io::Read, time::Duration};
 
@@ -7,7 +8,7 @@ use crate::{
     atom::{
         util::{
             async_to_sync_read,
-            time::{scaled_duration, unscaled_duration},
+            time::{mp4_timestamp_now, scaled_duration, unscaled_duration},
         },
         FourCC,
     },
@@ -18,31 +19,40 @@ use crate::{
 
 pub const TKHD: &[u8; 4] = b"tkhd";
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Builder)]
 pub struct TrackHeaderAtom {
     /// Version of the tkhd atom format (0 or 1)
+    #[builder(default = 0)]
     pub version: u8,
     /// Flags for the tkhd atom (bit flags for track properties)
+    #[builder(default = [0, 0, 7])]
     pub flags: [u8; 3],
     /// When the track was created (seconds since Jan 1, 1904 UTC)
+    #[builder(default = mp4_timestamp_now())]
     pub creation_time: u64,
     /// When the track was last modified (seconds since Jan 1, 1904 UTC)
+    #[builder(default = mp4_timestamp_now())]
     pub modification_time: u64,
     /// Unique identifier for this track within the movie
     pub track_id: u32,
     /// Duration of the track in movie timescale units
     pub duration: u64,
     /// Playback layer (lower numbers are closer to viewer)
+    #[builder(default = 0)]
     pub layer: i16,
     /// Audio balance or stereo balance (-1.0 = left, 0.0 = center, 1.0 = right)
+    #[builder(default = 0)]
     pub alternate_group: i16,
     /// Audio volume level (1.0 = full volume, 0.0 = muted)
+    #[builder(default = 1.0)]
     pub volume: f32,
     /// 3x3 transformation matrix for video display positioning/rotation
     pub matrix: Option<[i32; 9]>,
     /// Track width in pixels (fixed-point 16.16)
+    #[builder(default = 0.0)]
     pub width: f32,
     /// Track height in pixels (fixed-point 16.16)
+    #[builder(default = 0.0)]
     pub height: f32,
 }
 

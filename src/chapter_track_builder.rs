@@ -507,7 +507,9 @@ impl ChapterTrack {
 
     fn create_chunk_offset(&self, chunk_offset: u64) -> Atom {
         // Single chunk containing all chapter marker samples
-        let stco = ChunkOffsetAtom::new(vec![chunk_offset]);
+        let stco = ChunkOffsetAtom::builder()
+            .chunk_offset(chunk_offset)
+            .build();
 
         Atom {
             header: AtomHeader::new(stco.atom_type()),
