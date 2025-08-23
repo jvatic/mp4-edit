@@ -691,6 +691,9 @@ fn parse_text_sample_entry(data: &[u8]) -> Result<TextSampleEntry, anyhow::Error
     // Read background color (3 * 2 bytes = 6 bytes)
     let mut background_color = [0u16; 3];
     for item in &mut background_color {
+        cursor
+            .read_exact(&mut buf2)
+            .context("read background color")?;
         *item = u16::from_be_bytes(buf2);
     }
 
