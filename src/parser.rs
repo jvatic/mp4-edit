@@ -1090,40 +1090,7 @@ impl<'a> MoovAtomRefMut<'a> {
                 .timescale,
         );
         for mut trak in self.tracks() {
-            trak.header()
-                .update_duration(movie_timescale, |d| d.saturating_sub(duration));
-            let mut mdia = trak.media();
-            let media_timescale = u64::from(
-                mdia.header()
-                    .update_duration(|d| d.saturating_sub(duration))
-                    .timescale,
-            );
-            let mut minf = mdia.media_information();
-            let mut stbl = minf.sample_table();
-
-            let duration_to_trim = scaled_duration(duration, media_timescale);
-            if duration_to_trim == 0 {
-                continue; // Nothing to trim
-            }
-
-            // Step 1: Determine which samples to remove based on time
-            let samples_to_remove = stbl
-                .time_to_sample()
-                .trim_samples_from_start(duration_to_trim);
-
-            // Step 2: Update sample sizes
-            stbl.sample_size()
-                .remove_samples_from_start(samples_to_remove);
-
-            // Step 3: Calculate and remove chunks based on samples
-            let total_chunks = stbl.chunk_offset().chunk_count();
-            let chunks_to_remove = stbl
-                .sample_to_chunk()
-                .trim_samples_from_start(samples_to_remove, total_chunks);
-
-            // Step 4: Remove chunk offsets
-            stbl.chunk_offset()
-                .remove_chunks_from_start(chunks_to_remove);
+            trak.trim_start(movie_timescale, duration);
         }
         self
     }
@@ -1136,39 +1103,7 @@ impl<'a> MoovAtomRefMut<'a> {
                 .timescale,
         );
         for mut trak in self.tracks() {
-            trak.header()
-                .update_duration(movie_timescale, |d| d.saturating_sub(duration));
-            let mut mdia = trak.media();
-            let media_timescale = u64::from(
-                mdia.header()
-                    .update_duration(|d| d.saturating_sub(duration))
-                    .timescale,
-            );
-            let mut minf = mdia.media_information();
-            let mut stbl = minf.sample_table();
-
-            let duration_to_trim = scaled_duration(duration, media_timescale);
-            if duration_to_trim == 0 {
-                continue; // Nothing to trim
-            }
-
-            // Step 1: Determine which samples to remove based on time
-            let samples_to_remove = stbl
-                .time_to_sample()
-                .trim_samples_from_end(duration_to_trim);
-
-            // Step 2: Update sample sizes
-            stbl.sample_size()
-                .remove_samples_from_end(samples_to_remove);
-
-            // Step 3: Calculate and remove chunks based on samples
-            let total_chunks = stbl.chunk_offset().chunk_count();
-            let chunks_to_remove = stbl
-                .sample_to_chunk()
-                .trim_samples_from_end(samples_to_remove, total_chunks);
-
-            // Step 4: Remove chunk offsets
-            stbl.chunk_offset().remove_chunks_from_end(chunks_to_remove);
+            trak.trim_end(movie_timescale, duration);
         }
         self
     }
@@ -1410,6 +1345,83 @@ impl<'a> TrakAtomRefMut<'a> {
             // this indicates a programming error since we won't get here with parsed data
             unreachable!("STSD constructed with invalid data")
         }
+    }
+
+    fn trim_start(&mut self, movie_timescale: u64, duration: Duration) -> &mut Self {
+        self.header()
+            .update_duration(movie_timescale, |d| d.saturating_sub(duration));
+        let mut mdia = self.media();
+        let media_timescale = u64::from(
+            mdia.header()
+                .update_duration(|d| d.saturating_sub(duration))
+                .timescale,
+        );
+        let mut minf = mdia.media_information();
+        let mut stbl = minf.sample_table();
+
+        let duration_to_trim = scaled_duration(duration, media_timescale);
+        if duration_to_trim == 0 {
+            return self; // Nothing to trim
+        }
+
+        // Step 1: Determine which samples to remove based on time
+        let samples_to_remove = stbl
+            .time_to_sample()
+            .trim_samples_from_start(duration_to_trim);
+
+        // Step 2: Update sample sizes
+        stbl.sample_size()
+            .remove_samples_from_start(samples_to_remove);
+
+        // Step 3: Calculate and remove chunks based on samples
+        let total_chunks = stbl.chunk_offset().chunk_count();
+        let chunks_to_remove = stbl
+            .sample_to_chunk()
+            .trim_samples_from_start(samples_to_remove, total_chunks);
+
+        // Step 4: Remove chunk offsets
+        stbl.chunk_offset()
+            .remove_chunks_from_start(chunks_to_remove);
+
+        self
+    }
+
+    fn trim_end(&mut self, movie_timescale: u64, duration: Duration) -> &mut Self {
+        self.header()
+            .update_duration(movie_timescale, |d| d.saturating_sub(duration));
+        let mut mdia = self.media();
+        let media_timescale = u64::from(
+            mdia.header()
+                .update_duration(|d| d.saturating_sub(duration))
+                .timescale,
+        );
+        let mut minf = mdia.media_information();
+        let mut stbl = minf.sample_table();
+
+        let duration_to_trim = scaled_duration(duration, media_timescale);
+        if duration_to_trim == 0 {
+            return self; // Nothing to trim
+        }
+
+        // Step 1: Determine which samples to remove based on time
+        let samples_to_remove = stbl
+            .time_to_sample()
+            .trim_samples_from_end(duration_to_trim);
+
+        // Step 2: Update sample sizes
+        stbl.sample_size()
+            .remove_samples_from_end(samples_to_remove);
+
+        // Step 3: Calculate and remove chunks based on samples
+        let total_chunks = stbl.chunk_offset().chunk_count();
+        let chunks_to_remove = stbl
+            .sample_to_chunk()
+            .trim_samples_from_end(samples_to_remove, total_chunks);
+
+        // Step 4: Remove chunk offsets
+        stbl.chunk_offset().remove_chunks_from_end(chunks_to_remove);
+
+        self
     }
 }
 
