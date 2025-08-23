@@ -11,7 +11,7 @@ use crate::{
 
 pub const SMHD: &[u8; 4] = b"smhd";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SoundMediaHeaderAtom {
     /// Version of the smhd atom format (0)
     pub version: u8,

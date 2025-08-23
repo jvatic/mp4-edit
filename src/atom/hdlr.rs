@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context};
-use bon::bon;
+use bon::Builder;
 use futures_io::AsyncRead;
 use std::io::Read;
 
@@ -92,47 +92,37 @@ impl HandlerType {
     }
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Builder)]
 pub struct HandlerReferenceAtom {
     /// Version of the hdlr atom format (0)
+    #[builder(default = 0)]
     pub version: u8,
     /// Flags for the hdlr atom (usually all zeros)
+    #[builder(default = [0u8; 3])]
     pub flags: [u8; 3],
     /// Component type (pre-defined, usually 0)
+    #[builder(default = [0u8; 4])]
     pub component_type: [u8; 4],
     /// Handler type (4CC code indicating the type of media handler)
     pub handler_type: HandlerType,
     /// Component manufacturer (usually 0)
+    #[builder(default = [0u8; 4])]
     pub component_manufacturer: [u8; 4],
     /// Component flags (usually 0)
+    #[builder(default = 0)]
     pub component_flags: u32,
     /// Component flags mask (usually 0)
+    #[builder(default = 0)]
     pub component_flags_mask: u32,
     /// Human-readable name of the handler (null-terminated string)
+    #[builder(into)]
     pub name: String,
     /// Whether the original name was encoded as a null byte
+    #[builder(skip = false)]
     name_extra_null_byte: bool,
     /// Whether the original name was encoded as a Pascal string
+    #[builder(skip = false)]
     name_is_pascal_string: bool,
-}
-
-#[bon]
-impl HandlerReferenceAtom {
-    #[builder]
-    pub fn new(handler_type: HandlerType, name: impl Into<String>) -> Self {
-        HandlerReferenceAtom {
-            version: 0,
-            flags: [0u8; 3],
-            component_type: [0u8; 4],
-            handler_type,
-            component_manufacturer: [0u8; 4],
-            component_flags: 0,
-            component_flags_mask: 0,
-            name: name.into(),
-            name_extra_null_byte: false,
-            name_is_pascal_string: false,
-        }
-    }
 }
 
 impl Parse for HandlerReferenceAtom {

@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context};
-use bon::bon;
+use bon::Builder;
 use futures_io::AsyncRead;
 use std::{fmt, io::Read, time::Duration};
 
@@ -118,23 +118,29 @@ impl fmt::Display for LanguageCode {
     }
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Builder)]
 pub struct MediaHeaderAtom {
     /// Version of the mdhd atom format (0 or 1)
+    #[builder(default = 0)]
     pub version: u8,
     /// Flags for the mdhd atom (usually all zeros)
+    #[builder(default = [0u8; 3])]
     pub flags: [u8; 3],
     /// Creation time (seconds since midnight, Jan. 1, 1904, UTC)
+    #[builder(default = mp4_timestamp_now())]
     pub creation_time: u64,
     /// Modification time (seconds since midnight, Jan. 1, 1904, UTC)
+    #[builder(default = mp4_timestamp_now())]
     pub modification_time: u64,
     /// Media timescale (number of time units per second)
     pub timescale: u32,
     /// Duration of media (in timescale units)
     pub duration: u64,
     /// Language code (ISO 639-2/T language code)
+    #[builder(default = LanguageCode::Undetermined)]
     pub language: LanguageCode,
     /// Pre-defined value (should be 0)
+    #[builder(default = 0)]
     pub pre_defined: u16,
 }
 
@@ -148,29 +154,6 @@ impl MediaHeaderAtom {
             u64::from(self.timescale),
         );
         self
-    }
-}
-
-#[bon]
-impl MediaHeaderAtom {
-    #[builder]
-    pub fn new(
-        timescale: u32,
-        duration: u64,
-        #[builder(into)] language: LanguageCode,
-        #[builder(default = mp4_timestamp_now())] creation_time: u64,
-        #[builder(default = mp4_timestamp_now())] modification_time: u64,
-    ) -> Self {
-        MediaHeaderAtom {
-            version: 0,
-            flags: [0u8; 3],
-            creation_time,
-            modification_time,
-            timescale,
-            duration,
-            language,
-            pre_defined: 0,
-        }
     }
 }
 

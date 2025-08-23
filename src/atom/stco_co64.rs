@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context};
+use bon::bon;
 use derive_more::{Deref, DerefMut};
 use futures_io::AsyncRead;
 use std::{fmt, io::Read};
@@ -69,13 +70,23 @@ pub struct ChunkOffsetAtom {
     pub is_64bit: bool,
 }
 
+#[bon]
 impl ChunkOffsetAtom {
-    pub fn new(chunk_offsets: impl Into<ChunkOffsets>) -> Self {
+    #[builder]
+    pub fn new(
+        #[builder(field = ChunkOffsets::from(Vec::new()))] chunk_offsets: ChunkOffsets,
+        #[builder(default = 0)] version: u8,
+        #[builder(default = [0u8; 3])] flags: [u8; 3],
+        #[builder(default = false)] is_64bit: bool,
+        #[builder(setters(vis = ""), overwritable)]
+        #[allow(unused)]
+        chunk_offsets_marker: bool,
+    ) -> Self {
         Self {
-            version: 0,
-            flags: [0u8; 3],
-            chunk_offsets: chunk_offsets.into(),
-            is_64bit: false,
+            version,
+            flags,
+            chunk_offsets,
+            is_64bit,
         }
     }
 
@@ -97,6 +108,34 @@ impl ChunkOffsetAtom {
             .len()
             .saturating_sub(chunks_to_remove as usize);
         self.chunk_offsets.truncate(new_len);
+    }
+}
+
+impl<S: chunk_offset_atom_builder::State> ChunkOffsetAtomBuilder<S> {
+    fn push_chunk_offset(
+        mut self,
+        chunk_offset: u64,
+    ) -> ChunkOffsetAtomBuilder<chunk_offset_atom_builder::SetChunkOffsetsMarker<S>> {
+        self.chunk_offsets.push(chunk_offset);
+        self.chunk_offsets_marker(true)
+    }
+
+    pub fn chunk_offset(
+        self,
+        chunk_offset: impl Into<u64>,
+    ) -> ChunkOffsetAtomBuilder<chunk_offset_atom_builder::SetChunkOffsetsMarker<S>> {
+        self.push_chunk_offset(chunk_offset.into())
+    }
+
+    pub fn chunk_offsets(
+        mut self,
+        chunk_offsets: impl IntoIterator<Item = u64>,
+    ) -> ChunkOffsetAtomBuilder<chunk_offset_atom_builder::SetChunkOffsetsMarker<S>>
+    where
+        S::ChunkOffsetsMarker: chunk_offset_atom_builder::IsUnset,
+    {
+        self.chunk_offsets = ChunkOffsets::from_iter(chunk_offsets.into_iter());
+        self.chunk_offsets_marker(true)
     }
 }
 
