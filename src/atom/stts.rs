@@ -1,8 +1,14 @@
 use anyhow::{anyhow, Context};
 use bon::{bon, Builder};
 use derive_more::{Deref, DerefMut};
+use either::Either;
 use futures_io::AsyncRead;
-use std::{fmt, io::Read};
+use std::{
+    fmt,
+    io::Read,
+    iter::Enumerate,
+    ops::{RangeBounds, RangeInclusive},
+};
 
 use crate::{
     atom::{
@@ -85,19 +91,15 @@ impl TimeToSampleAtom {
         }
     }
 
-    /// Removes samples from the beginning and returns the number of samples removed.
-    ///
-    /// `duration_to_trim` is in media timescale units (in [`crate::atom::MovieHeaderAtom`]).
+    /// Removes samples contained in the given `trim_duration` and returns indices of removed samples.
     ///
     /// WARNING: failing to update other atoms appropriately will cause file corruption.
-    pub fn trim_samples_from_start(&mut self, duration_to_trim: u64) -> u32 {
-        let (entries_to_remove, samples_removed) =
-            trim_samples(self.entries.iter_mut(), duration_to_trim);
-
-        // Remove completely consumed entries from the start
-        self.entries.drain(0..entries_to_remove);
-
-        samples_removed
+    pub fn trim_samples(&mut self, trim_duration: impl RangeBounds<u64>) -> Vec<usize> {
+        let (next_entries, removed_sample_indices) = TimeToSampleIter::new(self.entries.as_slice())
+            .trim_duration(trim_duration)
+            .collapse();
+        self.entries = next_entries;
+        removed_sample_indices
     }
 
     /// Removes samples from the end and returns the number of samples removed.
@@ -174,6 +176,131 @@ fn trim_samples<'a>(
     }
 
     (entries_to_remove, samples_removed)
+}
+
+/// Represents an expanded [`TimeToSampleEntry`] with start..=end duration offset.
+type SampleDuration = RangeInclusive<u64>;
+
+/// Iterator over each sample in a [`TimeToSampleAtom`].
+///
+/// All entries are expanded to represent a single sample's timescale start..=end duration.
+struct TimeToSampleIter<'a> {
+    /// slice of entries.
+    entries: &'a [TimeToSampleEntry],
+    /// index of current entry (before calling `next`)
+    index: usize,
+    /// index of current sample relative to current entry.
+    sample_index: usize,
+    /// timescale unit offset the next sample's duration starts at.
+    duration_offset: u64,
+}
+
+impl<'a> TimeToSampleIter<'a> {
+    pub fn new(entries: impl Into<&'a [TimeToSampleEntry]>) -> Self {
+        Self {
+            entries: entries.into(),
+            index: 0,
+            sample_index: 0,
+            duration_offset: 0,
+        }
+    }
+
+    pub fn trim_duration<D>(self, trim_duration: D) -> TimeToSampleTrimIter<Self, D>
+    where
+        D: RangeBounds<u64>,
+    {
+        TimeToSampleTrimIter::new(self, trim_duration)
+    }
+}
+
+impl<'a> Iterator for TimeToSampleIter<'a> {
+    type Item = SampleDuration;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let item = self.entries.get(self.index)?;
+        if self.sample_index >= item.sample_count as usize {
+            // we've exhausted all the samples in the current item,
+            // on to the next one
+            self.index += 1;
+            self.sample_index = 0;
+            return self.next();
+        }
+        self.sample_index += 1;
+
+        let offset_duration =
+            self.duration_offset..=(self.duration_offset + item.sample_duration as u64);
+        self.duration_offset += item.sample_duration as u64;
+        Some(offset_duration)
+    }
+}
+
+/// Iterates over expanded [`SampleDuration`]s, matching against a given `trim_duration` to yield either an a sample
+/// index to remove, or a [`SampleDuration`] to keep.
+struct TimeToSampleTrimIter<I, D> {
+    trim_duration: D,
+    inner: Enumerate<I>,
+}
+
+impl<I, D> TimeToSampleTrimIter<I, D>
+where
+    I: Iterator<Item = SampleDuration>,
+    D: RangeBounds<u64>,
+{
+    fn new(inner: I, trim_duration: D) -> Self {
+        Self {
+            trim_duration,
+            inner: inner.enumerate(),
+        }
+    }
+
+    /// compresses samples back into [`TimeToSampleEntry`]s and a list of removed sample indices.
+    pub fn collapse(self) -> (TimeToSampleEntries, Vec<usize>) {
+        self.fold(
+            (TimeToSampleEntries(Vec::new()), Vec::new()),
+            |(mut entries, mut remove_indices), item| {
+                match item {
+                    Either::Left(sample) => {
+                        let sample_duration = u32::try_from(sample.end() - sample.start())
+                            .expect("invariant: sample duration should fit in a u32");
+                        if match entries.last_mut() {
+                            Some(last_entry) if last_entry.sample_duration == sample_duration => {
+                                last_entry.sample_count += 1;
+                                false
+                            }
+                            _ => true,
+                        } {
+                            entries.push(TimeToSampleEntry {
+                                sample_count: 1,
+                                sample_duration,
+                            });
+                        }
+                    }
+                    Either::Right(sample_index) => {
+                        remove_indices.push(sample_index);
+                    }
+                }
+                (entries, remove_indices)
+            },
+        )
+    }
+}
+
+impl<I, D> Iterator for TimeToSampleTrimIter<I, D>
+where
+    I: Iterator<Item = SampleDuration>,
+    D: RangeBounds<u64>,
+{
+    type Item = Either<SampleDuration, usize>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (sample_index, sample) = self.inner.next()?;
+        if self.trim_duration.contains(sample.start()) && self.trim_duration.contains(sample.end())
+        {
+            Some(Either::Right(sample_index))
+        } else {
+            Some(Either::Left(sample))
+        }
+    }
 }
 
 impl From<Vec<TimeToSampleEntry>> for TimeToSampleAtom {

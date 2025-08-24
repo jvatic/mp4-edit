@@ -85,13 +85,17 @@ pub struct SampleSizeAtom {
 }
 
 impl SampleSizeAtom {
-    /// Removes the specified number of samples from the beginning
-    pub fn remove_samples_from_start(&mut self, samples_to_remove: u32) {
+    pub fn remove_sample_indices(&mut self, indices_to_remove: &[usize]) {
         if !self.entry_sizes.is_empty() {
-            let samples_to_remove = (samples_to_remove as usize).min(self.entry_sizes.len());
-            self.entry_sizes.drain(0..samples_to_remove);
+            for index in indices_to_remove {
+                if *index < self.entry_sizes.len() {
+                    self.entry_sizes.remove(*index);
+                }
+            }
         }
-        self.sample_count = self.sample_count.saturating_sub(samples_to_remove);
+        self.sample_count = self
+            .sample_count
+            .saturating_sub(indices_to_remove.len() as u32);
     }
 
     /// Removes the specified number of samples from the end
