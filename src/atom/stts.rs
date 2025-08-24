@@ -1,14 +1,9 @@
 use anyhow::{anyhow, Context};
 use bon::{bon, Builder};
 use derive_more::{Deref, DerefMut};
-use either::Either;
+
 use futures_io::AsyncRead;
-use std::{
-    fmt,
-    io::Read,
-    iter::Enumerate,
-    ops::{RangeBounds, RangeInclusive},
-};
+use std::{fmt, io::Read, ops::RangeBounds};
 
 use crate::{
     atom::{
@@ -95,10 +90,79 @@ impl TimeToSampleAtom {
     ///
     /// WARNING: failing to update other atoms appropriately will cause file corruption.
     pub fn trim_samples(&mut self, trim_duration: impl RangeBounds<u64>) -> Vec<usize> {
-        let (next_entries, removed_sample_indices) = TimeToSampleIter::new(self.entries.as_slice())
-            .trim_duration(trim_duration)
-            .collapse();
-        self.entries = next_entries;
+        // Convert range bounds to concrete values for easier math
+        let trim_start = match trim_duration.start_bound() {
+            std::ops::Bound::Included(&start) => start,
+            std::ops::Bound::Excluded(&start) => start + 1,
+            std::ops::Bound::Unbounded => 0,
+        };
+
+        let trim_end = match trim_duration.end_bound() {
+            std::ops::Bound::Included(&end) => end,
+            std::ops::Bound::Excluded(&end) => end.saturating_sub(1),
+            std::ops::Bound::Unbounded => u64::MAX,
+        };
+
+        let mut new_entries = Vec::new();
+        let mut removed_sample_indices = Vec::new();
+        let mut current_duration_offset = 0u64;
+        let mut current_sample_index = 0usize;
+
+        for entry in self.entries.iter() {
+            let entry_duration_start = current_duration_offset;
+            let entry_duration_end = current_duration_offset
+                + (entry.sample_count as u64 * entry.sample_duration as u64).saturating_sub(1);
+
+            // Fast path: entire entry is outside trim range
+            if entry_duration_end < trim_start || entry_duration_start > trim_end {
+                new_entries.push(entry.clone());
+                current_duration_offset += entry.sample_count as u64 * entry.sample_duration as u64;
+                current_sample_index += entry.sample_count as usize;
+                continue;
+            }
+
+            // Fast path: entire entry is inside trim range
+            if entry_duration_start >= trim_start && entry_duration_end <= trim_end {
+                // Remove all samples from this entry
+                for i in 0..entry.sample_count {
+                    removed_sample_indices.push(current_sample_index + i as usize);
+                }
+                current_duration_offset += entry.sample_count as u64 * entry.sample_duration as u64;
+                current_sample_index += entry.sample_count as usize;
+                continue;
+            }
+
+            // Partial overlap: calculate which samples to remove using range arithmetic
+            let mut kept_samples = 0u32;
+            let sample_duration = entry.sample_duration as u64;
+
+            for sample_idx in 0..entry.sample_count {
+                let sample_start = current_duration_offset + (sample_idx as u64 * sample_duration);
+                let sample_end = sample_start + sample_duration - 1;
+
+                // Sample overlaps with trim range if there's any intersection
+                let overlaps = sample_start <= trim_end && sample_end >= trim_start;
+
+                if overlaps {
+                    removed_sample_indices.push(current_sample_index + sample_idx as usize);
+                } else {
+                    kept_samples += 1;
+                }
+            }
+
+            // Add entry for kept samples if any
+            if kept_samples > 0 {
+                new_entries.push(TimeToSampleEntry {
+                    sample_count: kept_samples,
+                    sample_duration: entry.sample_duration,
+                });
+            }
+
+            current_duration_offset += entry.sample_count as u64 * entry.sample_duration as u64;
+            current_sample_index += entry.sample_count as usize;
+        }
+
+        self.entries = new_entries.into();
         removed_sample_indices
     }
 
@@ -176,131 +240,6 @@ fn trim_samples<'a>(
     }
 
     (entries_to_remove, samples_removed)
-}
-
-/// Represents an expanded [`TimeToSampleEntry`] with start..=end duration offset.
-type SampleDuration = RangeInclusive<u64>;
-
-/// Iterator over each sample in a [`TimeToSampleAtom`].
-///
-/// All entries are expanded to represent a single sample's timescale start..=end duration.
-struct TimeToSampleIter<'a> {
-    /// slice of entries.
-    entries: &'a [TimeToSampleEntry],
-    /// index of current entry (before calling `next`)
-    index: usize,
-    /// index of current sample relative to current entry.
-    sample_index: usize,
-    /// timescale unit offset the next sample's duration starts at.
-    duration_offset: u64,
-}
-
-impl<'a> TimeToSampleIter<'a> {
-    pub fn new(entries: impl Into<&'a [TimeToSampleEntry]>) -> Self {
-        Self {
-            entries: entries.into(),
-            index: 0,
-            sample_index: 0,
-            duration_offset: 0,
-        }
-    }
-
-    pub fn trim_duration<D>(self, trim_duration: D) -> TimeToSampleTrimIter<Self, D>
-    where
-        D: RangeBounds<u64>,
-    {
-        TimeToSampleTrimIter::new(self, trim_duration)
-    }
-}
-
-impl<'a> Iterator for TimeToSampleIter<'a> {
-    type Item = SampleDuration;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let item = self.entries.get(self.index)?;
-        if self.sample_index >= item.sample_count as usize {
-            // we've exhausted all the samples in the current item,
-            // on to the next one
-            self.index += 1;
-            self.sample_index = 0;
-            return self.next();
-        }
-        self.sample_index += 1;
-
-        let offset_duration =
-            self.duration_offset..=(self.duration_offset + item.sample_duration as u64);
-        self.duration_offset += item.sample_duration as u64;
-        Some(offset_duration)
-    }
-}
-
-/// Iterates over expanded [`SampleDuration`]s, matching against a given `trim_duration` to yield either an a sample
-/// index to remove, or a [`SampleDuration`] to keep.
-struct TimeToSampleTrimIter<I, D> {
-    trim_duration: D,
-    inner: Enumerate<I>,
-}
-
-impl<I, D> TimeToSampleTrimIter<I, D>
-where
-    I: Iterator<Item = SampleDuration>,
-    D: RangeBounds<u64>,
-{
-    fn new(inner: I, trim_duration: D) -> Self {
-        Self {
-            trim_duration,
-            inner: inner.enumerate(),
-        }
-    }
-
-    /// compresses samples back into [`TimeToSampleEntry`]s and a list of removed sample indices.
-    pub fn collapse(self) -> (TimeToSampleEntries, Vec<usize>) {
-        self.fold(
-            (TimeToSampleEntries(Vec::new()), Vec::new()),
-            |(mut entries, mut remove_indices), item| {
-                match item {
-                    Either::Left(sample) => {
-                        let sample_duration = u32::try_from(sample.end() - sample.start())
-                            .expect("invariant: sample duration should fit in a u32");
-                        if match entries.last_mut() {
-                            Some(last_entry) if last_entry.sample_duration == sample_duration => {
-                                last_entry.sample_count += 1;
-                                false
-                            }
-                            _ => true,
-                        } {
-                            entries.push(TimeToSampleEntry {
-                                sample_count: 1,
-                                sample_duration,
-                            });
-                        }
-                    }
-                    Either::Right(sample_index) => {
-                        remove_indices.push(sample_index);
-                    }
-                }
-                (entries, remove_indices)
-            },
-        )
-    }
-}
-
-impl<I, D> Iterator for TimeToSampleTrimIter<I, D>
-where
-    I: Iterator<Item = SampleDuration>,
-    D: RangeBounds<u64>,
-{
-    type Item = Either<SampleDuration, usize>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let (sample_index, sample) = self.inner.next()?;
-        if self.trim_duration.contains(sample.start()) && self.trim_duration.contains(sample.end())
-        {
-            Some(Either::Right(sample_index))
-        } else {
-            Some(Either::Left(sample))
-        }
-    }
 }
 
 impl From<Vec<TimeToSampleEntry>> for TimeToSampleAtom {
