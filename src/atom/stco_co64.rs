@@ -99,9 +99,20 @@ impl ChunkOffsetAtom {
     ///
     /// Panics if any of the indices are out of range.
     pub fn remove_chunk_indices(&mut self, chunk_indices_to_remove: &[usize]) {
-        for index in chunk_indices_to_remove {
-            self.chunk_offsets.remove(*index);
+        if chunk_indices_to_remove.is_empty() {
+            return;
         }
+
+        // Use HashSet for O(1) lookups instead of O(n²) Vec::remove calls
+        let removal_set: std::collections::HashSet<usize> =
+            chunk_indices_to_remove.iter().copied().collect();
+
+        let mut index = 0;
+        self.chunk_offsets.retain(|_| {
+            let keep = !removal_set.contains(&index);
+            index += 1;
+            keep
+        });
     }
 
     /// Removes the specified number of chunks from the end

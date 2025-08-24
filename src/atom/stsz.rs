@@ -86,12 +86,17 @@ pub struct SampleSizeAtom {
 
 impl SampleSizeAtom {
     pub fn remove_sample_indices(&mut self, indices_to_remove: &[usize]) {
-        if !self.entry_sizes.is_empty() {
-            for index in indices_to_remove {
-                if *index < self.entry_sizes.len() {
-                    self.entry_sizes.remove(*index);
-                }
-            }
+        if !self.entry_sizes.is_empty() && !indices_to_remove.is_empty() {
+            // Use HashSet for O(1) lookups instead of O(n²) Vec::remove calls
+            let removal_set: std::collections::HashSet<usize> =
+                indices_to_remove.iter().copied().collect();
+
+            let mut index = 0;
+            self.entry_sizes.retain(|_| {
+                let keep = !removal_set.contains(&index);
+                index += 1;
+                keep
+            });
         }
         self.sample_count = self
             .sample_count
