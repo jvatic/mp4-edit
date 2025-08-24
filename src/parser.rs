@@ -1365,23 +1365,23 @@ impl<'a> TrakAtomRefMut<'a> {
         }
 
         // Step 1: Determine which samples to remove based on time
-        let samples_to_remove = stbl
+        let sample_indices_to_remove = stbl
             .time_to_sample()
-            .trim_samples_from_start(duration_to_trim);
+            .trim_samples(0..=(duration_to_trim as u64));
 
         // Step 2: Update sample sizes
         stbl.sample_size()
-            .remove_samples_from_start(samples_to_remove);
+            .remove_sample_indices(&sample_indices_to_remove);
 
         // Step 3: Calculate and remove chunks based on samples
         let total_chunks = stbl.chunk_offset().chunk_count();
-        let chunks_to_remove = stbl
+        let chunk_indices_to_remove = stbl
             .sample_to_chunk()
-            .trim_samples_from_start(samples_to_remove, total_chunks);
+            .remove_sample_indices(&sample_indices_to_remove, total_chunks);
 
         // Step 4: Remove chunk offsets
         stbl.chunk_offset()
-            .remove_chunks_from_start(chunks_to_remove);
+            .remove_chunk_indices(&chunk_indices_to_remove);
 
         self
     }

@@ -1,8 +1,9 @@
 use anyhow::{anyhow, Context};
 use bon::{bon, Builder};
 use derive_more::{Deref, DerefMut};
+use either::Either;
 use futures_io::AsyncRead;
-use std::{fmt, io::Read};
+use std::{fmt, io::Read, iter::Enumerate};
 
 use crate::{
     atom::{
@@ -83,21 +84,20 @@ impl SampleToChunkAtom {
         }
     }
 
-    /// Calculates how many chunks need to be removed for the given number of samples
-    /// and updates the chunk mapping accordingly
-    ///
-    /// `total_chunks` - the total number of chunks in the stco/co64 atom
-    pub fn trim_samples_from_start(&mut self, samples_to_remove: u32, total_chunks: usize) -> u32 {
-        let mut chunk_samples = self.expand_chunk_samples(total_chunks);
-        let chunks_removed = self.trim_samples(samples_to_remove, chunk_samples.iter_mut());
+    /// Removes sample indices from the sample-to-chunk mapping table,
+    /// and returns the indices of any chunks which are now empty (and should be removed)
+    pub fn remove_sample_indices(
+        &mut self,
+        sample_indices_to_remove: &[usize],
+        total_chunks: usize,
+    ) -> Vec<usize> {
+        let (next_entries, chunk_indices_to_remove) =
+            SampleToChunkIter::new(self.entries.as_slice(), total_chunks)
+                .remove_sample_indices(sample_indices_to_remove)
+                .collapse();
+        self.entries = next_entries;
 
-        // Remove empty chunks from our mapping
-        chunk_samples.retain(|&samples| samples > 0);
-
-        // Rebuild stsc entries from the remaining chunks
-        self.entries = self.collapse_chunk_samples(&chunk_samples).into();
-
-        chunks_removed
+        chunk_indices_to_remove
     }
 
     /// Calculates how many chunks need to be removed for the given number of samples
@@ -228,6 +228,151 @@ impl<S: sample_to_chunk_atom_builder::State> SampleToChunkAtomBuilder<S> {
     {
         self.entries = entries.into();
         self.entries_marker(true)
+    }
+}
+
+struct SampleToChunkIterItem {
+    pub num_samples: u32,
+    pub sample_description_index: u32,
+}
+
+/// Iterates over each chunk's sample count.
+struct SampleToChunkIter<'a> {
+    entries: &'a [SampleToChunkEntry],
+    /// index of current entry (before calling `next`)
+    index: usize,
+    /// index of current chunk relative to current entry
+    chunk_index: usize,
+    /// total number of chunks
+    total_chunks: usize,
+}
+
+impl<'a> SampleToChunkIter<'a> {
+    fn new(entries: impl Into<&'a [SampleToChunkEntry]>, total_chunks: usize) -> Self {
+        Self {
+            entries: entries.into(),
+            index: 0,
+            chunk_index: 0,
+            total_chunks,
+        }
+    }
+
+    fn remove_sample_indices<'b>(
+        self,
+        sample_indices: &'b [usize],
+    ) -> SampleToChunkRemoveSamplesIter<'b, Self> {
+        SampleToChunkRemoveSamplesIter::new(self, sample_indices)
+    }
+}
+
+impl<'a> Iterator for SampleToChunkIter<'a> {
+    type Item = SampleToChunkIterItem;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let entry = self.entries.get(self.index)?;
+
+        // calculate the end chunk index covered by this entry
+        let end_chunk_index = match self.entries.get(self.index + 1) {
+            Some(next_entry) => (next_entry.first_chunk - 1) as usize,
+            None => self.total_chunks,
+        };
+
+        // current chunk is not contained in this entry
+        if self.chunk_index > end_chunk_index {
+            self.index += 1;
+            return self.next();
+        }
+
+        self.chunk_index += 1;
+        Some(SampleToChunkIterItem {
+            num_samples: entry.samples_per_chunk,
+            sample_description_index: entry.sample_description_index,
+        })
+    }
+}
+
+/// Iterates over each chunk's sample count, yielding either a chunk index to remove, or a modified sample count to keep
+struct SampleToChunkRemoveSamplesIter<'a, I> {
+    sample_indices: &'a [usize],
+    inner: Enumerate<I>,
+    /// index of sample each chunk entry starts from
+    sample_offset: usize,
+}
+
+impl<'a, I> SampleToChunkRemoveSamplesIter<'a, I>
+where
+    I: Iterator<Item = SampleToChunkIterItem>,
+{
+    fn new(inner: I, sample_indices: &'a [usize]) -> Self {
+        Self {
+            sample_indices,
+            inner: inner.enumerate(),
+            sample_offset: 0,
+        }
+    }
+
+    /// compresses chunk sample counts back into [`SampleToChunkEntry`]s and a list of removed chunk indices
+    fn collapse(self) -> (SampleToChunkEntries, Vec<usize>) {
+        self.enumerate().fold(
+            (SampleToChunkEntries(Vec::new()), Vec::new()),
+            |(mut entries, mut indices), (chunk_index, item)| {
+                match item {
+                    Either::Left(chunk) => match entries.last_mut() {
+                        Some(entry)
+                            if entry.samples_per_chunk == chunk.num_samples
+                                && entry.sample_description_index
+                                    == chunk.sample_description_index =>
+                        {
+                            // chunk is covered by the current entry
+                        }
+                        _ => {
+                            entries.push(SampleToChunkEntry {
+                                first_chunk: chunk_index as u32 + 1,
+                                samples_per_chunk: chunk.num_samples,
+                                sample_description_index: chunk.sample_description_index,
+                            });
+                        }
+                    },
+                    Either::Right(chunk_index) => {
+                        indices.push(chunk_index);
+                    }
+                }
+                (entries, indices)
+            },
+        )
+    }
+}
+
+impl<'a, I> Iterator for SampleToChunkRemoveSamplesIter<'a, I>
+where
+    I: Iterator<Item = SampleToChunkIterItem>,
+{
+    type Item = Either<SampleToChunkIterItem, usize>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (chunk_index, mut chunk) = self.inner.next()?;
+
+        let start_sample_index = self.sample_offset;
+        let end_sample_index = start_sample_index + chunk.num_samples as usize - 1;
+        self.sample_offset += chunk.num_samples as usize;
+
+        let num_samples_removed = self
+            .sample_indices
+            .iter()
+            .take_while(|&&sample_index| {
+                start_sample_index >= sample_index && sample_index <= end_sample_index
+            })
+            .take(chunk.num_samples as usize)
+            .count();
+
+        chunk.num_samples -= num_samples_removed as u32;
+        self.sample_indices = &self.sample_indices[num_samples_removed..];
+
+        if chunk.num_samples == 0 {
+            // all the samples have been removed from this chunk
+            return Some(Either::Right(chunk_index));
+        }
+        Some(Either::Left(chunk))
     }
 }
 

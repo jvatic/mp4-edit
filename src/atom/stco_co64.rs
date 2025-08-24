@@ -95,10 +95,13 @@ impl ChunkOffsetAtom {
         self.chunk_offsets.len()
     }
 
-    /// Removes the specified number of chunks from the beginning
-    pub fn remove_chunks_from_start(&mut self, chunks_to_remove: u32) {
-        let chunks_to_remove = (chunks_to_remove as usize).min(self.chunk_offsets.len());
-        self.chunk_offsets.drain(0..chunks_to_remove);
+    /// Removes the specified chunk indices.
+    ///
+    /// Panics if any of the indices are out of range.
+    pub fn remove_chunk_indices(&mut self, chunk_indices_to_remove: &[usize]) {
+        for index in chunk_indices_to_remove {
+            self.chunk_offsets.remove(*index);
+        }
     }
 
     /// Removes the specified number of chunks from the end
