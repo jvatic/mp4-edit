@@ -92,20 +92,14 @@ impl SampleToChunkAtom {
             return Vec::new();
         }
 
-        let mut new_entries: Vec<SampleToChunkEntry> = Vec::with_capacity(self.entries.len());
+        let mut new_entries: Vec<SampleToChunkEntry> = Vec::new();
         let mut empty_chunks = Vec::new();
         let mut sample_index = 0usize;
         let mut chunk_index = 0usize;
 
-        let mut entries_iter = self.entries.iter_mut().peekable();
-        let mut new_next_first_chunk = None;
+        // First pass: identify which chunks are empty and should be removed
+        let mut entries_iter = self.entries.iter().peekable();
         while let Some(entry) = entries_iter.next() {
-            // since we can't modify `next_entry`,
-            // we need to carry forward any updates we would have done if we could
-            if let Some(new_first_chunk) = new_next_first_chunk.take() {
-                entry.first_chunk = new_first_chunk;
-            }
-
             let next_entry = entries_iter.peek();
 
             let chunks_in_entry = match next_entry {
@@ -131,56 +125,6 @@ impl SampleToChunkAtom {
 
                 if remaining_samples == 0 {
                     empty_chunks.push(chunk_index);
-                } else if remaining_samples != entry.samples_per_chunk {
-                    // Chunk has different sample count, needs new entry
-                    match new_entries.last() {
-                        Some(prev_entry)
-                            if prev_entry.samples_per_chunk == remaining_samples
-                                && prev_entry.sample_description_index
-                                    == entry.sample_description_index =>
-                        {
-                            // we can reuse the previous entry
-                        }
-                        _ => match next_entry {
-                            Some(next_entry)
-                                if next_entry.samples_per_chunk == remaining_samples
-                                    && next_entry.sample_description_index
-                                        == entry.sample_description_index =>
-                            {
-                                // we can reuse the next entry, just need to update it's first chunk
-                                // this will have to happen in the next iteration of the loop though,
-                                // since we can't mut `next_entry`
-                                new_next_first_chunk = Some((chunk_index + 1) as u32);
-                            }
-                            _ => {
-                                // we need to push a new entry
-                                new_entries.push(SampleToChunkEntry {
-                                    first_chunk: (chunk_index + 1) as u32,
-                                    samples_per_chunk: remaining_samples,
-                                    sample_description_index: entry.sample_description_index,
-                                });
-                            }
-                        },
-                    }
-                } else {
-                    // Chunk unchanged, preserve entry
-                    let entry = SampleToChunkEntry {
-                        first_chunk: (chunk_index + 1) as u32,
-                        samples_per_chunk: entry.samples_per_chunk,
-                        sample_description_index: entry.sample_description_index,
-                    };
-                    match new_entries.last() {
-                        Some(prev_entry)
-                            if prev_entry.samples_per_chunk == entry.samples_per_chunk
-                                && prev_entry.sample_description_index
-                                    == entry.sample_description_index =>
-                        {
-                            // we can reuse the existing entry
-                        }
-                        _ => {
-                            new_entries.push(entry);
-                        }
-                    }
                 }
 
                 sample_index += entry.samples_per_chunk as usize;
@@ -188,8 +132,105 @@ impl SampleToChunkAtom {
             }
         }
 
-        self.entries = new_entries.into();
+        // Second pass: create new entries with adjusted chunk indices
+        sample_index = 0;
+        chunk_index = 0;
+        let mut new_chunk_index = 1u32; // 1-based chunk indexing
 
+        entries_iter = self.entries.iter().peekable();
+        while let Some(entry) = entries_iter.next() {
+            let next_entry = entries_iter.peek();
+
+            let chunks_in_entry = match next_entry {
+                Some(next_entry) => (next_entry.first_chunk - entry.first_chunk) as usize,
+                _ => total_chunks - chunk_index,
+            };
+
+            let mut first_non_empty_chunk_in_entry = None;
+            let mut current_entry_samples_per_chunk = None;
+
+            for _ in 0..chunks_in_entry {
+                let chunk_start_sample = sample_index;
+                let chunk_end_sample = sample_index + entry.samples_per_chunk as usize;
+
+                // Count samples remaining in this chunk
+                let remaining_samples = (chunk_start_sample..chunk_end_sample)
+                    .filter(|idx| {
+                        for range in sample_indices_to_remove {
+                            if range.contains(idx) {
+                                return false;
+                            }
+                        }
+                        true
+                    })
+                    .count() as u32;
+
+                if remaining_samples > 0 {
+                    // This chunk is not empty
+                    if first_non_empty_chunk_in_entry.is_none() {
+                        first_non_empty_chunk_in_entry = Some(new_chunk_index);
+                        current_entry_samples_per_chunk = Some(remaining_samples);
+                    } else if Some(remaining_samples) != current_entry_samples_per_chunk {
+                        // Need to create a new entry for different samples_per_chunk
+                        if let (Some(first_chunk), Some(samples_per_chunk)) = (
+                            first_non_empty_chunk_in_entry,
+                            current_entry_samples_per_chunk,
+                        ) {
+                            // Check if we can merge with the last entry
+                            match new_entries.last_mut() {
+                                Some(last_entry)
+                                    if last_entry.samples_per_chunk == samples_per_chunk
+                                        && last_entry.sample_description_index
+                                            == entry.sample_description_index =>
+                                {
+                                    // Can extend the previous entry, no need to add new one
+                                }
+                                _ => {
+                                    new_entries.push(SampleToChunkEntry {
+                                        first_chunk,
+                                        samples_per_chunk,
+                                        sample_description_index: entry.sample_description_index,
+                                    });
+                                }
+                            }
+                        }
+
+                        first_non_empty_chunk_in_entry = Some(new_chunk_index);
+                        current_entry_samples_per_chunk = Some(remaining_samples);
+                    }
+                    new_chunk_index += 1;
+                }
+
+                sample_index += entry.samples_per_chunk as usize;
+                chunk_index += 1;
+            }
+
+            // Add entry for this group if we found any non-empty chunks
+            if let (Some(first_chunk), Some(samples_per_chunk)) = (
+                first_non_empty_chunk_in_entry,
+                current_entry_samples_per_chunk,
+            ) {
+                // Check if we can merge with the last entry
+                match new_entries.last_mut() {
+                    Some(last_entry)
+                        if last_entry.samples_per_chunk == samples_per_chunk
+                            && last_entry.sample_description_index
+                                == entry.sample_description_index =>
+                    {
+                        // Can extend the previous entry, no need to add new one
+                    }
+                    _ => {
+                        new_entries.push(SampleToChunkEntry {
+                            first_chunk,
+                            samples_per_chunk,
+                            sample_description_index: entry.sample_description_index,
+                        });
+                    }
+                }
+            }
+        }
+
+        self.entries = new_entries.into();
         empty_chunks
     }
 }
