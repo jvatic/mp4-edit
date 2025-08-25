@@ -487,13 +487,10 @@ impl ChapterTrack {
             SampleSizeAtom::builder()
                 .sample_size(uniform_size)
                 .sample_count(self.sample_count())
-                .entry_sizes(vec![]) // Empty when using constant size
                 .build()
         } else {
             // Use individual sample sizes for variable-length content
             SampleSizeAtom::builder()
-                .sample_size(0) // 0 indicates variable sizes
-                .sample_count(self.sample_count())
                 .entry_sizes(self.sample_sizes.clone())
                 .build()
         };
