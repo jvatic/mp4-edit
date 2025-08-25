@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
 use std::io::SeekFrom;
-use std::ops::{Bound, Deref, DerefMut, RangeBounds};
+use std::ops::{Deref, DerefMut, RangeBounds};
 use std::time::Duration;
 use thiserror::Error;
 
@@ -22,7 +22,7 @@ use crate::atom::stsd::{
     SampleEntryData, SampleEntryType, StsdExtension,
 };
 use crate::atom::stts::TimeToSampleEntry;
-use crate::atom::util::time::{duration_sub_range, scaled_duration_range};
+use crate::atom::util::time::{duration_sub_range, scaled_duration_range, unscaled_duration};
 use crate::atom::util::DebugEllipsis;
 use crate::atom::AtomHeader;
 use crate::chunk_offset_builder::{ChunkInfo, ChunkOffsetBuilder};
@@ -1079,6 +1079,25 @@ impl<'a> MoovAtomRefMut<'a> {
         self
     }
 
+    /// Trims leading duration
+    pub fn trim_start(&mut self, duration: Duration) -> &mut Self {
+        let range = Duration::ZERO..=duration;
+        self.trim_duration(range)
+    }
+
+    /// Trims trailing duration
+    pub fn trim_end(&mut self, duration: Duration) -> &mut Self {
+        // Get current movie duration and convert to Duration
+        let movie_header = self.header();
+        let movie_timescale = u64::from(movie_header.timescale);
+        let current_duration = unscaled_duration(movie_header.duration, movie_timescale);
+
+        // Calculate where to start trimming (from end - duration)
+        let trim_start = current_duration.saturating_sub(duration);
+        let range = trim_start..;
+        self.trim_duration(range)
+    }
+
     /// Trims duration range from anywhere
     pub fn trim_duration(&mut self, range: impl RangeBounds<Duration> + Clone) -> &mut Self {
         // TODO: after trimming samples,
@@ -1093,20 +1112,6 @@ impl<'a> MoovAtomRefMut<'a> {
             trak.trim_duration(movie_timescale, range.clone());
         }
         self
-    }
-
-    /// Trims leading duration
-    #[deprecated = "use `trim_duration` instead"]
-    pub fn trim_start(&mut self, duration: Duration) -> &mut Self {
-        let range = Duration::ZERO..=duration;
-        self.trim_duration(range)
-    }
-
-    /// Trims trailing duration
-    #[deprecated = "use `trim_duration` instead"]
-    pub fn trim_end(&mut self, duration: Duration) -> &mut Self {
-        let range = (Bound::Included(duration), Bound::Unbounded);
-        self.trim_duration(range)
     }
 }
 
