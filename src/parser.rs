@@ -3330,6 +3330,340 @@ mod tests {
         println!("\n✓ Genuine STSC merging test completed");
     }
 
+    #[test]
+    fn test_trim_end_implementation() {
+        use crate::atom::util::time::scaled_duration;
+
+        println!("=== Testing corrected trim_end implementation ===");
+
+        // Create test metadata with 10 second duration
+        let movie_timescale = 600;
+        let original_duration = Duration::from_secs(10);
+        let mut metadata = create_test_metadata(movie_timescale, original_duration);
+
+        // Get initial values for comparison
+        let initial_movie_duration = metadata.moov().header().map(|h| h.duration).unwrap_or(0);
+        let initial_track_duration = metadata
+            .moov()
+            .into_tracks_iter()
+            .next()
+            .and_then(|t| t.header().map(|h| h.duration))
+            .unwrap_or(0);
+        let initial_media_duration = metadata
+            .moov()
+            .into_tracks_iter()
+            .next()
+            .map(|t| t.media().header().map(|h| h.duration).unwrap_or(0))
+            .unwrap_or(0);
+
+        println!(
+            "Initial movie duration: {} (scaled), {} seconds",
+            initial_movie_duration,
+            initial_movie_duration as f64 / movie_timescale as f64
+        );
+
+        // Trim 3 seconds from the end
+        let trim_duration = Duration::from_secs(3);
+        let expected_remaining = original_duration - trim_duration;
+
+        println!(
+            "Trimming {} seconds from end, expecting {} seconds remaining",
+            trim_duration.as_secs(),
+            expected_remaining.as_secs()
+        );
+
+        // Perform the trim_end operation
+        #[allow(deprecated)]
+        metadata.moov_mut().trim_end(trim_duration);
+
+        // Verify movie header duration was updated correctly
+        let new_movie_duration = metadata.moov().header().map(|h| h.duration).unwrap_or(0);
+        let expected_movie_duration = scaled_duration(expected_remaining, movie_timescale as u64);
+
+        println!(
+            "Final movie duration: {} (scaled), {} seconds",
+            new_movie_duration,
+            new_movie_duration as f64 / movie_timescale as f64
+        );
+
+        assert_eq!(
+            new_movie_duration, expected_movie_duration,
+            "Movie duration should be updated after trim_end"
+        );
+        assert!(
+            new_movie_duration < initial_movie_duration,
+            "Movie duration should be reduced"
+        );
+
+        // Verify track header duration was updated
+        let new_track_duration = metadata
+            .moov()
+            .into_tracks_iter()
+            .next()
+            .and_then(|t| t.header().map(|h| h.duration))
+            .unwrap_or(0);
+        let expected_track_duration = scaled_duration(expected_remaining, movie_timescale as u64);
+        assert_eq!(
+            new_track_duration, expected_track_duration,
+            "Track duration should be updated after trim_end"
+        );
+        assert!(
+            new_track_duration < initial_track_duration,
+            "Track duration should be reduced"
+        );
+
+        // Verify media header duration was updated
+        let new_media_duration = metadata
+            .moov()
+            .into_tracks_iter()
+            .next()
+            .map(|t| t.media().header().map(|h| h.duration).unwrap_or(0))
+            .unwrap_or(0);
+        let media_timescale = 44100u64;
+        let expected_media_duration = scaled_duration(expected_remaining, media_timescale);
+        assert_eq!(
+            new_media_duration, expected_media_duration,
+            "Media duration should be updated after trim_end"
+        );
+        assert!(
+            new_media_duration < initial_media_duration,
+            "Media duration should be reduced"
+        );
+
+        // Verify sample table structure is still valid
+        let track = metadata.moov().into_tracks_iter().next().unwrap();
+        let stbl = track.media().media_information().sample_table();
+
+        if let Some(stsz) = stbl.sample_size() {
+            assert!(
+                !stsz.entry_sizes.is_empty(),
+                "Should still have samples after trim_end"
+            );
+        }
+
+        if let Some(stts) = stbl.time_to_sample() {
+            let total_sample_count: u64 = stts.entries.iter().map(|e| e.sample_count as u64).sum();
+            assert!(
+                total_sample_count > 0,
+                "Should still have samples in time-to-sample after trim_end"
+            );
+        }
+
+        if let Some(stco) = stbl.chunk_offset() {
+            assert!(
+                !stco.chunk_offsets.is_empty(),
+                "Should still have chunks after trim_end"
+            );
+        }
+
+        println!("✓ trim_end test passed - correctly trimmed from the end");
+    }
+
+    #[test]
+    fn test_trim_end_vs_trim_duration_equivalence() {
+        use crate::atom::util::time::scaled_duration;
+
+        println!("=== Testing trim_end vs trim_duration equivalence ===");
+
+        let movie_timescale = 600;
+        let original_duration = Duration::from_secs(12);
+        let trim_amount = Duration::from_secs(4);
+
+        // Create two identical metadata instances
+        let mut metadata1 = create_test_metadata(movie_timescale, original_duration);
+        let mut metadata2 = create_test_metadata(movie_timescale, original_duration);
+
+        println!("Original duration: {} seconds", original_duration.as_secs());
+        println!("Trimming: {} seconds from end", trim_amount.as_secs());
+
+        // Method 1: Use trim_end
+        #[allow(deprecated)]
+        metadata1.moov_mut().trim_end(trim_amount);
+
+        // Method 2: Use trim_duration with equivalent range
+        let trim_start = original_duration.saturating_sub(trim_amount);
+        let range = trim_start..;
+        metadata2.moov_mut().trim_duration(range);
+
+        // Compare movie durations
+        let movie_duration1 = metadata1.moov().header().map(|h| h.duration).unwrap_or(0);
+        let movie_duration2 = metadata2.moov().header().map(|h| h.duration).unwrap_or(0);
+
+        println!("trim_end result: {} (scaled)", movie_duration1);
+        println!("trim_duration result: {} (scaled)", movie_duration2);
+
+        assert_eq!(
+            movie_duration1, movie_duration2,
+            "trim_end and trim_duration should produce identical movie durations"
+        );
+
+        // Compare track durations
+        let track_duration1 = metadata1
+            .moov()
+            .into_tracks_iter()
+            .next()
+            .and_then(|t| t.header().map(|h| h.duration))
+            .unwrap_or(0);
+        let track_duration2 = metadata2
+            .moov()
+            .into_tracks_iter()
+            .next()
+            .and_then(|t| t.header().map(|h| h.duration))
+            .unwrap_or(0);
+
+        assert_eq!(
+            track_duration1, track_duration2,
+            "trim_end and trim_duration should produce identical track durations"
+        );
+
+        // Compare media durations
+        let media_duration1 = metadata1
+            .moov()
+            .into_tracks_iter()
+            .next()
+            .map(|t| t.media().header().map(|h| h.duration).unwrap_or(0))
+            .unwrap_or(0);
+        let media_duration2 = metadata2
+            .moov()
+            .into_tracks_iter()
+            .next()
+            .map(|t| t.media().header().map(|h| h.duration).unwrap_or(0))
+            .unwrap_or(0);
+
+        assert_eq!(
+            media_duration1, media_duration2,
+            "trim_end and trim_duration should produce identical media durations"
+        );
+
+        // Compare sample counts
+        let track1 = metadata1.moov().into_tracks_iter().next().unwrap();
+        let stbl1 = track1.media().media_information().sample_table();
+        let sample_count1 = stbl1
+            .sample_size()
+            .map(|stsz| stsz.entry_sizes.len())
+            .unwrap_or(0);
+
+        let track2 = metadata2.moov().into_tracks_iter().next().unwrap();
+        let stbl2 = track2.media().media_information().sample_table();
+        let sample_count2 = stbl2
+            .sample_size()
+            .map(|stsz| stsz.entry_sizes.len())
+            .unwrap_or(0);
+
+        assert_eq!(
+            sample_count1, sample_count2,
+            "trim_end and trim_duration should produce identical sample counts"
+        );
+
+        // Compare chunk counts
+        let chunk_count1 = stbl1
+            .chunk_offset()
+            .map(|stco| stco.chunk_offsets.len())
+            .unwrap_or(0);
+        let chunk_count2 = stbl2
+            .chunk_offset()
+            .map(|stco| stco.chunk_offsets.len())
+            .unwrap_or(0);
+
+        assert_eq!(
+            chunk_count1, chunk_count2,
+            "trim_end and trim_duration should produce identical chunk counts"
+        );
+
+        // Verify the expected result
+        let expected_final_duration = original_duration - trim_amount;
+        let expected_movie_duration =
+            scaled_duration(expected_final_duration, movie_timescale as u64);
+
+        assert_eq!(
+            movie_duration1, expected_movie_duration,
+            "Both methods should produce the expected final duration"
+        );
+
+        println!("✓ trim_end and trim_duration produce identical results");
+    }
+
+    #[test]
+    fn test_trim_end_edge_cases() {
+        println!("=== Testing trim_end edge cases ===");
+
+        // Test Case 1: Trim more than total duration
+        {
+            let movie_timescale = 600;
+            let original_duration = Duration::from_secs(5);
+            let mut metadata = create_test_metadata(movie_timescale, original_duration);
+
+            let excessive_trim = Duration::from_secs(10); // More than the 5 second file
+            println!(
+                "Test 1: Trimming {} seconds from {} second file (excessive)",
+                excessive_trim.as_secs(),
+                original_duration.as_secs()
+            );
+
+            #[allow(deprecated)]
+            metadata.moov_mut().trim_end(excessive_trim);
+
+            // Should result in zero or minimal duration
+            let final_duration = metadata.moov().header().map(|h| h.duration).unwrap_or(0);
+            println!("Result: {} (scaled)", final_duration);
+
+            // Should be zero or very close to zero
+            assert!(
+                final_duration <= 600, // At most 1 second worth at 600 timescale
+                "Excessive trim should result in very short or zero duration"
+            );
+        }
+
+        // Test Case 2: Trim zero duration
+        {
+            let movie_timescale = 600;
+            let original_duration = Duration::from_secs(8);
+            let mut metadata = create_test_metadata(movie_timescale, original_duration);
+
+            let initial_duration = metadata.moov().header().map(|h| h.duration).unwrap_or(0);
+            let zero_trim = Duration::ZERO;
+
+            println!("Test 2: Trimming {} seconds (no trim)", zero_trim.as_secs());
+
+            #[allow(deprecated)]
+            metadata.moov_mut().trim_end(zero_trim);
+
+            let final_duration = metadata.moov().header().map(|h| h.duration).unwrap_or(0);
+            println!("Initial: {}, Final: {}", initial_duration, final_duration);
+
+            assert_eq!(
+                initial_duration, final_duration,
+                "Zero duration trim should leave file unchanged"
+            );
+        }
+
+        // Test Case 3: Trim exact duration of file
+        {
+            let movie_timescale = 600;
+            let original_duration = Duration::from_secs(6);
+            let mut metadata = create_test_metadata(movie_timescale, original_duration);
+
+            println!(
+                "Test 3: Trimming exact duration ({} seconds)",
+                original_duration.as_secs()
+            );
+
+            #[allow(deprecated)]
+            metadata.moov_mut().trim_end(original_duration);
+
+            let final_duration = metadata.moov().header().map(|h| h.duration).unwrap_or(0);
+            println!("Final duration: {} (scaled)", final_duration);
+
+            // Should result in zero duration
+            assert_eq!(
+                final_duration, 0,
+                "Trimming entire file should result in zero duration"
+            );
+        }
+
+        println!("✓ All trim_end edge cases passed");
+    }
+
     fn create_metadata_for_genuine_merging_test(
         movie_timescale: u32,
         duration: Duration,
