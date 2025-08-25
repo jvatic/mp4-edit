@@ -100,18 +100,6 @@ impl SampleSizeAtom {
 
         self.sample_count = self.sample_count.saturating_sub(num_samples_removed);
     }
-
-    /// Removes the specified number of samples from the end
-    pub fn remove_samples_from_end(&mut self, samples_to_remove: u32) {
-        if !self.entry_sizes.is_empty() {
-            let new_len = self
-                .entry_sizes
-                .len()
-                .saturating_sub(samples_to_remove as usize);
-            self.entry_sizes.truncate(new_len);
-        }
-        self.sample_count = self.sample_count.saturating_sub(samples_to_remove);
-    }
 }
 
 #[bon]
