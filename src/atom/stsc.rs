@@ -70,12 +70,9 @@ pub struct SampleToChunkAtom {
 impl SampleToChunkAtom {
     #[builder]
     pub fn new(
-        #[builder(field = Vec::new())] entries: Vec<SampleToChunkEntry>,
         #[builder(default = 0)] version: u8,
         #[builder(default = [0u8; 3])] flags: [u8; 3],
-        #[builder(setters(vis = ""), overwritable)]
-        #[allow(unused)]
-        entries_marker: bool,
+        #[builder(with = FromIterator::from_iter)] entries: Vec<SampleToChunkEntry>,
     ) -> Self {
         Self {
             version,
@@ -198,30 +195,14 @@ impl SampleToChunkAtom {
 }
 
 impl<S: sample_to_chunk_atom_builder::State> SampleToChunkAtomBuilder<S> {
-    fn push_entry(
-        mut self,
-        entry: SampleToChunkEntry,
-    ) -> SampleToChunkAtomBuilder<sample_to_chunk_atom_builder::SetEntriesMarker<S>> {
-        self.entries.push(entry);
-        self.entries_marker(true)
-    }
-
     pub fn entry(
         self,
         entry: impl Into<SampleToChunkEntry>,
-    ) -> SampleToChunkAtomBuilder<sample_to_chunk_atom_builder::SetEntriesMarker<S>> {
-        self.push_entry(entry.into())
-    }
-
-    pub fn entries(
-        mut self,
-        entries: impl Into<Vec<SampleToChunkEntry>>,
-    ) -> SampleToChunkAtomBuilder<sample_to_chunk_atom_builder::SetEntriesMarker<S>>
+    ) -> SampleToChunkAtomBuilder<sample_to_chunk_atom_builder::SetEntries<S>>
     where
-        S::EntriesMarker: sample_to_chunk_atom_builder::IsUnset,
+        S::Entries: sample_to_chunk_atom_builder::IsUnset,
     {
-        self.entries = entries.into();
-        self.entries_marker(true)
+        self.entries(vec![entry.into()])
     }
 }
 

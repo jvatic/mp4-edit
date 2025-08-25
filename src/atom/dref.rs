@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context};
-use bon::{bon, Builder};
+use bon::Builder;
 use futures_io::AsyncRead;
 use std::io::Read;
 
@@ -93,63 +93,31 @@ impl DataReferenceEntry {
 
 /// Data Reference Atom (dref) - ISO/IEC 14496-12
 /// Contains a table of data references that declare the location(s) of the media data
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Builder)]
 pub struct DataReferenceAtom {
     /// Version of the dref atom format
+    #[builder(default = 0)]
     pub version: u8,
     /// Atom flags
+    #[builder(default = [0u8; 3])]
     pub flags: [u8; 3],
     /// Data reference entries
+    #[builder(with = FromIterator::from_iter)]
     pub entries: Vec<DataReferenceEntry>,
     /// Number of entries in the table
+    #[builder(skip = u32::try_from(entries.len()).expect("entries len should fit in u32"))]
     pub entry_count: u32,
 }
 
-#[bon]
-impl DataReferenceAtom {
-    #[builder]
-    pub fn new(
-        #[builder(field = Vec::new())] entries: Vec<DataReferenceEntry>,
-        #[builder(default = 0)] version: u8,
-        #[builder(default = [0u8; 3])] flags: [u8; 3],
-        #[builder(setters(vis = ""), overwritable)]
-        #[allow(unused)]
-        entries_marker: bool,
-    ) -> Self {
-        Self {
-            version,
-            flags,
-            entry_count: u32::try_from(entries.len()).expect("entries len should fit in u32"),
-            entries,
-        }
-    }
-}
-
 impl<S: data_reference_atom_builder::State> DataReferenceAtomBuilder<S> {
-    fn push_entry(
-        mut self,
-        entry: DataReferenceEntry,
-    ) -> DataReferenceAtomBuilder<data_reference_atom_builder::SetEntriesMarker<S>> {
-        self.entries.push(entry);
-        self.entries_marker(true)
-    }
-
     pub fn entry(
         self,
-        entry: impl Into<DataReferenceEntry>,
-    ) -> DataReferenceAtomBuilder<data_reference_atom_builder::SetEntriesMarker<S>> {
-        self.push_entry(entry.into())
-    }
-
-    pub fn entries(
-        mut self,
-        entries: impl Into<Vec<DataReferenceEntry>>,
-    ) -> DataReferenceAtomBuilder<data_reference_atom_builder::SetEntriesMarker<S>>
+        entry: DataReferenceEntry,
+    ) -> DataReferenceAtomBuilder<data_reference_atom_builder::SetEntries<S>>
     where
-        S::EntriesMarker: data_reference_atom_builder::IsUnset,
+        S::Entries: data_reference_atom_builder::IsUnset,
     {
-        self.entries = entries.into();
-        self.entries_marker(true)
+        self.entries(vec![entry])
     }
 }
 

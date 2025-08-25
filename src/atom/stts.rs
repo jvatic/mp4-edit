@@ -76,12 +76,9 @@ pub struct TimeToSampleAtom {
 impl TimeToSampleAtom {
     #[builder]
     pub fn new(
-        #[builder(field = Vec::new())] entries: Vec<TimeToSampleEntry>,
         #[builder(default = 0)] version: u8,
         #[builder(default = [0u8; 3])] flags: [u8; 3],
-        #[builder(setters(vis = ""), overwritable)]
-        #[allow(unused)]
-        entries_marker: bool,
+        #[builder(with = FromIterator::from_iter)] entries: Vec<TimeToSampleEntry>,
     ) -> Self {
         Self {
             version,
@@ -168,22 +165,13 @@ impl TimeToSampleAtom {
 
 impl<S: time_to_sample_atom_builder::State> TimeToSampleAtomBuilder<S> {
     pub fn entry(
-        mut self,
+        self,
         entry: impl Into<TimeToSampleEntry>,
-    ) -> TimeToSampleAtomBuilder<time_to_sample_atom_builder::SetEntriesMarker<S>> {
-        self.entries.push(entry.into());
-        self.entries_marker(true)
-    }
-
-    pub fn entries(
-        mut self,
-        entries: impl Into<Vec<TimeToSampleEntry>>,
-    ) -> TimeToSampleAtomBuilder<time_to_sample_atom_builder::SetEntriesMarker<S>>
+    ) -> TimeToSampleAtomBuilder<time_to_sample_atom_builder::SetEntries<S>>
     where
-        S::EntriesMarker: time_to_sample_atom_builder::IsUnset,
+        S::Entries: time_to_sample_atom_builder::IsUnset,
     {
-        self.entries = entries.into();
-        self.entries_marker(true)
+        self.entries(vec![entry.into()])
     }
 }
 
