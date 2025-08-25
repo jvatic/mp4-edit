@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
 use std::io::SeekFrom;
-use std::ops::{Deref, DerefMut};
+use std::ops::{Deref, DerefMut, RangeBounds};
 use std::time::Duration;
 use thiserror::Error;
 
@@ -22,7 +22,7 @@ use crate::atom::stsd::{
     SampleEntryData, SampleEntryType, StsdExtension,
 };
 use crate::atom::stts::TimeToSampleEntry;
-use crate::atom::util::time::scaled_duration;
+use crate::atom::util::time::{duration_sub_range, scaled_duration, scaled_duration_range};
 use crate::atom::util::DebugEllipsis;
 use crate::atom::AtomHeader;
 use crate::chunk_offset_builder::{ChunkInfo, ChunkOffsetBuilder};
@@ -1079,20 +1079,25 @@ impl<'a> MoovAtomRefMut<'a> {
         self
     }
 
-    /// Trims leading duration
-    pub fn trim_start(&mut self, duration: Duration) -> &mut Self {
+    pub fn trim_duration(&mut self, range: impl RangeBounds<Duration> + Clone) -> &mut Self {
         // TODO: after trimming samples,
         // - [ ] Update mdhd duration to match: sample_count × 1024
         // - [ ] Update mvhd duration proportionally: (mdhd_duration × 600) / 44100
         let movie_timescale = u64::from(
             self.header()
-                .update_duration(|d| d.saturating_sub(duration))
+                .update_duration(|d| duration_sub_range(d, range.clone()))
                 .timescale,
         );
         for mut trak in self.tracks() {
-            trak.trim_start(movie_timescale, duration);
+            trak.trim_duration(movie_timescale, range.clone());
         }
         self
+    }
+
+    /// Trims leading duration
+    pub fn trim_start(&mut self, duration: Duration) -> &mut Self {
+        let range = Duration::ZERO..=duration;
+        self.trim_duration(range)
     }
 
     /// Trims trailing duration
@@ -1347,27 +1352,26 @@ impl<'a> TrakAtomRefMut<'a> {
         }
     }
 
-    fn trim_start(&mut self, movie_timescale: u64, duration: Duration) -> &mut Self {
+    fn trim_duration(
+        &mut self,
+        movie_timescale: u64,
+        range: impl RangeBounds<Duration> + Clone,
+    ) -> &mut Self {
         self.header()
-            .update_duration(movie_timescale, |d| d.saturating_sub(duration));
+            .update_duration(movie_timescale, |d| duration_sub_range(d, range.clone()));
         let mut mdia = self.media();
         let media_timescale = u64::from(
             mdia.header()
-                .update_duration(|d| d.saturating_sub(duration))
+                .update_duration(|d| duration_sub_range(d, range.clone()))
                 .timescale,
         );
         let mut minf = mdia.media_information();
         let mut stbl = minf.sample_table();
 
-        let duration_to_trim = scaled_duration(duration, media_timescale);
-        if duration_to_trim == 0 {
-            return self; // Nothing to trim
-        }
+        let scaled_range = scaled_duration_range(range, media_timescale);
 
         // Step 1: Determine which samples to remove based on time
-        let sample_indices_to_remove = stbl
-            .time_to_sample()
-            .trim_samples(0..=(duration_to_trim as u64));
+        let sample_indices_to_remove = stbl.time_to_sample().trim_samples(scaled_range);
 
         // Step 2: Update sample sizes
         stbl.sample_size()
