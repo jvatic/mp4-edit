@@ -100,6 +100,15 @@ impl SampleSizeAtom {
 
         self.sample_count = self.sample_count.saturating_sub(num_samples_removed);
     }
+
+    /// Returns `sample_count` if it's set, otherwise `entry_sizes.len()`
+    pub fn sample_count(&self) -> usize {
+        if self.sample_count > 0 {
+            self.sample_count as usize
+        } else {
+            self.entry_sizes.len()
+        }
+    }
 }
 
 #[bon]

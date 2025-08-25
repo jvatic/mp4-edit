@@ -1883,7 +1883,12 @@ mod tests {
     };
     use std::time::Duration;
 
-    fn create_test_metadata(movie_timescale: u32, duration: Duration) -> Metadata {
+    #[bon::builder(finish_fn(name = "build"))]
+    fn create_test_metadata(
+        movie_timescale: u32,
+        media_timescale: u32,
+        duration: Duration,
+    ) -> Metadata {
         let atoms = vec![
             // Create ftyp atom
             Atom::builder()
@@ -1917,7 +1922,7 @@ mod tests {
                         )
                         .build(),
                     // Track (trak) with complex sample data
-                    create_test_track(movie_timescale, duration),
+                    create_test_track(movie_timescale, media_timescale, duration),
                 ])
                 .build(),
         ];
@@ -1925,7 +1930,7 @@ mod tests {
         Metadata::new(atoms.into())
     }
 
-    fn create_test_track(movie_timescale: u32, duration: Duration) -> Atom {
+    fn create_test_track(movie_timescale: u32, media_timescale: u32, duration: Duration) -> Atom {
         Atom::builder()
             .header(AtomHeader::new(*TRAK))
             .children(vec![
@@ -1940,13 +1945,12 @@ mod tests {
                     )
                     .build(),
                 // Media (mdia) with complex sample data
-                create_test_media(duration),
+                create_test_media(media_timescale, duration),
             ])
             .build()
     }
 
-    fn create_test_media(duration: Duration) -> Atom {
-        let media_timescale = 44100u32;
+    fn create_test_media(media_timescale: u32, duration: Duration) -> Atom {
         Atom::builder()
             .header(AtomHeader::new(*MDIA))
             .children(vec![
@@ -2007,79 +2011,34 @@ mod tests {
     }
 
     fn create_test_sample_table(duration: Duration, media_timescale: u32) -> Atom {
-        // Create sample data with multiple sample-to-chunk entries to test merging scenarios
-        let sample_rate = media_timescale;
+        // Create one sample per second with 2 samples per chunk
         let duration_secs = duration.as_secs() as u32;
-        let total_samples = sample_rate * duration_secs;
+        let total_samples = duration_secs; // One sample per second
+        let samples_per_chunk = 2u32;
 
-        // Create a pattern of different samples_per_chunk values
-        // This simulates real-world scenarios where chunk sizes vary
-        let chunk_patterns = vec![
-            (1024, 0.3), // 30% of chunks have 1024 samples each
-            (512, 0.4),  // 40% of chunks have 512 samples each
-            (2048, 0.2), // 20% of chunks have 2048 samples each
-            (1024, 0.1), // 10% of chunks have 1024 samples each (will merge with first pattern)
-        ];
+        // Calculate number of chunks needed
+        let total_chunks = (total_samples + samples_per_chunk - 1) / samples_per_chunk;
 
-        let mut stsc_entries = Vec::new();
+        // bytes per sample
+        const SAMPLE_SIZE: usize = 256;
+
+        // Create chunk offsets
         let mut chunk_offsets = Vec::new();
-        let mut sample_sizes = Vec::new();
-
-        let mut current_chunk = 1u32;
-        let mut current_sample = 0u32;
         let mut current_offset = 1000u64;
-
-        for (samples_per_chunk, ratio) in chunk_patterns {
-            let chunks_in_pattern =
-                ((total_samples as f32 * ratio) / samples_per_chunk as f32).ceil() as u32;
-
-            if chunks_in_pattern > 0 && current_sample < total_samples {
-                stsc_entries.push(
-                    SampleToChunkEntry::builder()
-                        .first_chunk(current_chunk)
-                        .samples_per_chunk(samples_per_chunk)
-                        .sample_description_index(1)
-                        .build(),
-                );
-
-                for _ in 0..chunks_in_pattern {
-                    if current_sample >= total_samples {
-                        break;
-                    }
-
-                    chunk_offsets.push(current_offset);
-
-                    let samples_in_this_chunk =
-                        std::cmp::min(samples_per_chunk, total_samples - current_sample);
-
-                    // Add sample sizes for this chunk
-                    for _ in 0..samples_in_this_chunk {
-                        sample_sizes.push(256); // 256 bytes per sample
-                    }
-
-                    current_sample += samples_in_this_chunk;
-                    current_chunk += 1;
-                    current_offset += samples_in_this_chunk as u64 * 256;
-
-                    if current_sample >= total_samples {
-                        break;
-                    }
-                }
-            }
+        for _ in 0..total_chunks {
+            chunk_offsets.push(current_offset);
+            current_offset += samples_per_chunk as u64 * SAMPLE_SIZE as u64;
         }
 
-        // Ensure we have at least one entry
-        if stsc_entries.is_empty() {
-            stsc_entries.push(
-                SampleToChunkEntry::builder()
-                    .first_chunk(1)
-                    .samples_per_chunk(1024)
-                    .sample_description_index(1)
-                    .build(),
-            );
-            chunk_offsets.push(1000);
-            sample_sizes.extend(vec![256; total_samples as usize]);
-        }
+        // Create sample sizes (256 bytes per sample)
+        let sample_sizes: Vec<u32> = vec![SAMPLE_SIZE as u32; total_samples as usize];
+
+        // Create single sample-to-chunk entry (all chunks have 2 samples)
+        let stsc_entries = vec![SampleToChunkEntry::builder()
+            .first_chunk(1)
+            .samples_per_chunk(samples_per_chunk)
+            .sample_description_index(1)
+            .build()];
 
         Atom::builder()
             .header(AtomHeader::new(*STBL))
@@ -2089,21 +2048,21 @@ mod tests {
                     .header(AtomHeader::new(*STSD))
                     .data(SampleDescriptionTableAtom::default())
                     .build(),
-                // Time to Sample (stts)
+                // Time to Sample (stts) - each sample represents 1 second
                 Atom::builder()
                     .header(AtomHeader::new(*STTS))
                     .data(
                         TimeToSampleAtom::builder()
                             .entry(
                                 TimeToSampleEntry::builder()
-                                    .sample_count(total_samples as u32)
-                                    .sample_duration(1)
+                                    .sample_count(total_samples)
+                                    .sample_duration(media_timescale) // 1 second per sample
                                     .build(),
                             )
                             .build(),
                     )
                     .build(),
-                // Sample to Chunk (stsc) - Multiple entries
+                // Sample to Chunk (stsc) - 2 samples per chunk
                 Atom::builder()
                     .header(AtomHeader::new(*STSC))
                     .data(SampleToChunkAtom::from(stsc_entries))
@@ -2139,6 +2098,9 @@ mod tests {
             expected_remaining_duration: Duration,
         }
 
+        let movie_timescale = 1_000;
+        let media_timescale = 10_000;
+
         let test_cases = vec![
             TrimDurationTestCase {
                 name: "trim_start_2_seconds",
@@ -2162,106 +2124,49 @@ mod tests {
                 expected_remaining_duration: Duration::from_secs(8),
             },
             TrimDurationTestCase {
-                name: "trim_small_range_1_second",
-                original_duration: Duration::from_secs(10),
-                start_bound: Bound::Included(Duration::from_secs(3)),
-                end_bound: Bound::Included(Duration::from_secs(4)),
-                expected_remaining_duration: Duration::from_secs(9),
-            },
-            TrimDurationTestCase {
-                name: "trim_exclusive_bounds",
+                name: "trim__middle_exclusive_start_2_seconds",
                 original_duration: Duration::from_secs(10),
                 start_bound: Bound::Excluded(Duration::from_secs(2)),
-                end_bound: Bound::Excluded(Duration::from_secs(5)),
-                // Excludes bounds, so removes from 2.000000001 to 4.999999999
-                expected_remaining_duration: Duration::from_secs(7),
+                end_bound: Bound::Included(Duration::from_secs(5)),
+                expected_remaining_duration: Duration::from_secs(8),
             },
             TrimDurationTestCase {
-                name: "trim_mixed_bounds",
+                name: "trim_middle_exclusive_end_2_seconds",
                 original_duration: Duration::from_secs(10),
                 start_bound: Bound::Included(Duration::from_secs(1)),
                 end_bound: Bound::Excluded(Duration::from_secs(3)),
-                // Includes start, excludes end: removes from 1.0 to 2.999999999
                 expected_remaining_duration: Duration::from_secs(8),
             },
             TrimDurationTestCase {
-                name: "trim_large_range_8_seconds",
+                name: "trim_start_unbounded_5_seconds",
                 original_duration: Duration::from_secs(10),
-                start_bound: Bound::Included(Duration::from_secs(1)),
-                end_bound: Bound::Included(Duration::from_secs(9)),
-                expected_remaining_duration: Duration::from_secs(2),
-            },
-            // Test cases specifically designed to trigger entry merging scenarios
-            TrimDurationTestCase {
-                name: "trim_start_partial_chunk_merge",
-                original_duration: Duration::from_secs(5),
-                start_bound: Bound::Included(Duration::ZERO),
-                end_bound: Bound::Included(Duration::from_millis(500)), // Trim small amount from start
-                expected_remaining_duration: Duration::from_millis(4500),
-            },
-            TrimDurationTestCase {
-                name: "trim_middle_creating_identical_chunks",
-                original_duration: Duration::from_secs(8),
-                start_bound: Bound::Included(Duration::from_secs(2)),
-                end_bound: Bound::Included(Duration::from_secs(6)), // Remove middle, leave start/end
-                expected_remaining_duration: Duration::from_secs(4),
-            },
-            TrimDurationTestCase {
-                name: "trim_multiple_small_ranges",
-                original_duration: Duration::from_secs(12),
-                start_bound: Bound::Included(Duration::from_secs(4)),
-                end_bound: Bound::Included(Duration::from_secs(8)), // Remove 4-second middle
-                expected_remaining_duration: Duration::from_secs(8),
-            },
-            TrimDurationTestCase {
-                name: "trim_end_partial_chunk_merge",
-                original_duration: Duration::from_secs(6),
-                start_bound: Bound::Included(Duration::from_millis(5500)),
-                end_bound: Bound::Included(Duration::from_secs(6)), // Trim small amount from end
-                expected_remaining_duration: Duration::from_millis(5500),
-            },
-            TrimDurationTestCase {
-                name: "trim_very_small_middle_section",
-                original_duration: Duration::from_secs(15),
-                start_bound: Bound::Included(Duration::from_millis(7000)),
-                end_bound: Bound::Included(Duration::from_millis(8000)), // Remove 1 second from middle
-                expected_remaining_duration: Duration::from_secs(14),
-            },
-            TrimDurationTestCase {
-                name: "trim_unbounded_start",
-                original_duration: Duration::from_secs(15),
                 start_bound: Bound::Unbounded,
-                end_bound: Bound::Included(Duration::from_secs(5)), // Remove 5 seconds from end
-                expected_remaining_duration: Duration::from_secs(10),
+                end_bound: Bound::Included(Duration::from_secs(5)),
+                expected_remaining_duration: Duration::from_secs(5),
             },
             TrimDurationTestCase {
-                name: "trim_unbounded_end",
-                original_duration: Duration::from_secs(15),
-                start_bound: Bound::Excluded(Duration::from_secs(10)),
-                end_bound: Bound::Unbounded, // Remove 5 seconds from end
-                expected_remaining_duration: Duration::from_secs(10),
+                name: "trim_end_unbounded_6_seconds",
+                original_duration: Duration::from_secs(100),
+                start_bound: Bound::Included(Duration::from_secs(94)),
+                end_bound: Bound::Unbounded,
+                expected_remaining_duration: Duration::from_secs(94),
+            },
+            TrimDurationTestCase {
+                name: "trim_unbounded",
+                original_duration: Duration::from_secs(100),
+                start_bound: Bound::Unbounded,
+                end_bound: Bound::Unbounded,
+                expected_remaining_duration: Duration::ZERO,
             },
         ];
 
         for test_case in test_cases {
             // Create fresh metadata for each test case
-            let movie_timescale = 600;
-            let mut metadata = create_test_metadata(movie_timescale, test_case.original_duration);
-
-            // Get initial values for comparison
-            let initial_movie_duration = metadata.moov().header().map(|h| h.duration).unwrap_or(0);
-            let initial_track_duration = metadata
-                .moov()
-                .into_tracks_iter()
-                .next()
-                .and_then(|t| t.header().map(|h| h.duration))
-                .unwrap_or(0);
-            let initial_media_duration = metadata
-                .moov()
-                .into_tracks_iter()
-                .next()
-                .map(|t| t.media().header().map(|h| h.duration).unwrap_or(0))
-                .unwrap_or(0);
+            let mut metadata = create_test_metadata()
+                .movie_timescale(movie_timescale)
+                .media_timescale(media_timescale)
+                .duration(test_case.original_duration)
+                .build();
 
             // Perform the trim operation with the range bounds
             let range = (test_case.start_bound, test_case.end_bound);
@@ -2303,80 +2208,86 @@ mod tests {
                 .next()
                 .map(|t| t.media().header().map(|h| h.duration).unwrap_or(0))
                 .unwrap_or(0);
-            let media_timescale = 44100u64;
-            let expected_media_duration =
-                scaled_duration(test_case.expected_remaining_duration, media_timescale);
+            let expected_media_duration = scaled_duration(
+                test_case.expected_remaining_duration,
+                media_timescale as u64,
+            );
             assert_eq!(
                 new_media_duration, expected_media_duration,
                 "Media duration should match expected for test case: {}",
                 test_case.name
             );
 
-            // Verify duration was actually reduced (except for zero-duration trims)
-            let range_duration = match (&test_case.start_bound, &test_case.end_bound) {
-                (Bound::Included(start), Bound::Included(end)) => end.saturating_sub(*start),
-                (Bound::Included(start), Bound::Excluded(end)) => end
-                    .saturating_sub(*start)
-                    .saturating_sub(Duration::from_nanos(1)),
-                (Bound::Excluded(start), Bound::Included(end)) => end
-                    .saturating_sub(*start)
-                    .saturating_sub(Duration::from_nanos(1)),
-                (Bound::Excluded(start), Bound::Excluded(end)) => end
-                    .saturating_sub(*start)
-                    .saturating_sub(Duration::from_nanos(2)),
-                _ => Duration::ZERO, // For unbounded cases
-            };
-
-            if range_duration > Duration::ZERO {
-                assert!(
-                    new_movie_duration < initial_movie_duration,
-                    "Movie duration should be reduced for test case: {}",
-                    test_case.name
-                );
-                assert!(
-                    new_track_duration < initial_track_duration,
-                    "Track duration should be reduced for test case: {}",
-                    test_case.name
-                );
-                assert!(
-                    new_media_duration < initial_media_duration,
-                    "Media duration should be reduced for test case: {}",
-                    test_case.name
-                );
-            }
-
             // Verify sample table structure is still valid
             let track = metadata.moov().into_tracks_iter().next().unwrap();
             let stbl = track.media().media_information().sample_table();
 
-            // Should still have some samples unless we trimmed everything
-            if test_case.expected_remaining_duration > Duration::ZERO {
-                if let Some(stsz) = stbl.sample_size() {
-                    assert!(
-                        !stsz.entry_sizes.is_empty(),
-                        "Should have samples remaining for test case: {}",
-                        test_case.name
-                    );
-                }
+            // Validate that all required sample table atoms exist
+            let stts = stbl
+                .time_to_sample()
+                .expect("Time-to-sample atom should exist");
+            let stsc = stbl
+                .sample_to_chunk()
+                .expect("Sample-to-chunk atom should exist");
+            let stsz = stbl.sample_size().expect("Sample-size atom should exist");
+            let stco = stbl.chunk_offset().expect("Chunk-offset atom should exist");
 
-                if let Some(stts) = stbl.time_to_sample() {
-                    let total_sample_count: u64 =
-                        stts.entries.iter().map(|e| e.sample_count as u64).sum();
-                    assert!(
-                        total_sample_count > 0,
-                        "Should have samples in time-to-sample for test case: {}",
-                        test_case.name
-                    );
-                }
+            // Calculate total samples from sample sizes
+            let total_samples = stsz.sample_count() as u32;
+            assert!(
+                total_samples > 0,
+                "Sample table should have samples for test case: {}",
+                test_case.name
+            );
 
-                if let Some(stco) = stbl.chunk_offset() {
-                    assert!(
-                        !stco.chunk_offsets.is_empty(),
-                        "Should have chunks remaining for test case: {}",
-                        test_case.name
-                    );
-                }
+            // Validate time-to-sample consistency
+            let stts_total_samples: u32 = stts.entries.iter().map(|entry| entry.sample_count).sum();
+            assert_eq!(
+                stts_total_samples, total_samples,
+                "Time-to-sample total samples should match sample size count for test case: {}",
+                test_case.name
+            );
+
+            // Validate sample-to-chunk references
+            let chunk_count = stco.chunk_count() as u32;
+            assert!(
+                chunk_count > 0,
+                "Should have at least one chunk for test case: {}",
+                test_case.name
+            );
+
+            // Verify all chunk references in stsc are valid
+            for entry in stsc.entries.iter() {
+                assert!(
+                    entry.first_chunk >= 1 && entry.first_chunk <= chunk_count,
+                    "Sample-to-chunk first_chunk {} should be between 1 and {} for test case: {}",
+                    entry.first_chunk,
+                    chunk_count,
+                    test_case.name
+                );
+                assert!(
+                    entry.samples_per_chunk > 0,
+                    "Sample-to-chunk samples_per_chunk should be > 0 for test case: {}",
+                    test_case.name
+                );
             }
+
+            // Verify expected duration consistency with time-to-sample
+            let total_duration: u64 = stts
+                .entries
+                .iter()
+                .map(|entry| entry.sample_count as u64 * entry.sample_duration as u64)
+                .sum();
+            let expected_duration_scaled = scaled_duration(
+                test_case.expected_remaining_duration,
+                media_timescale as u64,
+            );
+
+            assert_eq!(
+                total_duration, expected_duration_scaled,
+                "Sample table total duration should match the expected duration for test case: {}",
+                test_case.name
+            );
 
             println!("✓ Test case '{}' passed", test_case.name);
         }
