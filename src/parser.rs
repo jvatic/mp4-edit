@@ -2111,12 +2111,7 @@ mod tests {
                 // Sample Size (stsz)
                 Atom::builder()
                     .header(AtomHeader::new(*STSZ))
-                    .data(
-                        SampleSizeAtom::builder()
-                            .sample_size(0) // Variable size
-                            .entry_sizes(sample_sizes)
-                            .build(),
-                    )
+                    .data(SampleSizeAtom::builder().entry_sizes(sample_sizes).build())
                     .build(),
                 // Chunk Offset (stco)
                 Atom::builder()
@@ -2894,7 +2889,6 @@ mod tests {
                                                         .header(AtomHeader::new(*STSZ))
                                                         .data(
                                                             SampleSizeAtom::builder()
-                                                                .sample_size(0)
                                                                 .entry_sizes(vec![
                                                                     256;
                                                                     total_samples
@@ -3211,12 +3205,7 @@ mod tests {
                 // Sample Size (stsz)
                 Atom::builder()
                     .header(AtomHeader::new(*STSZ))
-                    .data(
-                        SampleSizeAtom::builder()
-                            .sample_size(0) // Variable size
-                            .entry_sizes(sample_sizes)
-                            .build(),
-                    )
+                    .data(SampleSizeAtom::builder().entry_sizes(sample_sizes).build())
                     .build(),
                 // Chunk Offset (stco)
                 Atom::builder()
@@ -3843,12 +3832,7 @@ mod tests {
                     .build(),
                 Atom::builder()
                     .header(AtomHeader::new(*STSZ))
-                    .data(
-                        SampleSizeAtom::builder()
-                            .sample_size(0)
-                            .entry_sizes(sample_sizes)
-                            .build(),
-                    )
+                    .data(SampleSizeAtom::builder().entry_sizes(sample_sizes).build())
                     .build(),
                 Atom::builder()
                     .header(AtomHeader::new(*STCO))

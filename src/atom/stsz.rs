@@ -106,12 +106,18 @@ impl SampleSizeAtom {
 impl SampleSizeAtom {
     #[builder]
     pub fn new(
-        #[builder(default = 0)] sample_size: u32,
+        #[builder(setters(vis = "", name = "sample_size_internal"))] sample_size: u32,
         #[builder(default = 0)] sample_count: u32,
         /// either set `sample_size` and `sample_count` or `entry_sizes`
-        #[builder(into, default = SampleEntrySizes(Vec::new()))]
-        entry_sizes: SampleEntrySizes,
+        #[builder(with = FromIterator::from_iter, setters(vis = "", name = "entry_sizes_internal"))]
+        entry_sizes: Vec<u32>,
     ) -> Self {
+        let entry_sizes: SampleEntrySizes = entry_sizes.into();
+        let sample_count = if sample_count == 0 {
+            u32::try_from(entry_sizes.len()).expect("entry_sizes.len() should fit in a u32")
+        } else {
+            sample_count
+        };
         Self {
             version: 0,
             flags: 0,
@@ -135,6 +141,39 @@ impl SampleSizeAtom {
         } else {
             Either::Right(self.entry_sizes.iter())
         }
+    }
+}
+
+#[bon]
+impl<S: sample_size_atom_builder::State> SampleSizeAtomBuilder<S> {
+    pub fn sample_size(
+        self,
+        sample_size: u32,
+    ) -> SampleSizeAtomBuilder<
+        sample_size_atom_builder::SetSampleSize<sample_size_atom_builder::SetEntrySizes<S>>,
+    >
+    where
+        S::EntrySizes: sample_size_atom_builder::IsUnset,
+        S::SampleSize: sample_size_atom_builder::IsUnset,
+    {
+        self.entry_sizes_internal(vec![])
+            .sample_size_internal(sample_size)
+    }
+
+    #[builder(finish_fn(name = "build"))]
+    pub fn entry_sizes(
+        self,
+        #[builder(start_fn)] entry_sizes: impl IntoIterator<Item = u32>,
+    ) -> SampleSizeAtom
+    where
+        S::EntrySizes: sample_size_atom_builder::IsUnset,
+        S::SampleSize: sample_size_atom_builder::IsUnset,
+        S::SampleCount: sample_size_atom_builder::IsUnset,
+    {
+        self.entry_sizes_internal(entry_sizes)
+            .sample_size_internal(0)
+            .sample_count(0)
+            .build()
     }
 }
 
