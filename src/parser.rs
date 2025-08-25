@@ -4,7 +4,7 @@ use derive_more::Display;
 use futures_io::{AsyncRead, AsyncSeek};
 use futures_util::io::{AsyncReadExt, AsyncSeekExt, Cursor};
 use std::collections::VecDeque;
-use std::fmt;
+use std::fmt::{self, Debug};
 use std::future::Future;
 use std::io::SeekFrom;
 use std::ops::{Deref, DerefMut, RangeBounds};
@@ -1099,7 +1099,10 @@ impl<'a> MoovAtomRefMut<'a> {
     }
 
     /// Trims duration range from anywhere
-    pub fn trim_duration(&mut self, range: impl RangeBounds<Duration> + Clone) -> &mut Self {
+    pub fn trim_duration<R>(&mut self, range: R) -> &mut Self
+    where
+        R: RangeBounds<Duration> + Clone + Debug,
+    {
         // TODO: after trimming samples,
         // - [ ] Update mdhd duration to match: sample_count × 1024
         // - [ ] Update mvhd duration proportionally: (mdhd_duration × 600) / 44100
@@ -1353,11 +1356,10 @@ impl<'a> TrakAtomRefMut<'a> {
         }
     }
 
-    fn trim_duration(
-        &mut self,
-        movie_timescale: u64,
-        range: impl RangeBounds<Duration> + Clone,
-    ) -> &mut Self {
+    fn trim_duration<R>(&mut self, movie_timescale: u64, range: R) -> &mut Self
+    where
+        R: RangeBounds<Duration> + Clone + Debug,
+    {
         self.header()
             .update_duration(movie_timescale, |d| duration_sub_range(d, range.clone()));
         let mut mdia = self.media();
@@ -1372,7 +1374,7 @@ impl<'a> TrakAtomRefMut<'a> {
         let scaled_range = scaled_duration_range(range, media_timescale);
 
         // Step 1: Determine which samples to remove based on time
-        let sample_indices_to_remove = stbl.time_to_sample().trim_samples(scaled_range);
+        let sample_indices_to_remove = stbl.time_to_sample().trim_duration(scaled_range);
 
         // Step 2: Update sample sizes
         stbl.sample_size()
