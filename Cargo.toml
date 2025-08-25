@@ -9,7 +9,7 @@ edition = "2021"
 aes = "0.8.4"
 anyhow = "1.0.98"
 async-stream = "0.3"
-bon = { version = "3.6.5", features = ["experimental-overwritable"] }
+bon = "3.6.5"
 cbc = "0.1.2"
 derive_more = { version = "2.0.1", features = ["full"] }
 either = "1.15.0"
