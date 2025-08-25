@@ -114,15 +114,6 @@ impl ChunkOffsetAtom {
             keep
         });
     }
-
-    /// Removes the specified number of chunks from the end
-    pub fn remove_chunks_from_end(&mut self, chunks_to_remove: u32) {
-        let new_len = self
-            .chunk_offsets
-            .len()
-            .saturating_sub(chunks_to_remove as usize);
-        self.chunk_offsets.truncate(new_len);
-    }
 }
 
 impl<S: chunk_offset_atom_builder::State> ChunkOffsetAtomBuilder<S> {
