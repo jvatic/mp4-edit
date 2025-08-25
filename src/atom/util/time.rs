@@ -1,4 +1,5 @@
 use std::{
+    fmt::Debug,
     ops::RangeBounds,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -19,7 +20,7 @@ pub fn unscaled_duration(duration: u64, timescale: u64) -> Duration {
 pub fn scaled_duration_range(
     range: impl RangeBounds<Duration>,
     timescale: u64,
-) -> impl RangeBounds<u64> {
+) -> impl RangeBounds<u64> + Debug {
     use std::ops::Bound;
     let start = match range.start_bound() {
         Bound::Included(start) => Bound::Included(scaled_duration(*start, timescale)),
