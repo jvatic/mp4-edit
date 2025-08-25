@@ -6,6 +6,7 @@ use futures_io::AsyncRead;
 use std::{
     fmt::{self},
     io::Read,
+    ops::Range,
 };
 
 use crate::{
@@ -85,22 +86,19 @@ pub struct SampleSizeAtom {
 }
 
 impl SampleSizeAtom {
-    pub fn remove_sample_indices(&mut self, indices_to_remove: &[usize]) {
-        if !self.entry_sizes.is_empty() && !indices_to_remove.is_empty() {
-            // Use HashSet for O(1) lookups instead of O(n²) Vec::remove calls
-            let removal_set: std::collections::HashSet<usize> =
-                indices_to_remove.iter().copied().collect();
+    pub fn remove_sample_indices(&mut self, indices_to_remove: &[Range<usize>]) {
+        let num_samples_removed = indices_to_remove
+            .iter()
+            .map(|r| r.end - r.start)
+            .sum::<usize>() as u32;
 
-            let mut index = 0;
-            self.entry_sizes.retain(|_| {
-                let keep = !removal_set.contains(&index);
-                index += 1;
-                keep
-            });
+        if !self.entry_sizes.is_empty() && !indices_to_remove.is_empty() {
+            for range in indices_to_remove {
+                self.entry_sizes.drain(range.clone());
+            }
         }
-        self.sample_count = self
-            .sample_count
-            .saturating_sub(indices_to_remove.len() as u32);
+
+        self.sample_count = self.sample_count.saturating_sub(num_samples_removed);
     }
 
     /// Removes the specified number of samples from the end

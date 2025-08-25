@@ -3,7 +3,7 @@ use bon::{bon, Builder};
 use derive_more::{Deref, DerefMut};
 
 use futures_io::AsyncRead;
-use std::{fmt, io::Read};
+use std::{fmt, io::Read, ops::Range};
 
 use crate::{
     atom::{
@@ -88,28 +88,32 @@ impl SampleToChunkAtom {
     /// and returns the indices of any chunks which are now empty (and should be removed)
     pub fn remove_sample_indices(
         &mut self,
-        sample_indices_to_remove: &[usize],
+        sample_indices_to_remove: &[Range<usize>],
         total_chunks: usize,
     ) -> Vec<usize> {
         if sample_indices_to_remove.is_empty() {
             return Vec::new();
         }
 
-        // Convert to HashSet for O(1) lookups
-        let removal_set: std::collections::HashSet<usize> =
-            sample_indices_to_remove.iter().copied().collect();
-
-        let mut new_entries = Vec::new();
+        let mut new_entries: Vec<SampleToChunkEntry> = Vec::with_capacity(self.entries.len());
         let mut empty_chunks = Vec::new();
         let mut sample_index = 0usize;
         let mut chunk_index = 0usize;
 
-        for (entry_idx, entry) in self.entries.iter().enumerate() {
-            // Calculate how many chunks this entry covers
-            let chunks_in_entry = if entry_idx + 1 < self.entries.len() {
-                (self.entries[entry_idx + 1].first_chunk - entry.first_chunk) as usize
-            } else {
-                total_chunks - chunk_index
+        let mut entries_iter = self.entries.iter_mut().peekable();
+        let mut new_next_first_chunk = None;
+        while let Some(entry) = entries_iter.next() {
+            // since we can't modify `next_entry`,
+            // we need to carry forward any updates we would have done if we could
+            if let Some(new_first_chunk) = new_next_first_chunk.take() {
+                entry.first_chunk = new_first_chunk;
+            }
+
+            let next_entry = entries_iter.peek();
+
+            let chunks_in_entry = match next_entry {
+                Some(next_entry) => (next_entry.first_chunk - entry.first_chunk) as usize,
+                _ => total_chunks - chunk_index,
             };
 
             for _ in 0..chunks_in_entry {
@@ -118,25 +122,68 @@ impl SampleToChunkAtom {
 
                 // Count samples remaining in this chunk
                 let remaining_samples = (chunk_start_sample..chunk_end_sample)
-                    .filter(|&idx| !removal_set.contains(&idx))
+                    .filter(|idx| {
+                        for range in sample_indices_to_remove {
+                            if range.contains(idx) {
+                                return false;
+                            }
+                        }
+                        true
+                    })
                     .count() as u32;
 
                 if remaining_samples == 0 {
                     empty_chunks.push(chunk_index);
                 } else if remaining_samples != entry.samples_per_chunk {
                     // Chunk has different sample count, needs new entry
-                    new_entries.push(SampleToChunkEntry {
-                        first_chunk: (chunk_index + 1) as u32,
-                        samples_per_chunk: remaining_samples,
-                        sample_description_index: entry.sample_description_index,
-                    });
+                    match new_entries.last() {
+                        Some(prev_entry)
+                            if prev_entry.samples_per_chunk == remaining_samples
+                                && prev_entry.sample_description_index
+                                    == entry.sample_description_index =>
+                        {
+                            // we can reuse the previous entry
+                        }
+                        _ => match next_entry {
+                            Some(next_entry)
+                                if next_entry.samples_per_chunk == remaining_samples
+                                    && next_entry.sample_description_index
+                                        == entry.sample_description_index =>
+                            {
+                                // we can reuse the next entry, just need to update it's first chunk
+                                // this will have to happen in the next iteration of the loop though,
+                                // since we can't mut `next_entry`
+                                new_next_first_chunk = Some((chunk_index + 1) as u32);
+                            }
+                            _ => {
+                                // we need to push a new entry
+                                new_entries.push(SampleToChunkEntry {
+                                    first_chunk: (chunk_index + 1) as u32,
+                                    samples_per_chunk: remaining_samples,
+                                    sample_description_index: entry.sample_description_index,
+                                });
+                            }
+                        },
+                    }
                 } else {
                     // Chunk unchanged, preserve entry
-                    new_entries.push(SampleToChunkEntry {
+                    let entry = SampleToChunkEntry {
                         first_chunk: (chunk_index + 1) as u32,
                         samples_per_chunk: entry.samples_per_chunk,
                         sample_description_index: entry.sample_description_index,
-                    });
+                    };
+                    match new_entries.last() {
+                        Some(prev_entry)
+                            if prev_entry.samples_per_chunk == entry.samples_per_chunk
+                                && prev_entry.sample_description_index
+                                    == entry.sample_description_index =>
+                        {
+                            // we can reuse the existing entry
+                        }
+                        _ => {
+                            new_entries.push(entry);
+                        }
+                    }
                 }
 
                 sample_index += entry.samples_per_chunk as usize;
@@ -144,21 +191,8 @@ impl SampleToChunkAtom {
             }
         }
 
-        // Compact consecutive entries with identical properties
-        let mut compacted: Vec<SampleToChunkEntry> = Vec::new();
-        for entry in new_entries {
-            match compacted.last_mut() {
-                Some(last)
-                    if last.samples_per_chunk == entry.samples_per_chunk
-                        && last.sample_description_index == entry.sample_description_index =>
-                {
-                    // Extend the existing entry instead of adding new one
-                }
-                _ => compacted.push(entry),
-            }
-        }
+        self.entries = new_entries.into();
 
-        self.entries = compacted.into();
         empty_chunks
     }
 

@@ -3,7 +3,11 @@ use bon::{bon, Builder};
 use derive_more::{Deref, DerefMut};
 
 use futures_io::AsyncRead;
-use std::{fmt, io::Read, ops::RangeBounds};
+use std::{
+    fmt,
+    io::Read,
+    ops::{Range, RangeBounds, Sub},
+};
 
 use crate::{
     atom::{
@@ -89,8 +93,7 @@ impl TimeToSampleAtom {
     /// Removes samples contained in the given `trim_duration` and returns indices of removed samples.
     ///
     /// WARNING: failing to update other atoms appropriately will cause file corruption.
-    pub fn trim_samples(&mut self, trim_duration: impl RangeBounds<u64>) -> Vec<usize> {
-        // Convert range bounds to concrete values for easier math
+    pub fn trim_samples(&mut self, trim_duration: impl RangeBounds<u64>) -> Vec<Range<usize>> {
         let trim_start = match trim_duration.start_bound() {
             std::ops::Bound::Included(&start) => start,
             std::ops::Bound::Excluded(&start) => start + 1,
@@ -103,66 +106,62 @@ impl TimeToSampleAtom {
             std::ops::Bound::Unbounded => u64::MAX,
         };
 
-        let mut new_entries = Vec::new();
+        debug_assert!(trim_start < trim_end, "trim_samples given an invalid range");
+
         let mut removed_sample_indices = Vec::new();
         let mut current_duration_offset = 0u64;
         let mut current_sample_index = 0usize;
+        let mut remove_entry_indices = Vec::new();
 
-        for entry in self.entries.iter() {
+        for (entry_index, entry) in self.entries.iter_mut().enumerate() {
             let entry_duration_start = current_duration_offset;
             let entry_duration_end = current_duration_offset
                 + (entry.sample_count as u64 * entry.sample_duration as u64).saturating_sub(1);
 
-            // Fast path: entire entry is outside trim range
+            // Entire entry is outside trim range
             if entry_duration_end < trim_start || entry_duration_start > trim_end {
-                new_entries.push(entry.clone());
                 current_duration_offset += entry.sample_count as u64 * entry.sample_duration as u64;
                 current_sample_index += entry.sample_count as usize;
                 continue;
             }
 
-            // Fast path: entire entry is inside trim range
+            // Entire entry is inside trim range
             if entry_duration_start >= trim_start && entry_duration_end <= trim_end {
-                // Remove all samples from this entry
-                for i in 0..entry.sample_count {
-                    removed_sample_indices.push(current_sample_index + i as usize);
-                }
+                remove_entry_indices.push(entry_index);
+                removed_sample_indices.push(
+                    current_sample_index..(current_sample_index + entry.sample_count as usize),
+                );
                 current_duration_offset += entry.sample_count as u64 * entry.sample_duration as u64;
                 current_sample_index += entry.sample_count as usize;
                 continue;
             }
 
-            // Partial overlap: calculate which samples to remove using range arithmetic
-            let mut kept_samples = 0u32;
+            // Partial overlap
+
             let sample_duration = entry.sample_duration as u64;
 
-            for sample_idx in 0..entry.sample_count {
-                let sample_start = current_duration_offset + (sample_idx as u64 * sample_duration);
-                let sample_end = sample_start + sample_duration - 1;
+            let entry_start = current_duration_offset;
+            let entry_end = entry_start + (entry.sample_count as u64 * sample_duration) - 1;
 
-                // Sample overlaps with trim range if there's any intersection
-                let overlaps = sample_start <= trim_end && sample_end >= trim_start;
+            let entry_trim_start = entry_start.max(trim_start);
+            let entry_trim_end = entry_end.min(trim_end);
 
-                if overlaps {
-                    removed_sample_indices.push(current_sample_index + sample_idx as usize);
-                } else {
-                    kept_samples += 1;
-                }
-            }
+            let trim_sample_start_index = (entry_trim_start - entry_start) / sample_duration;
+            let trim_sample_end_index = (entry_trim_end - entry_start) / sample_duration;
+            removed_sample_indices
+                .push((trim_sample_start_index as usize)..(trim_sample_end_index as usize + 1));
 
-            // Add entry for kept samples if any
-            if kept_samples > 0 {
-                new_entries.push(TimeToSampleEntry {
-                    sample_count: kept_samples,
-                    sample_duration: entry.sample_duration,
-                });
-            }
+            let samples_to_remove = trim_sample_end_index - trim_sample_start_index + 1;
+            entry.sample_count = entry.sample_count.sub(samples_to_remove as u32);
 
             current_duration_offset += entry.sample_count as u64 * entry.sample_duration as u64;
             current_sample_index += entry.sample_count as usize;
         }
 
-        self.entries = new_entries.into();
+        for index in remove_entry_indices {
+            self.entries.remove(index);
+        }
+
         removed_sample_indices
     }
 
