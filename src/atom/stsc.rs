@@ -712,6 +712,5 @@ mod tests {
                 }).unwrap(),
             ],
         },
-        // TODO: add more test coverage
     );
 }
