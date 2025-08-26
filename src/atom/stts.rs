@@ -6,7 +6,7 @@ use futures_io::AsyncRead;
 use std::{
     fmt::{self, Debug},
     io::Read,
-    ops::{Div, Range, RangeBounds, RangeInclusive, Sub},
+    ops::{Bound, Div, Range, RangeBounds, RangeInclusive, Sub},
 };
 
 use crate::{
@@ -94,8 +94,6 @@ impl TimeToSampleAtom {
     where
         R: RangeBounds<u64> + Debug,
     {
-        use std::ops::Bound;
-
         // removed sample indices will be contiguous
         let mut removed_sample_indices: Option<Range<usize>> = None;
         // removed entries will be contiguous
@@ -112,8 +110,12 @@ impl TimeToSampleAtom {
                 current_duration_offset + entry.sample_count as u64 * entry.sample_duration as u64;
 
             // Entire entry is outside trim range
-            let entry_range = entry_duration_start..=entry_duration_end;
-            if !ranges_overlap(&entry_range, &trim_duration) {
+            let entry_duration_range = entry_duration_start..entry_duration_end + 1;
+
+            let entry_trim_duration = entry_trim_duration(&entry_duration_range, &trim_duration);
+
+            // Entry is not in trim range
+            if entry_trim_duration.is_empty() {
                 current_duration_offset = next_duration_offset;
                 current_sample_index += entry.sample_count as usize;
                 continue;
@@ -155,28 +157,16 @@ impl TimeToSampleAtom {
 
             let sample_duration = entry.sample_duration as u64;
 
-            let entry_start = current_duration_offset;
-            let entry_end = entry_start + (entry.sample_count as u64 * sample_duration) - 1;
-
-            let entry_trim_start = match trim_duration.start_bound() {
-                Bound::Included(start) => entry_start.max(*start),
-                Bound::Excluded(start) => entry_start.max(*start + 1),
-                Bound::Unbounded => entry_start,
-            };
-            let entry_trim_end = match trim_duration.end_bound() {
-                Bound::Included(end) => entry_end.min(*end),
-                Bound::Excluded(end) => entry_end.min((*end).saturating_sub(1)),
-                Bound::Unbounded => entry_end,
-            };
-
             let trim_sample_start_index = (current_sample_index as u64
-                + (entry_trim_start - entry_start).div_ceil(sample_duration))
-                as usize;
-            let trim_sample_end_index =
-                match entry_end - ((entry_trim_end / sample_duration) * sample_duration) {
-                    0 => trim_sample_start_index,
-                    end => trim_sample_start_index + end.div(sample_duration) as usize,
-                };
+                + (entry_trim_duration.start - entry_duration_range.start)
+                    .div_ceil(sample_duration)) as usize;
+            let trim_sample_end_index = match ((entry_trim_duration.end / sample_duration)
+                * sample_duration)
+                - entry_duration_range.start
+            {
+                0 => trim_sample_start_index,
+                end => current_sample_index + end.div(sample_duration) as usize - 1,
+            };
 
             removed_sample_indices = Some(match removed_sample_indices {
                 Some(range) => {
@@ -190,7 +180,7 @@ impl TimeToSampleAtom {
                 None => (trim_sample_start_index as usize)..(trim_sample_end_index as usize + 1),
             });
 
-            let samples_to_remove = trim_sample_end_index - trim_sample_start_index + 1;
+            let samples_to_remove = trim_sample_end_index + 1 - trim_sample_start_index;
             entry.sample_count = entry.sample_count.sub(samples_to_remove as u32);
 
             current_duration_offset = next_duration_offset;
@@ -226,34 +216,50 @@ impl TimeToSampleAtom {
     }
 }
 
-fn ranges_overlap(r1: &RangeInclusive<u64>, r2: &impl RangeBounds<u64>) -> bool {
-    use std::ops::Bound;
-
-    if r2.contains(r1.start()) || r2.contains(r1.end()) {
-        return true;
+fn entry_trim_duration(entry_range: &Range<u64>, trim_range: &impl RangeBounds<u64>) -> Range<u64> {
+    // entry is contained in range
+    if trim_range.contains(&entry_range.start) && trim_range.contains(&(entry_range.end - 1)) {
+        return entry_range.clone();
     }
 
-    match r2.start_bound() {
-        Bound::Included(start) if r1.contains(start) => {
-            return true;
-        }
-        Bound::Excluded(start) if r1.contains(&(*start + 1)) => {
-            return true;
-        }
-        _ => {}
+    let finite_trim_range = convert_range(entry_range, trim_range);
+
+    // trim range is contained in entry
+    if entry_range.contains(&finite_trim_range.start)
+        && finite_trim_range.end > 0
+        && entry_range.contains(&(finite_trim_range.end - 1))
+    {
+        return finite_trim_range;
     }
 
-    match r2.end_bound() {
-        Bound::Included(end) if r1.contains(end) => {
-            return true;
-        }
-        Bound::Excluded(end) if r1.contains(&((*end).saturating_sub(1))) => {
-            return true;
-        }
-        _ => {}
+    // trim range starts inside of entry
+    if finite_trim_range.start >= entry_range.start && finite_trim_range.start < entry_range.end {
+        return finite_trim_range.start..entry_range.end;
     }
 
-    false
+    // trim range ends inside of entry
+    if trim_range.contains(&entry_range.start)
+        && finite_trim_range.start < entry_range.start
+        && finite_trim_range.end <= entry_range.end
+    {
+        return entry_range.start..finite_trim_range.end;
+    }
+
+    0..0
+}
+
+fn convert_range(reference_range: &Range<u64>, range: &impl RangeBounds<u64>) -> Range<u64> {
+    let start = match range.start_bound() {
+        Bound::Included(start) => *start,
+        Bound::Excluded(start) => *start + 1,
+        Bound::Unbounded => 0,
+    };
+    let end = match range.end_bound() {
+        Bound::Included(end) => *end + 1,
+        Bound::Excluded(end) => *end,
+        Bound::Unbounded => reference_range.end,
+    };
+    start..end
 }
 
 impl<S: time_to_sample_atom_builder::State> TimeToSampleAtomBuilder<S> {
@@ -398,14 +404,20 @@ mod tests {
     fn test_trim_duration_stts() -> TimeToSampleAtom {
         TimeToSampleAtom::builder()
             .entries(vec![
+                // samples  0..1
+                // duration 0..100
                 TimeToSampleEntry {
                     sample_count: 1,
                     sample_duration: 100,
                 },
+                // samples 1..5
+                // duration 100..900
                 TimeToSampleEntry {
                     sample_count: 4,
                     sample_duration: 200,
                 },
+                // samples 5..9
+                // duration 900..1300
                 TimeToSampleEntry {
                     sample_count: 4,
                     sample_duration: 100,
@@ -443,12 +455,12 @@ mod tests {
     }
 
     test_trim_duration!(
-        trim_first_sample_unbounded_start => |stts| TrimDurationTestCase {
+        trim_first_entry_unbounded_start => |stts| TrimDurationTestCase {
             trim_duration: vec![(Bound::Unbounded, Bound::Excluded(100))],
             expect_removed_samples: vec![0..1],
             expect_entries: stts.entries.as_slice()[1..].to_vec(),
         },
-        trim_first_sample_inclusive_start => |stts| TrimDurationTestCase {
+        trim_first_entry_inclusive_start => |stts| TrimDurationTestCase {
             trim_duration: vec![(Bound::Included(0), Bound::Excluded(100))],
             expect_removed_samples: vec![0..1],
             expect_entries: stts.entries.as_slice()[1..].to_vec(),
@@ -462,6 +474,16 @@ mod tests {
                 expect_entries,
             }
         },
+        trim_last_three_samples_unbounded_end => |stts| {
+            let mut expect_entries = stts.entries.clone().0;
+            expect_entries.last_mut().unwrap().sample_count = 1;
+            TrimDurationTestCase {
+                trim_duration: vec![(Bound::Included(1_000), Bound::Unbounded)],
+                expect_removed_samples: vec![6..9],
+                expect_entries,
+            }
+        },
+        // TODO: trim_last_entry_unbounded_end
         trim_last_sample_inclusive_end => |stts| {
             let mut expect_entries = stts.entries.clone().0;
             expect_entries.last_mut().unwrap().sample_count = 3;
