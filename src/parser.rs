@@ -1370,7 +1370,7 @@ impl<'a> TrakAtomRefMut<'a> {
 
         // Step 1: Determine which samples to remove based on time
         let (trimmed_duration, sample_indices_to_remove) =
-            stbl.time_to_sample().trim_duration(scaled_range);
+            stbl.time_to_sample().trim_duration(&[scaled_range]);
 
         let trimmed_duration = unscaled_duration(trimmed_duration, media_timescale);
 
