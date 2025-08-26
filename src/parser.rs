@@ -1386,6 +1386,15 @@ impl<'a> TrakAtomRefMut<'a> {
             .sample_to_chunk()
             .remove_sample_indices(&sample_indices_to_remove, total_chunks);
 
+        // TODO: make ChunkOffsetAtom.remove_chunk_indices accept Vec<Range<usize>> instead of Vec<usize>
+        let chunk_indices_to_remove =
+            chunk_indices_to_remove
+                .into_iter()
+                .fold(Vec::new(), |mut res, range| {
+                    res.extend(range.into_iter());
+                    res
+                });
+
         // Step 4: Remove chunk offsets
         stbl.chunk_offset()
             .remove_chunk_indices(&chunk_indices_to_remove);
