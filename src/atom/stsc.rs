@@ -139,14 +139,11 @@ impl SampleToChunkAtom {
 
             // sample indices to remove fully excludes this entry
             if entry_samples_to_remove == 0 {
-                eprintln!("entry[{entry_index}] preserved");
                 continue;
             }
 
             // sample indices to remove fully includes this entry
             if entry_samples_to_remove == entry_sample_count {
-                eprintln!("entry[{entry_index}] fully removed");
-
                 remove_entry_range = Some(match remove_entry_range {
                     Some(range) => {
                         debug_assert_eq!(
@@ -187,7 +184,6 @@ impl SampleToChunkAtom {
             let mut entry_chunk_count = entry_chunk_count;
             let insert_entry_index = if first_affected_chunk_index > chunk_index {
                 let num_chunks = first_affected_chunk_index - chunk_index;
-                eprintln!("entry[{entry_index}] inserted entry for {num_chunks} leading chunks",);
 
                 // we need to insert an entry for chunks upto the affected chunk
                 insert_entries.push((
@@ -210,8 +206,6 @@ impl SampleToChunkAtom {
             };
 
             if chunks_to_remove > 0 {
-                eprintln!("entry[{entry_index}] truncated (removed {chunks_to_remove} chunks)");
-
                 removed_chunk_indices = Some(match removed_chunk_indices {
                     Some(range) => {
                         debug_assert_eq!(
@@ -229,16 +223,12 @@ impl SampleToChunkAtom {
                 entry_samples_to_remove - (chunks_to_remove * entry.samples_per_chunk as usize);
 
             if entry_samples_to_remove == 0 {
-                eprintln!("entry[{entry_index}] truncated an even number of chunks");
                 continue;
             }
 
             if entry_chunk_count == 1 {
-                eprintln!("entry[{entry_index}] removed {entry_samples_to_remove} from entry's single chunk");
                 entry.samples_per_chunk -= entry_samples_to_remove as u32;
             } else {
-                eprintln!("entry[{entry_index}] inserted entry for remaining {entry_samples_to_remove} samples to remove");
-
                 // we need to insert a new entry
                 insert_entries.push((
                     insert_entry_index,
@@ -270,7 +260,6 @@ impl SampleToChunkAtom {
                             && entry_prev.sample_description_index
                                 == entry_next.sample_description_index
                         {
-                            eprintln!("entries[{prev_entry_index}..{next_entry_index}] merged");
                             range = (*range.start())..=next_entry_index;
                         }
                     }
