@@ -1865,6 +1865,8 @@ impl fmt::Debug for Sample<'_> {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Bound;
+
     use super::*;
     use crate::atom::{
         containers::{DINF, MDIA, MINF, MOOV, STBL, TRAK},
@@ -2087,211 +2089,195 @@ mod tests {
             .build()
     }
 
-    #[test]
-    fn test_moov_trim_duration_comprehensive() {
-        use crate::atom::util::time::scaled_duration;
-        use std::ops::Bound;
-
-        struct TrimDurationTestCase {
-            name: &'static str,
-            original_duration: Duration,
-            start_bound: Bound<Duration>,
-            end_bound: Bound<Duration>,
-            expected_remaining_duration: Duration,
-        }
+    fn test_moov_trim_duration<F>(test_case: F)
+    where
+        F: FnOnce() -> TrimDurationTestCase,
+    {
+        let test_case = test_case();
 
         let movie_timescale = 1_000;
         let media_timescale = 10_000;
 
-        let test_cases = vec![
-            TrimDurationTestCase {
-                name: "trim_start_2_seconds",
-                original_duration: Duration::from_secs(10),
-                start_bound: Bound::Included(Duration::ZERO),
-                end_bound: Bound::Included(Duration::from_secs(2)),
-                expected_remaining_duration: Duration::from_secs(8),
-            },
-            TrimDurationTestCase {
-                name: "trim_end_2_seconds",
-                original_duration: Duration::from_secs(10),
-                start_bound: Bound::Included(Duration::from_secs(8)),
-                end_bound: Bound::Included(Duration::from_secs(10)),
-                expected_remaining_duration: Duration::from_secs(8),
-            },
-            TrimDurationTestCase {
-                name: "trim_middle_2_seconds",
-                original_duration: Duration::from_secs(10),
-                start_bound: Bound::Included(Duration::from_secs(4)),
-                end_bound: Bound::Included(Duration::from_secs(6)),
-                expected_remaining_duration: Duration::from_secs(8),
-            },
-            TrimDurationTestCase {
-                name: "trim__middle_exclusive_start_2_seconds",
-                original_duration: Duration::from_secs(10),
-                start_bound: Bound::Excluded(Duration::from_secs(2)),
-                end_bound: Bound::Included(Duration::from_secs(5)),
-                expected_remaining_duration: Duration::from_secs(8),
-            },
-            TrimDurationTestCase {
-                name: "trim_middle_exclusive_end_2_seconds",
-                original_duration: Duration::from_secs(10),
-                start_bound: Bound::Included(Duration::from_secs(1)),
-                end_bound: Bound::Excluded(Duration::from_secs(3)),
-                expected_remaining_duration: Duration::from_secs(8),
-            },
-            TrimDurationTestCase {
-                name: "trim_start_unbounded_5_seconds",
-                original_duration: Duration::from_secs(10),
-                start_bound: Bound::Unbounded,
-                end_bound: Bound::Included(Duration::from_secs(5)),
-                expected_remaining_duration: Duration::from_secs(5),
-            },
-            TrimDurationTestCase {
-                name: "trim_end_unbounded_6_seconds",
-                original_duration: Duration::from_secs(100),
-                start_bound: Bound::Included(Duration::from_secs(94)),
-                end_bound: Bound::Unbounded,
-                expected_remaining_duration: Duration::from_secs(94),
-            },
-            TrimDurationTestCase {
-                name: "trim_unbounded",
-                original_duration: Duration::from_secs(100),
-                start_bound: Bound::Unbounded,
-                end_bound: Bound::Unbounded,
-                expected_remaining_duration: Duration::ZERO,
-            },
-        ];
+        // Create fresh metadata for each test case
+        let mut metadata = create_test_metadata()
+            .movie_timescale(movie_timescale)
+            .media_timescale(media_timescale)
+            .duration(test_case.original_duration)
+            .build();
 
-        for test_case in test_cases {
-            // Create fresh metadata for each test case
-            let mut metadata = create_test_metadata()
-                .movie_timescale(movie_timescale)
-                .media_timescale(media_timescale)
-                .duration(test_case.original_duration)
-                .build();
+        // Perform the trim operation with the range bounds
+        let range = (test_case.start_bound, test_case.end_bound);
+        metadata.moov_mut().trim_duration(range);
 
-            // Perform the trim operation with the range bounds
-            let range = (test_case.start_bound, test_case.end_bound);
-            metadata.moov_mut().trim_duration(range);
+        // Verify movie header duration was updated
+        let new_movie_duration = metadata.moov().header().map(|h| h.duration).unwrap_or(0);
+        let expected_movie_duration = scaled_duration(
+            test_case.expected_remaining_duration,
+            movie_timescale as u64,
+        );
+        assert_eq!(
+            new_movie_duration, expected_movie_duration,
+            "Movie duration should match expected",
+        );
 
-            // Verify movie header duration was updated
-            let new_movie_duration = metadata.moov().header().map(|h| h.duration).unwrap_or(0);
-            let expected_movie_duration = scaled_duration(
-                test_case.expected_remaining_duration,
-                movie_timescale as u64,
-            );
-            assert_eq!(
-                new_movie_duration, expected_movie_duration,
-                "Movie duration should match expected for test case: {}",
-                test_case.name
-            );
+        // Verify track header duration was updated
+        let new_track_duration = metadata
+            .moov()
+            .into_tracks_iter()
+            .next()
+            .and_then(|t| t.header().map(|h| h.duration))
+            .unwrap_or(0);
+        let expected_track_duration = scaled_duration(
+            test_case.expected_remaining_duration,
+            movie_timescale as u64,
+        );
+        assert_eq!(
+            new_track_duration, expected_track_duration,
+            "Track duration should match expected",
+        );
 
-            // Verify track header duration was updated
-            let new_track_duration = metadata
-                .moov()
-                .into_tracks_iter()
-                .next()
-                .and_then(|t| t.header().map(|h| h.duration))
-                .unwrap_or(0);
-            let expected_track_duration = scaled_duration(
-                test_case.expected_remaining_duration,
-                movie_timescale as u64,
-            );
-            assert_eq!(
-                new_track_duration, expected_track_duration,
-                "Track duration should match expected for test case: {}",
-                test_case.name
-            );
+        // Verify media header duration was updated
+        let new_media_duration = metadata
+            .moov()
+            .into_tracks_iter()
+            .next()
+            .map(|t| t.media().header().map(|h| h.duration).unwrap_or(0))
+            .unwrap_or(0);
+        let expected_media_duration = scaled_duration(
+            test_case.expected_remaining_duration,
+            media_timescale as u64,
+        );
+        assert_eq!(
+            new_media_duration, expected_media_duration,
+            "Media duration should match expected",
+        );
 
-            // Verify media header duration was updated
-            let new_media_duration = metadata
-                .moov()
-                .into_tracks_iter()
-                .next()
-                .map(|t| t.media().header().map(|h| h.duration).unwrap_or(0))
-                .unwrap_or(0);
-            let expected_media_duration = scaled_duration(
-                test_case.expected_remaining_duration,
-                media_timescale as u64,
-            );
-            assert_eq!(
-                new_media_duration, expected_media_duration,
-                "Media duration should match expected for test case: {}",
-                test_case.name
-            );
+        // Verify sample table structure is still valid
+        let track = metadata.moov().into_tracks_iter().next().unwrap();
+        let stbl = track.media().media_information().sample_table();
 
-            // Verify sample table structure is still valid
-            let track = metadata.moov().into_tracks_iter().next().unwrap();
-            let stbl = track.media().media_information().sample_table();
+        // Validate that all required sample table atoms exist
+        let stts = stbl
+            .time_to_sample()
+            .expect("Time-to-sample atom should exist");
+        let stsc = stbl
+            .sample_to_chunk()
+            .expect("Sample-to-chunk atom should exist");
+        let stsz = stbl.sample_size().expect("Sample-size atom should exist");
+        let stco = stbl.chunk_offset().expect("Chunk-offset atom should exist");
 
-            // Validate that all required sample table atoms exist
-            let stts = stbl
-                .time_to_sample()
-                .expect("Time-to-sample atom should exist");
-            let stsc = stbl
-                .sample_to_chunk()
-                .expect("Sample-to-chunk atom should exist");
-            let stsz = stbl.sample_size().expect("Sample-size atom should exist");
-            let stco = stbl.chunk_offset().expect("Chunk-offset atom should exist");
+        // Calculate total samples from sample sizes
+        let total_samples = stsz.sample_count() as u32;
+        assert!(total_samples > 0, "Sample table should have samples",);
 
-            // Calculate total samples from sample sizes
-            let total_samples = stsz.sample_count() as u32;
+        // Validate time-to-sample consistency
+        let stts_total_samples: u32 = stts.entries.iter().map(|entry| entry.sample_count).sum();
+        assert_eq!(
+            stts_total_samples, total_samples,
+            "Time-to-sample total samples should match sample size count",
+        );
+
+        // Validate sample-to-chunk references
+        let chunk_count = stco.chunk_count() as u32;
+        assert!(chunk_count > 0, "Should have at least one chunk",);
+
+        // Verify all chunk references in stsc are valid
+        for entry in stsc.entries.iter() {
             assert!(
-                total_samples > 0,
-                "Sample table should have samples for test case: {}",
-                test_case.name
+                entry.first_chunk >= 1 && entry.first_chunk <= chunk_count,
+                "Sample-to-chunk first_chunk {} should be between 1 and {}",
+                entry.first_chunk,
+                chunk_count,
             );
-
-            // Validate time-to-sample consistency
-            let stts_total_samples: u32 = stts.entries.iter().map(|entry| entry.sample_count).sum();
-            assert_eq!(
-                stts_total_samples, total_samples,
-                "Time-to-sample total samples should match sample size count for test case: {}",
-                test_case.name
-            );
-
-            // Validate sample-to-chunk references
-            let chunk_count = stco.chunk_count() as u32;
             assert!(
-                chunk_count > 0,
-                "Should have at least one chunk for test case: {}",
-                test_case.name
+                entry.samples_per_chunk > 0,
+                "Sample-to-chunk samples_per_chunk should be > 0",
             );
-
-            // Verify all chunk references in stsc are valid
-            for entry in stsc.entries.iter() {
-                assert!(
-                    entry.first_chunk >= 1 && entry.first_chunk <= chunk_count,
-                    "Sample-to-chunk first_chunk {} should be between 1 and {} for test case: {}",
-                    entry.first_chunk,
-                    chunk_count,
-                    test_case.name
-                );
-                assert!(
-                    entry.samples_per_chunk > 0,
-                    "Sample-to-chunk samples_per_chunk should be > 0 for test case: {}",
-                    test_case.name
-                );
-            }
-
-            // Verify expected duration consistency with time-to-sample
-            let total_duration: u64 = stts
-                .entries
-                .iter()
-                .map(|entry| entry.sample_count as u64 * entry.sample_duration as u64)
-                .sum();
-            let expected_duration_scaled = scaled_duration(
-                test_case.expected_remaining_duration,
-                media_timescale as u64,
-            );
-
-            assert_eq!(
-                total_duration, expected_duration_scaled,
-                "Sample table total duration should match the expected duration for test case: {}",
-                test_case.name
-            );
-
-            println!("✓ Test case '{}' passed", test_case.name);
         }
+
+        // Verify expected duration consistency with time-to-sample
+        let total_duration: u64 = stts
+            .entries
+            .iter()
+            .map(|entry| entry.sample_count as u64 * entry.sample_duration as u64)
+            .sum();
+        let expected_duration_scaled = scaled_duration(
+            test_case.expected_remaining_duration,
+            media_timescale as u64,
+        );
+
+        assert_eq!(
+            total_duration, expected_duration_scaled,
+            "Sample table total duration should match the expected duration",
+        );
     }
+
+    struct TrimDurationTestCase {
+        original_duration: Duration,
+        start_bound: Bound<Duration>,
+        end_bound: Bound<Duration>,
+        expected_remaining_duration: Duration,
+    }
+
+    macro_rules! test_moov_trim_duration {
+        ($($name:ident => $test_case:expr,)*) => {
+            $(
+                #[test]
+                fn $name() {
+                    test_moov_trim_duration($test_case);
+                }
+            )*
+        };
+    }
+
+    test_moov_trim_duration!(
+        trim_start_2_seconds => || TrimDurationTestCase {
+            original_duration: Duration::from_secs(10),
+            start_bound: Bound::Included(Duration::ZERO),
+            end_bound: Bound::Included(Duration::from_secs(2)),
+            expected_remaining_duration: Duration::from_secs(8),
+        },
+        trim_end_2_seconds => || TrimDurationTestCase {
+            original_duration: Duration::from_secs(10),
+            start_bound: Bound::Included(Duration::from_secs(8)),
+            end_bound: Bound::Included(Duration::from_secs(10)),
+            expected_remaining_duration: Duration::from_secs(8),
+        },
+        trim_middle_2_seconds => || TrimDurationTestCase {
+            original_duration: Duration::from_secs(10),
+            start_bound: Bound::Included(Duration::from_secs(4)),
+            end_bound: Bound::Included(Duration::from_secs(6)),
+            expected_remaining_duration: Duration::from_secs(8),
+        },
+        trim_middle_exclusive_start_2_seconds => || TrimDurationTestCase {
+            original_duration: Duration::from_secs(10),
+            start_bound: Bound::Excluded(Duration::from_secs(2)),
+            end_bound: Bound::Included(Duration::from_secs(5)),
+            expected_remaining_duration: Duration::from_secs(8),
+        },
+        trim_middle_exclusive_end_2_seconds => || TrimDurationTestCase {
+            original_duration: Duration::from_secs(10),
+            start_bound: Bound::Included(Duration::from_secs(1)),
+            end_bound: Bound::Excluded(Duration::from_secs(3)),
+            expected_remaining_duration: Duration::from_secs(8),
+        },
+        trim_start_unbounded_5_seconds => || TrimDurationTestCase {
+            original_duration: Duration::from_secs(10),
+            start_bound: Bound::Unbounded,
+            end_bound: Bound::Included(Duration::from_secs(5)),
+            expected_remaining_duration: Duration::from_secs(5),
+        },
+        trim_end_unbounded_6_seconds => || TrimDurationTestCase {
+            original_duration: Duration::from_secs(100),
+            start_bound: Bound::Included(Duration::from_secs(94)),
+            end_bound: Bound::Unbounded,
+            expected_remaining_duration: Duration::from_secs(94),
+        },
+        trim_unbounded => || TrimDurationTestCase {
+            original_duration: Duration::from_secs(100),
+            start_bound: Bound::Unbounded,
+            end_bound: Bound::Unbounded,
+            expected_remaining_duration: Duration::ZERO,
+        },
+    );
 }
