@@ -6,7 +6,7 @@ use futures_io::AsyncRead;
 use std::{
     fmt::{self, Debug},
     io::Read,
-    ops::{Bound, Div, Range, RangeBounds, RangeInclusive, Sub},
+    ops::{Bound, Range, RangeBounds, RangeInclusive, Sub},
 };
 
 use crate::{
@@ -87,10 +87,11 @@ impl TimeToSampleAtom {
         }
     }
 
-    /// Removes samples contained in the given `trim_duration` and returns indices of removed samples.
+    /// Removes samples contained in the given `trim_duration`, excluding partially matched samples.
+    /// Returns actual duration trimmed and indices of removed samples.
     ///
     /// WARNING: failing to update other atoms appropriately will cause file corruption.
-    pub fn trim_duration<R>(&mut self, trim_duration: R) -> Vec<Range<usize>>
+    pub fn trim_duration<R>(&mut self, trim_duration: R) -> (u64, Vec<Range<usize>>)
     where
         R: RangeBounds<u64> + Debug,
     {
@@ -100,6 +101,7 @@ impl TimeToSampleAtom {
         let mut remove_entry_range: Option<RangeInclusive<usize>> = None;
         let mut current_duration_offset = 0u64;
         let mut current_sample_index = 0usize;
+        let mut duration_trimmed = 0u64;
 
         for (entry_index, entry) in self.entries.iter_mut().enumerate() {
             let next_duration_offset =
@@ -151,6 +153,7 @@ impl TimeToSampleAtom {
                 });
                 current_duration_offset = next_duration_offset;
                 current_sample_index += entry.sample_count as usize;
+                duration_trimmed += entry_duration.end - entry_duration.start;
                 continue;
             }
 
@@ -184,6 +187,8 @@ impl TimeToSampleAtom {
 
             current_duration_offset = next_duration_offset;
             current_sample_index += entry.sample_count as usize;
+            duration_trimmed += ((trim_sample_end_index as u64 + 1) * sample_duration)
+                - (trim_sample_start_index as u64 * sample_duration);
         }
 
         if let Some(mut range) = remove_entry_range {
@@ -211,7 +216,10 @@ impl TimeToSampleAtom {
             self.entries.drain(range);
         }
 
-        removed_sample_indices.map_or_else(|| Vec::new(), |r| vec![r])
+        (
+            duration_trimmed,
+            removed_sample_indices.map_or_else(|| Vec::new(), |r| vec![r]),
+        )
     }
 }
 
@@ -397,6 +405,7 @@ mod tests {
     struct TrimDurationTestCase {
         trim_duration: Vec<(Bound<u64>, Bound<u64>)>,
         expect_removed_samples: Vec<Range<usize>>,
+        expect_removed_duration: u64,
         expect_entries: Vec<TimeToSampleEntry>,
     }
 
@@ -425,16 +434,20 @@ mod tests {
             .build()
     }
 
-    fn test_trim_duration<F>(test_case: F)
+    fn test_trim_duration<F>(mut stts: TimeToSampleAtom, test_case: F)
     where
         F: FnOnce(&TimeToSampleAtom) -> TrimDurationTestCase,
     {
-        let mut stts = test_trim_duration_stts();
         let test_case = test_case(&stts);
-        let actual_removed_samples = stts.trim_duration(test_case.trim_duration[0]);
+        let (actual_removed_duration, actual_removed_samples) =
+            stts.trim_duration(test_case.trim_duration[0]);
         assert_eq!(
             actual_removed_samples, test_case.expect_removed_samples,
             "removed sample indices don't match what's expected"
+        );
+        assert_eq!(
+            actual_removed_duration, test_case.expect_removed_duration,
+            "removed duration doesn't match what's expected"
         );
         assert_eq!(
             stts.entries.0, test_case.expect_entries,
@@ -443,25 +456,31 @@ mod tests {
     }
 
     macro_rules! test_trim_duration {
-        ($($name:ident => $test_case:expr,)*) => {
+        ($($name:ident $(($stts:expr))? => $test_case:expr,)*) => {
             $(
                 #[test]
                 fn $name() {
-                    test_trim_duration($test_case);
+                    let stts = test_trim_duration!(@get_stts $($stts)?);
+                    test_trim_duration(stts, $test_case);
                 }
             )*
         };
+
+        (@get_stts $stts:expr) => { $stts };
+        (@get_stts) => { test_trim_duration_stts() };
     }
 
     test_trim_duration!(
         trim_first_entry_unbounded_start => |stts| TrimDurationTestCase {
             trim_duration: vec![(Bound::Unbounded, Bound::Excluded(100))],
             expect_removed_samples: vec![0..1],
+            expect_removed_duration: 100,
             expect_entries: stts.entries.as_slice()[1..].to_vec(),
         },
-        trim_first_entry_inclusive_start => |stts| TrimDurationTestCase {
+        trim_first_entry_included_start => |stts| TrimDurationTestCase {
             trim_duration: vec![(Bound::Included(0), Bound::Excluded(100))],
             expect_removed_samples: vec![0..1],
+            expect_removed_duration: 100,
             expect_entries: stts.entries.as_slice()[1..].to_vec(),
         },
         trim_last_sample_unbounded_end => |stts| {
@@ -469,6 +488,7 @@ mod tests {
             expect_entries.last_mut().unwrap().sample_count = 3;
             TrimDurationTestCase {
                 trim_duration: vec![(Bound::Included(1_200), Bound::Unbounded)],
+                expect_removed_duration: 100,
                 expect_removed_samples: vec![8..9],
                 expect_entries,
             }
@@ -478,22 +498,46 @@ mod tests {
             expect_entries.last_mut().unwrap().sample_count = 1;
             TrimDurationTestCase {
                 trim_duration: vec![(Bound::Included(1_000), Bound::Unbounded)],
+                expect_removed_duration: 300,
                 expect_removed_samples: vec![6..9],
                 expect_entries,
             }
         },
-        // TODO: trim_last_entry_unbounded_end
-        trim_last_sample_inclusive_end => |stts| {
+        trim_last_sample_included_end => |stts| {
             let mut expect_entries = stts.entries.clone().0;
             expect_entries.last_mut().unwrap().sample_count = 3;
             TrimDurationTestCase {
                 trim_duration: vec![(Bound::Included(1_200), Bound::Included(1_300 - 1))],
+                expect_removed_duration: 100,
                 expect_removed_samples: vec![8..9],
                 expect_entries,
             }
         },
-        trim_middle_entry => |_| TrimDurationTestCase {
+        trim_middle_entry_excluded_end => |_| TrimDurationTestCase {
             trim_duration: vec![(Bound::Included(100), Bound::Excluded(900))],
+            expect_removed_duration: 800,
+            expect_removed_samples: vec![1..5],
+            expect_entries: vec![
+                TimeToSampleEntry {
+                    sample_count: 5,
+                    sample_duration: 100,
+                },
+            ],
+        },
+        trim_middle_entry_excluded_start => |_| TrimDurationTestCase {
+            trim_duration: vec![(Bound::Excluded(99), Bound::Excluded(900))],
+            expect_removed_duration: 800,
+            expect_removed_samples: vec![1..5],
+            expect_entries: vec![
+                TimeToSampleEntry {
+                    sample_count: 5,
+                    sample_duration: 100,
+                },
+            ],
+        },
+        trim_middle_entry_excluded_start_included_end => |_| TrimDurationTestCase {
+            trim_duration: vec![(Bound::Excluded(99), Bound::Included(899))],
+            expect_removed_duration: 800,
             expect_removed_samples: vec![1..5],
             expect_entries: vec![
                 TimeToSampleEntry {
@@ -509,6 +553,7 @@ mod tests {
             //  sample index 3 starts at 500 (trimmed)
             //  sample index 4 starts at 700 (not trimmed)
             trim_duration: vec![(Bound::Included(300), Bound::Excluded(700))],
+            expect_removed_duration: 400,
             expect_removed_samples: vec![2..4],
             expect_entries: vec![
                 stts.entries[0].clone(),
@@ -527,6 +572,7 @@ mod tests {
             //  sample index 3 starts at 500 (trimmed)
             //  sample index 4 starts at 700 (partially matched, not trimmed)
             trim_duration: vec![(Bound::Included(240), Bound::Excluded(850))],
+            expect_removed_duration: 400,
             expect_removed_samples: vec![2..4],
             expect_entries: vec![
                 stts.entries[0].clone(),
@@ -539,8 +585,35 @@ mod tests {
         },
         trim_everything => |_| TrimDurationTestCase {
             trim_duration: vec![(Bound::Unbounded, Bound::Unbounded)],
+            expect_removed_duration: 1_300,
             expect_removed_samples: vec![0..9],
             expect_entries: Vec::new(),
+        },
+        trim_middle_from_large_entry ({
+            TimeToSampleAtom::builder().entry(
+                // samples  0..10
+                // duration 0..10_000
+                //
+                // sample 0 => 0
+                // sample 1 => 10_000
+                // sample 2 => 20_000 (trimmed)
+                // sample 3 => 30_000 (trimmed)
+                // sample 4 => 40_000 (trimmed)
+                // sample 5 => 50_000
+                // ...
+                TimeToSampleEntry {
+                    sample_count: 10,
+                    sample_duration: 10_000,
+                },
+            ).build()
+        }) => |stts| TrimDurationTestCase {
+            trim_duration: vec![(Bound::Excluded(19_999), Bound::Included(50_000))],
+            expect_removed_duration: 30_000,
+            expect_removed_samples: vec![2..5],
+            expect_entries: stts.entries.iter().cloned().map(|mut entry| {
+                entry.sample_count = 7;
+                entry
+            }).collect::<Vec<_>>(),
         },
     );
 }

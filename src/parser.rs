@@ -22,7 +22,7 @@ use crate::atom::stsd::{
     SampleEntryData, SampleEntryType, StsdExtension,
 };
 use crate::atom::stts::TimeToSampleEntry;
-use crate::atom::util::time::{duration_sub_range, scaled_duration_range, unscaled_duration};
+use crate::atom::util::time::{scaled_duration_range, unscaled_duration};
 use crate::atom::util::DebugEllipsis;
 use crate::atom::AtomHeader;
 use crate::chunk_offset_builder::{ChunkInfo, ChunkOffsetBuilder};
@@ -1106,13 +1106,13 @@ impl<'a> MoovAtomRefMut<'a> {
         // TODO: after trimming samples,
         // - [ ] Update mdhd duration to match: sample_count × 1024
         // - [ ] Update mvhd duration proportionally: (mdhd_duration × 600) / 44100
-        let movie_timescale = u64::from(
-            self.header()
-                .update_duration(|d| duration_sub_range(d, range.clone()))
-                .timescale,
-        );
-        for mut trak in self.tracks() {
-            trak.trim_duration(movie_timescale, range.clone());
+        let movie_timescale = u64::from(self.header().timescale);
+        let trimmed_duration = self
+            .tracks()
+            .map(|mut trak| trak.trim_duration(movie_timescale, range.clone()))
+            .min();
+        if let Some(trimmed_duration) = trimmed_duration {
+            self.header().update_duration(|d| d - trimmed_duration);
         }
         self
     }
@@ -1356,25 +1356,23 @@ impl<'a> TrakAtomRefMut<'a> {
         }
     }
 
-    fn trim_duration<R>(&mut self, movie_timescale: u64, range: R) -> &mut Self
+    /// trims given duration range, excluding partially matched samples, and returns the actual duration trimmed
+    fn trim_duration<R>(&mut self, movie_timescale: u64, range: R) -> Duration
     where
         R: RangeBounds<Duration> + Clone + Debug,
     {
-        self.header()
-            .update_duration(movie_timescale, |d| duration_sub_range(d, range.clone()));
         let mut mdia = self.media();
-        let media_timescale = u64::from(
-            mdia.header()
-                .update_duration(|d| duration_sub_range(d, range.clone()))
-                .timescale,
-        );
+        let media_timescale = u64::from(mdia.header().timescale);
         let mut minf = mdia.media_information();
         let mut stbl = minf.sample_table();
 
         let scaled_range = scaled_duration_range(range, media_timescale);
 
         // Step 1: Determine which samples to remove based on time
-        let sample_indices_to_remove = stbl.time_to_sample().trim_duration(scaled_range);
+        let (trimmed_duration, sample_indices_to_remove) =
+            stbl.time_to_sample().trim_duration(scaled_range);
+
+        let trimmed_duration = unscaled_duration(trimmed_duration, media_timescale);
 
         // Step 2: Update sample sizes
         stbl.sample_size()
@@ -1390,7 +1388,12 @@ impl<'a> TrakAtomRefMut<'a> {
         stbl.chunk_offset()
             .remove_chunk_indices(&chunk_indices_to_remove);
 
-        self
+        // Step 5: Update headers
+        mdia.header().update_duration(|d| d - trimmed_duration);
+        self.header()
+            .update_duration(movie_timescale, |d| d - trimmed_duration);
+
+        trimmed_duration
     }
 }
 
@@ -2168,7 +2171,9 @@ mod tests {
 
         // Calculate total samples from sample sizes
         let total_samples = stsz.sample_count() as u32;
-        assert!(total_samples > 0, "Sample table should have samples",);
+        if test_case.expected_remaining_duration != Duration::ZERO {
+            assert!(total_samples > 0, "Sample table should have samples",);
+        }
 
         // Validate time-to-sample consistency
         let stts_total_samples: u32 = stts.entries.iter().map(|entry| entry.sample_count).sum();
@@ -2249,13 +2254,19 @@ mod tests {
             end_bound: Bound::Included(Duration::from_secs(6)),
             expected_remaining_duration: Duration::from_secs(8),
         },
-        trim_middle_exclusive_start_2_seconds => || TrimDurationTestCase {
+        trim_middle_included_start_2_seconds => || TrimDurationTestCase {
             original_duration: Duration::from_secs(10),
-            start_bound: Bound::Excluded(Duration::from_secs(2)),
-            end_bound: Bound::Included(Duration::from_secs(5)),
+            start_bound: Bound::Included(Duration::from_secs(2)),
+            end_bound: Bound::Included(Duration::from_secs(4)),
             expected_remaining_duration: Duration::from_secs(8),
         },
-        trim_middle_exclusive_end_2_seconds => || TrimDurationTestCase {
+        trim_middle_excluded_start_2_seconds => || TrimDurationTestCase {
+            original_duration: Duration::from_millis(10_000),
+            start_bound: Bound::Excluded(Duration::from_millis(1_999)),
+            end_bound: Bound::Included(Duration::from_millis(4_000)),
+            expected_remaining_duration: Duration::from_millis(8_000),
+        },
+        trim_middle_excluded_end_2_seconds => || TrimDurationTestCase {
             original_duration: Duration::from_secs(10),
             start_bound: Bound::Included(Duration::from_secs(1)),
             end_bound: Bound::Excluded(Duration::from_secs(3)),
