@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context};
 use bon::bon;
 use derive_more::{Deref, DerefMut};
 use futures_io::AsyncRead;
-use std::{fmt, io::Read};
+use std::{fmt, io::Read, ops::Range};
 
 use crate::{
     atom::{
@@ -93,23 +93,14 @@ impl ChunkOffsetAtom {
     }
 
     /// Removes the specified chunk indices.
-    ///
-    /// Panics if any of the indices are out of range.
-    pub fn remove_chunk_indices(&mut self, chunk_indices_to_remove: &[usize]) {
+    pub fn remove_chunk_indices(&mut self, chunk_indices_to_remove: &[Range<usize>]) {
         if chunk_indices_to_remove.is_empty() {
             return;
         }
 
-        // Use HashSet for O(1) lookups instead of O(n²) Vec::remove calls
-        let removal_set: std::collections::HashSet<usize> =
-            chunk_indices_to_remove.iter().copied().collect();
-
-        let mut index = 0;
-        self.chunk_offsets.retain(|_| {
-            let keep = !removal_set.contains(&index);
-            index += 1;
-            keep
-        });
+        for range in chunk_indices_to_remove.iter().cloned() {
+            self.chunk_offsets.drain(range);
+        }
     }
 }
 
