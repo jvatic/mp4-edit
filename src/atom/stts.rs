@@ -91,14 +91,17 @@ impl TimeToSampleAtom {
     /// Returns actual duration trimmed and indices of removed samples.
     ///
     /// WARNING: failing to update other atoms appropriately will cause file corruption.
-    pub fn trim_duration<R>(&mut self, trim_duration: &[R]) -> (u64, Vec<Range<usize>>)
+    pub fn trim_duration<R>(&mut self, trim_ranges: &[R]) -> (u64, Vec<Range<usize>>)
     where
         R: RangeBounds<u64> + Debug,
     {
+        let mut trim_range_index = 0;
         // removed sample indices will be contiguous
-        let mut removed_sample_indices: Option<Range<usize>> = None;
+        let mut removed_sample_indices: Vec<Option<Range<usize>>> =
+            Vec::with_capacity(trim_ranges.len());
+        removed_sample_indices.push(None);
         // removed entries will be contiguous
-        let mut remove_entry_range: Option<RangeInclusive<usize>> = None;
+        let mut remove_entry_range: Vec<Option<RangeInclusive<usize>>> = vec![None];
         let mut current_duration_offset = 0u64;
         let mut current_sample_index = 0usize;
         let mut duration_trimmed = 0u64;
@@ -115,88 +118,118 @@ impl TimeToSampleAtom {
                 entry_duration_start..entry_duration_end + 1
             };
 
-            for trim_duration in trim_duration {
-                let entry_trim_duration = entry_trim_duration(&entry_duration, trim_duration);
+            let (i, trim_duration, entry_trim_duration) =
+                match entry_trim_duration(&entry_duration, trim_ranges) {
+                    Some(m) => m,
+                    None => {
+                        current_duration_offset = next_duration_offset;
+                        current_sample_index += entry.sample_count as usize;
+                        continue;
+                    }
+                };
 
-                // Entry is not in trim range
-                if entry_trim_duration.is_empty() {
-                    current_duration_offset = next_duration_offset;
-                    current_sample_index += entry.sample_count as usize;
-                    continue;
-                }
+            debug_assert!(
+                i >= trim_range_index,
+                "invariant: trim ranges must not overlap"
+            );
+            if i > trim_range_index {
+                removed_sample_indices.push(None);
+                remove_entry_range.push(None);
+            }
+            trim_range_index = i;
 
-                // Entire entry is inside trim range
-                if trim_duration.contains(&entry_duration.start)
-                    && trim_duration.contains(&(entry_duration.end - 1))
-                {
-                    remove_entry_range = Some(match remove_entry_range {
-                        Some(range) => {
-                            debug_assert_eq!(
-                                *range.end(),
-                                entry_index.saturating_sub(1),
-                                "invariant: non-contiguous entry index range"
-                            );
-                            (*range.start())..=entry_index
-                        }
-                        None => entry_index..=entry_index,
-                    });
-                    removed_sample_indices = Some(match removed_sample_indices {
-                        Some(range) => {
-                            debug_assert_eq!(
-                                range.end, current_sample_index,
-                                "invariant: non-contiguous sample index range"
-                            );
-                            range.start..(current_sample_index + entry.sample_count as usize)
-                        }
-                        None => {
-                            current_sample_index
-                                ..(current_sample_index + entry.sample_count as usize)
-                        }
-                    });
-                    current_duration_offset = next_duration_offset;
-                    current_sample_index += entry.sample_count as usize;
-                    duration_trimmed += entry_duration.end - entry_duration.start;
-                    continue;
-                }
-
-                // Partial overlap
-
-                let sample_duration = entry.sample_duration as u64;
-
-                let trim_sample_start_index = (current_sample_index as u64
-                    + (entry_trim_duration.start - entry_duration.start).div_ceil(sample_duration))
-                    as usize;
-                let trim_sample_end_index =
-                    match (entry_trim_duration.end - entry_duration.start) / sample_duration {
-                        0 => trim_sample_start_index,
-                        end => current_sample_index + end as usize - 1,
-                    };
-
-                removed_sample_indices = Some(match removed_sample_indices {
-                    Some(range) => {
+            // Entire entry is inside trim range
+            if trim_duration.contains(&entry_duration.start)
+                && trim_duration.contains(&(entry_duration.end - 1))
+            {
+                match remove_entry_range.last_mut() {
+                    Some(Some(range)) => {
                         debug_assert_eq!(
-                            range.end,
-                            (trim_sample_start_index as usize),
+                            *range.end(),
+                            entry_index.saturating_sub(1),
+                            "invariant: non-contiguous entry index range"
+                        );
+                        {
+                            *range = (*range.start())..=entry_index;
+                        }
+                    }
+                    Some(range) if range.is_none() => {
+                        range.replace(entry_index..=entry_index);
+                    }
+                    _ => debug_assert!(
+                        false,
+                        "invariant: there should always be a remove_entry_range item"
+                    ),
+                };
+                match removed_sample_indices.last_mut() {
+                    Some(Some(range)) => {
+                        debug_assert_eq!(
+                            range.end, current_sample_index,
                             "invariant: non-contiguous sample index range"
                         );
-                        range.start..(trim_sample_end_index as usize + 1)
+                        *range = range.start..(current_sample_index + entry.sample_count as usize);
                     }
-                    None => {
-                        (trim_sample_start_index as usize)..(trim_sample_end_index as usize + 1)
+                    Some(range) if range.is_none() => {
+                        range.replace(
+                            current_sample_index
+                                ..(current_sample_index + entry.sample_count as usize),
+                        );
                     }
-                });
-
-                let samples_to_remove = trim_sample_end_index + 1 - trim_sample_start_index;
-                entry.sample_count = entry.sample_count.sub(samples_to_remove as u32);
-
+                    _ => debug_assert!(
+                        false,
+                        "invariant: there should always be a removed_sample_indices item"
+                    ),
+                };
                 current_duration_offset = next_duration_offset;
                 current_sample_index += entry.sample_count as usize;
-                duration_trimmed += ((trim_sample_end_index as u64 + 1) * sample_duration)
-                    - (trim_sample_start_index as u64 * sample_duration);
+                duration_trimmed += entry_duration.end - entry_duration.start;
+                continue;
             }
+
+            // Partial overlap
+
+            let sample_duration = entry.sample_duration as u64;
+
+            let trim_sample_start_index = (current_sample_index as u64
+                + (entry_trim_duration.start - entry_duration.start).div_ceil(sample_duration))
+                as usize;
+            let trim_sample_end_index =
+                match (entry_trim_duration.end - entry_duration.start) / sample_duration {
+                    0 => trim_sample_start_index,
+                    end => current_sample_index + end as usize - 1,
+                };
+
+            match removed_sample_indices.last_mut() {
+                Some(Some(range)) => {
+                    debug_assert_eq!(
+                        range.end,
+                        (trim_sample_start_index as usize),
+                        "invariant: non-contiguous sample index range"
+                    );
+                    *range = range.start..(trim_sample_end_index as usize + 1);
+                }
+                Some(range) if range.is_none() => {
+                    range.replace(
+                        (trim_sample_start_index as usize)..(trim_sample_end_index as usize + 1),
+                    );
+                }
+                _ => debug_assert!(
+                    false,
+                    "invariant: there should always be a removed_sample_indices item"
+                ),
+            };
+
+            let samples_to_remove = trim_sample_end_index + 1 - trim_sample_start_index;
+            entry.sample_count = entry.sample_count.sub(samples_to_remove as u32);
+
+            current_duration_offset = next_duration_offset;
+            current_sample_index += entry.sample_count as usize;
+            duration_trimmed += ((trim_sample_end_index as u64 + 1) * sample_duration)
+                - (trim_sample_start_index as u64 * sample_duration);
         }
 
-        if let Some(mut range) = remove_entry_range {
+        let mut remove_entry_range = remove_entry_range.drain(0..);
+        while let Some(Some(mut range)) = remove_entry_range.next() {
             // maybe merge entries before and after the removed ones
             if *range.start() > 0 {
                 let mut prev_entry_sample_count = None;
@@ -223,41 +256,53 @@ impl TimeToSampleAtom {
 
         (
             duration_trimmed,
-            removed_sample_indices.map_or_else(|| Vec::new(), |r| vec![r]),
+            removed_sample_indices
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>(),
         )
     }
 }
 
-fn entry_trim_duration(entry_range: &Range<u64>, trim_range: &impl RangeBounds<u64>) -> Range<u64> {
-    // entry is contained in range
-    if trim_range.contains(&entry_range.start) && trim_range.contains(&(entry_range.end - 1)) {
-        return entry_range.clone();
+fn entry_trim_duration<'a, R>(
+    entry_range: &Range<u64>,
+    trim_range: &'a [R],
+) -> Option<(usize, &'a R, Range<u64>)>
+where
+    R: RangeBounds<u64>,
+{
+    for (i, trim_range) in trim_range.iter().enumerate() {
+        // entry is contained in range
+        if trim_range.contains(&entry_range.start) && trim_range.contains(&(entry_range.end - 1)) {
+            return Some((i, trim_range, entry_range.clone()));
+        }
+
+        let finite_trim_range = convert_range(entry_range, trim_range);
+
+        // trim range is contained in entry
+        if entry_range.contains(&finite_trim_range.start)
+            && finite_trim_range.end > 0
+            && entry_range.contains(&(finite_trim_range.end - 1))
+        {
+            return Some((i, trim_range, finite_trim_range));
+        }
+
+        // trim range starts inside of entry
+        if finite_trim_range.start >= entry_range.start && finite_trim_range.start < entry_range.end
+        {
+            return Some((i, trim_range, finite_trim_range.start..entry_range.end));
+        }
+
+        // trim range ends inside of entry
+        if trim_range.contains(&entry_range.start)
+            && finite_trim_range.start < entry_range.start
+            && finite_trim_range.end <= entry_range.end
+        {
+            return Some((i, trim_range, entry_range.start..finite_trim_range.end));
+        }
     }
 
-    let finite_trim_range = convert_range(entry_range, trim_range);
-
-    // trim range is contained in entry
-    if entry_range.contains(&finite_trim_range.start)
-        && finite_trim_range.end > 0
-        && entry_range.contains(&(finite_trim_range.end - 1))
-    {
-        return finite_trim_range;
-    }
-
-    // trim range starts inside of entry
-    if finite_trim_range.start >= entry_range.start && finite_trim_range.start < entry_range.end {
-        return finite_trim_range.start..entry_range.end;
-    }
-
-    // trim range ends inside of entry
-    if trim_range.contains(&entry_range.start)
-        && finite_trim_range.start < entry_range.start
-        && finite_trim_range.end <= entry_range.end
-    {
-        return entry_range.start..finite_trim_range.end;
-    }
-
-    0..0
+    None
 }
 
 fn convert_range(reference_range: &Range<u64>, range: &impl RangeBounds<u64>) -> Range<u64> {
@@ -620,7 +665,7 @@ mod tests {
                 entry
             }).collect::<Vec<_>>(),
         },
-        trim_first_entry_and_part_of_last_entry => |stts| {
+        trim_start_and_end => |stts| {
             let mut expect_entries = stts.entries[1..].to_vec();
             expect_entries.last_mut().unwrap().sample_count = 1;
             TrimDurationTestCase {
@@ -629,7 +674,7 @@ mod tests {
                     (Bound::Included(1_000), Bound::Excluded(1_300)),
                 ],
                 expect_removed_duration: 100 + 300,
-                expect_removed_samples: vec![0..2, 6..9],
+                expect_removed_samples: vec![0..1, 6..9],
                 expect_entries,
             }
         },
