@@ -102,17 +102,18 @@ impl TimeToSampleAtom {
         let mut current_sample_index = 0usize;
 
         for (entry_index, entry) in self.entries.iter_mut().enumerate() {
-            let entry_duration_start = current_duration_offset;
-            let entry_duration_end = current_duration_offset
-                + (entry.sample_count as u64 * entry.sample_duration as u64).saturating_sub(1);
-
             let next_duration_offset =
                 current_duration_offset + entry.sample_count as u64 * entry.sample_duration as u64;
 
             // Entire entry is outside trim range
-            let entry_duration_range = entry_duration_start..entry_duration_end + 1;
+            let entry_duration = {
+                let entry_duration_start = current_duration_offset;
+                let entry_duration_end = current_duration_offset
+                    + (entry.sample_count as u64 * entry.sample_duration as u64).saturating_sub(1);
+                entry_duration_start..entry_duration_end + 1
+            };
 
-            let entry_trim_duration = entry_trim_duration(&entry_duration_range, &trim_duration);
+            let entry_trim_duration = entry_trim_duration(&entry_duration, &trim_duration);
 
             // Entry is not in trim range
             if entry_trim_duration.is_empty() {
@@ -122,8 +123,8 @@ impl TimeToSampleAtom {
             }
 
             // Entire entry is inside trim range
-            if trim_duration.contains(&entry_duration_start)
-                && trim_duration.contains(&entry_duration_end)
+            if trim_duration.contains(&entry_duration.start)
+                && trim_duration.contains(&(entry_duration.end - 1))
             {
                 remove_entry_range = Some(match remove_entry_range {
                     Some(range) => {
@@ -158,15 +159,13 @@ impl TimeToSampleAtom {
             let sample_duration = entry.sample_duration as u64;
 
             let trim_sample_start_index = (current_sample_index as u64
-                + (entry_trim_duration.start - entry_duration_range.start)
-                    .div_ceil(sample_duration)) as usize;
-            let trim_sample_end_index = match ((entry_trim_duration.end / sample_duration)
-                * sample_duration)
-                - entry_duration_range.start
-            {
-                0 => trim_sample_start_index,
-                end => current_sample_index + end.div(sample_duration) as usize - 1,
-            };
+                + (entry_trim_duration.start - entry_duration.start).div_ceil(sample_duration))
+                as usize;
+            let trim_sample_end_index =
+                match (entry_trim_duration.end - entry_duration.start) / sample_duration {
+                    0 => trim_sample_start_index,
+                    end => current_sample_index + end as usize - 1,
+                };
 
             removed_sample_indices = Some(match removed_sample_indices {
                 Some(range) => {
@@ -504,6 +503,11 @@ mod tests {
             ],
         },
         trim_middle_samples => |stts| TrimDurationTestCase {
+            // entry 1 samples:
+            //  sample index 1 starts at 100 (not trimmed)
+            //  sample index 2 starts at 300 (trimmed)
+            //  sample index 3 starts at 500 (trimmed)
+            //  sample index 4 starts at 700 (not trimmed)
             trim_duration: vec![(Bound::Included(300), Bound::Excluded(700))],
             expect_removed_samples: vec![2..4],
             expect_entries: vec![
@@ -517,7 +521,12 @@ mod tests {
         },
         trim_middle_samples_partial => |stts| TrimDurationTestCase {
             // partially matching samples should be left intact
-            trim_duration: vec![(Bound::Included(250), Bound::Excluded(750))],
+            // entry 1 samples:
+            //  sample index 1 starts at 100 (partially matched, not trimmed)
+            //  sample index 2 starts at 300 (trimmed)
+            //  sample index 3 starts at 500 (trimmed)
+            //  sample index 4 starts at 700 (partially matched, not trimmed)
+            trim_duration: vec![(Bound::Included(240), Bound::Excluded(850))],
             expect_removed_samples: vec![2..4],
             expect_entries: vec![
                 stts.entries[0].clone(),
