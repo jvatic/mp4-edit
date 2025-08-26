@@ -1080,12 +1080,14 @@ impl<'a> MoovAtomRefMut<'a> {
     }
 
     /// Trims leading duration
+    #[deprecated = "use trim_duration instead"]
     pub fn trim_start(&mut self, duration: Duration) -> &mut Self {
         let range = Duration::ZERO..=duration;
-        self.trim_duration(range)
+        self.trim_duration(&[range])
     }
 
     /// Trims trailing duration
+    #[deprecated = "use trim_duration instead"]
     pub fn trim_end(&mut self, duration: Duration) -> &mut Self {
         // Get current movie duration and convert to Duration
         let movie_header = self.header();
@@ -1095,11 +1097,11 @@ impl<'a> MoovAtomRefMut<'a> {
         // Calculate where to start trimming (from end - duration)
         let trim_start = current_duration.saturating_sub(duration);
         let range = trim_start..;
-        self.trim_duration(range)
+        self.trim_duration(&[range])
     }
 
     /// Trims duration range from anywhere
-    pub fn trim_duration<R>(&mut self, range: R) -> &mut Self
+    pub fn trim_duration<R>(&mut self, trim_ranges: &[R]) -> &mut Self
     where
         R: RangeBounds<Duration> + Clone + Debug,
     {
@@ -1109,7 +1111,7 @@ impl<'a> MoovAtomRefMut<'a> {
         let movie_timescale = u64::from(self.header().timescale);
         let trimmed_duration = self
             .tracks()
-            .map(|mut trak| trak.trim_duration(movie_timescale, range.clone()))
+            .map(|mut trak| trak.trim_duration(movie_timescale, trim_ranges))
             .min();
         if let Some(trimmed_duration) = trimmed_duration {
             self.header().update_duration(|d| d - trimmed_duration);
@@ -1357,7 +1359,7 @@ impl<'a> TrakAtomRefMut<'a> {
     }
 
     /// trims given duration range, excluding partially matched samples, and returns the actual duration trimmed
-    fn trim_duration<R>(&mut self, movie_timescale: u64, range: R) -> Duration
+    fn trim_duration<R>(&mut self, movie_timescale: u64, trim_ranges: &[R]) -> Duration
     where
         R: RangeBounds<Duration> + Clone + Debug,
     {
@@ -1366,11 +1368,15 @@ impl<'a> TrakAtomRefMut<'a> {
         let mut minf = mdia.media_information();
         let mut stbl = minf.sample_table();
 
-        let scaled_range = scaled_duration_range(range, media_timescale);
+        let scaled_ranges = trim_ranges
+            .iter()
+            .cloned()
+            .map(|range| scaled_duration_range(range, media_timescale))
+            .collect::<Vec<_>>();
 
         // Step 1: Determine which samples to remove based on time
         let (trimmed_duration, sample_indices_to_remove) =
-            stbl.time_to_sample().trim_duration(&[scaled_range]);
+            stbl.time_to_sample().trim_duration(&scaled_ranges);
 
         let trimmed_duration = unscaled_duration(trimmed_duration, media_timescale);
 
@@ -2110,7 +2116,7 @@ mod tests {
 
         // Perform the trim operation with the range bounds
         let range = (test_case.start_bound, test_case.end_bound);
-        metadata.moov_mut().trim_duration(range);
+        metadata.moov_mut().trim_duration(&[range]);
 
         // Verify movie header duration was updated
         let new_movie_duration = metadata.moov().header().map(|h| h.duration).unwrap_or(0);
