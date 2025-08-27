@@ -6,12 +6,12 @@ use futures_io::AsyncRead;
 use std::{
     fmt::{self, Debug},
     io::Read,
-    ops::{Bound, Range, RangeBounds, RangeInclusive, Sub},
+    ops::{Bound, Range, RangeBounds, Sub},
 };
 
 use crate::{
     atom::{
-        util::{async_to_sync_read, DebugEllipsis},
+        util::{async_to_sync_read, DebugEllipsis, RangeCollection},
         FourCC,
     },
     parser::Parse,
@@ -90,27 +90,30 @@ impl TimeToSampleAtom {
     /// Removes samples contained in the given `trim_duration`, excluding partially matched samples.
     /// Returns actual duration trimmed and indices of removed samples.
     ///
+    /// # Panics
+    ///
+    /// This method panics if the trim ranges overlap.
+    ///
     /// WARNING: failing to update other atoms appropriately will cause file corruption.
     pub(crate) fn trim_duration<R>(&mut self, trim_ranges: &[R]) -> (u64, Vec<Range<usize>>)
     where
         R: RangeBounds<u64> + Debug,
     {
         let mut trim_range_index = 0;
-        // removed sample indices will be contiguous
-        let mut removed_sample_indices: Vec<Option<Range<usize>>> =
-            Vec::with_capacity(trim_ranges.len());
-        removed_sample_indices.push(None);
-        // removed entries will be contiguous
-        let mut remove_entry_range: Vec<Option<RangeInclusive<usize>>> = vec![None];
-        let mut current_duration_offset = 0u64;
-        let mut current_sample_index = 0usize;
-        let mut duration_trimmed = 0u64;
+        let mut removed_sample_indices = RangeCollection::with_capacity(trim_ranges.len());
+        let mut remove_entry_range = RangeCollection::new();
+        let mut next_duration_offset = 0u64;
+        let mut next_sample_index = 0usize;
+        let mut total_duration_trimmed = 0u64;
 
         for (entry_index, entry) in self.entries.iter_mut().enumerate() {
-            let next_duration_offset =
+            let current_duration_offset = next_duration_offset;
+            next_duration_offset =
                 current_duration_offset + entry.sample_count as u64 * entry.sample_duration as u64;
 
-            // Entire entry is outside trim range
+            let current_sample_index = next_sample_index;
+            next_sample_index += entry.sample_count as usize;
+
             let entry_duration = {
                 let entry_duration_start = current_duration_offset;
                 let entry_duration_end = current_duration_offset
@@ -122,8 +125,7 @@ impl TimeToSampleAtom {
                 match entry_trim_duration(&entry_duration, trim_ranges) {
                     Some(m) => m,
                     None => {
-                        current_duration_offset = next_duration_offset;
-                        current_sample_index += entry.sample_count as usize;
+                        // Entire entry is outside trim range
                         continue;
                     }
                 };
@@ -132,57 +134,17 @@ impl TimeToSampleAtom {
                 i >= trim_range_index,
                 "invariant: trim ranges must not overlap"
             );
-            if i > trim_range_index {
-                removed_sample_indices.push(None);
-                remove_entry_range.push(None);
-            }
             trim_range_index = i;
 
             // Entire entry is inside trim range
             if trim_duration.contains(&entry_duration.start)
                 && trim_duration.contains(&(entry_duration.end - 1))
             {
-                match remove_entry_range.last_mut() {
-                    Some(Some(range)) => {
-                        debug_assert_eq!(
-                            *range.end(),
-                            entry_index.saturating_sub(1),
-                            "invariant: non-contiguous entry index range"
-                        );
-                        {
-                            *range = (*range.start())..=entry_index;
-                        }
-                    }
-                    Some(range) if range.is_none() => {
-                        range.replace(entry_index..=entry_index);
-                    }
-                    _ => debug_assert!(
-                        false,
-                        "invariant: there should always be a remove_entry_range item"
-                    ),
-                };
-                match removed_sample_indices.last_mut() {
-                    Some(Some(range)) => {
-                        debug_assert_eq!(
-                            range.end, current_sample_index,
-                            "invariant: non-contiguous sample index range"
-                        );
-                        *range = range.start..(current_sample_index + entry.sample_count as usize);
-                    }
-                    Some(range) if range.is_none() => {
-                        range.replace(
-                            current_sample_index
-                                ..(current_sample_index + entry.sample_count as usize),
-                        );
-                    }
-                    _ => debug_assert!(
-                        false,
-                        "invariant: there should always be a removed_sample_indices item"
-                    ),
-                };
-                current_duration_offset = next_duration_offset;
-                current_sample_index += entry.sample_count as usize;
-                duration_trimmed += entry_duration.end - entry_duration.start;
+                remove_entry_range.insert(entry_index..entry_index + 1);
+                removed_sample_indices.insert(
+                    current_sample_index..current_sample_index + entry.sample_count as usize,
+                );
+                total_duration_trimmed += entry_duration.end - entry_duration.start;
                 continue;
             }
 
@@ -199,55 +161,28 @@ impl TimeToSampleAtom {
                     end => current_sample_index + end as usize - 1,
                 };
 
-            match removed_sample_indices.last_mut() {
-                Some(Some(range)) => {
-                    debug_assert_eq!(
-                        range.end,
-                        (trim_sample_start_index as usize),
-                        "invariant: non-contiguous sample index range"
-                    );
-                    *range = range.start..(trim_sample_end_index as usize + 1);
-                }
-                Some(range) if range.is_none() => {
-                    range.replace(
-                        (trim_sample_start_index as usize)..(trim_sample_end_index as usize + 1),
-                    );
-                }
-                _ => debug_assert!(
-                    false,
-                    "invariant: there should always be a removed_sample_indices item"
-                ),
-            };
+            removed_sample_indices
+                .insert((trim_sample_start_index as usize)..(trim_sample_end_index as usize + 1));
 
-            let samples_to_remove = trim_sample_end_index + 1 - trim_sample_start_index;
-            entry.sample_count = entry.sample_count.sub(samples_to_remove as u32);
+            let num_samples_to_remove = trim_sample_end_index + 1 - trim_sample_start_index;
+            entry.sample_count = entry.sample_count.sub(num_samples_to_remove as u32);
 
-            current_duration_offset = next_duration_offset;
-            current_sample_index += entry.sample_count as usize;
-            duration_trimmed += ((trim_sample_end_index as u64 + 1) * sample_duration)
+            total_duration_trimmed += ((trim_sample_end_index as u64 + 1) * sample_duration)
                 - (trim_sample_start_index as u64 * sample_duration);
         }
 
-        let mut remove_entry_range = remove_entry_range.drain(0..);
-        while let Some(Some(mut range)) = remove_entry_range.next() {
+        for mut range in remove_entry_range.into_iter() {
             // maybe merge entries before and after the removed ones
-            if *range.start() > 0 {
-                let mut prev_entry_sample_count = None;
-                let prev_entry_index = *range.start() - 1;
-                let next_entry_index = *range.end() + 1;
-                if let Some(entry_prev) = self.entries.get(prev_entry_index) {
-                    if let Some(entry_next) = self.entries.get(next_entry_index) {
-                        if entry_prev.sample_duration == entry_next.sample_duration {
-                            range = (*range.start())..=next_entry_index;
-                            prev_entry_sample_count =
-                                Some(entry_prev.sample_count + entry_next.sample_count);
-                        }
+            if range.start > 0 {
+                if let Ok([prev_entry, next_entry]) = self
+                    .entries
+                    .as_mut_slice()
+                    .get_disjoint_mut([range.start - 1, range.end])
+                {
+                    if prev_entry.sample_duration == next_entry.sample_duration {
+                        prev_entry.sample_count = prev_entry.sample_count + next_entry.sample_count;
+                        range.end += 1;
                     }
-                }
-
-                if let Some(prev_entry_sample_count) = prev_entry_sample_count {
-                    let prev_entry = self.entries.get_mut(prev_entry_index).unwrap();
-                    prev_entry.sample_count = prev_entry_sample_count;
                 }
             }
 
@@ -255,11 +190,8 @@ impl TimeToSampleAtom {
         }
 
         (
-            duration_trimmed,
-            removed_sample_indices
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>(),
+            total_duration_trimmed,
+            removed_sample_indices.into_iter().collect(),
         )
     }
 }
