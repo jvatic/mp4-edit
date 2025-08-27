@@ -3,15 +3,11 @@ use bon::{bon, Builder};
 use derive_more::{Deref, DerefMut};
 
 use futures_io::AsyncRead;
-use std::{
-    fmt,
-    io::Read,
-    ops::{Range, RangeInclusive},
-};
+use std::{fmt, io::Read, ops::Range};
 
 use crate::{
     atom::{
-        util::{async_to_sync_read, DebugEllipsis},
+        util::{async_to_sync_read, DebugEllipsis, RangeCollection},
         FourCC,
     },
     parser::Parse,
@@ -86,7 +82,7 @@ impl SampleToChunkAtom {
     }
 
     /// Removes sample indices from the sample-to-chunk mapping table,
-    /// and returns the indices of any chunks which are now empty (and should be removed)
+    /// and returns the indices (starting from zero) of any chunks which are now empty (and should be removed)
     ///
     /// `sample_indices_to_remove` must contain contiguous sample indices as a single range,
     /// multiple ranges must not overlap.
@@ -97,12 +93,10 @@ impl SampleToChunkAtom {
     ) -> Vec<Range<usize>> {
         let mut next_sample_index = 0usize;
 
-        // removed chunk indices will be contiguous
-        let mut removed_chunk_indices: Option<Range<usize>> = None; // 0-indexed
+        let mut removed_chunk_indices = RangeCollection::new();
         let mut num_removed_chunks = 0usize;
 
-        // removed entries will be contiguous
-        let mut remove_entry_range: Option<RangeInclusive<usize>> = None;
+        let mut remove_entry_range = RangeCollection::new();
 
         let mut insert_entries: Vec<(usize, SampleToChunkEntry)> = Vec::new();
         let mut num_inserted_entries = 0usize;
@@ -144,28 +138,8 @@ impl SampleToChunkAtom {
 
             // sample indices to remove fully includes this entry
             if entry_samples_to_remove == entry_sample_count {
-                remove_entry_range = Some(match remove_entry_range {
-                    Some(range) => {
-                        debug_assert_eq!(
-                            *range.end(),
-                            entry_index.saturating_sub(1),
-                            "invariant: non-contiguous entry index range"
-                        );
-                        (*range.start())..=entry_index
-                    }
-                    None => entry_index..=entry_index,
-                });
-
-                removed_chunk_indices = Some(match removed_chunk_indices {
-                    Some(range) => {
-                        debug_assert_eq!(
-                            range.end, chunk_index,
-                            "invariant: non-contiguous chunk index range"
-                        );
-                        range.start..(chunk_index + entry_chunk_count)
-                    }
-                    None => chunk_index..(chunk_index + entry_chunk_count),
-                });
+                remove_entry_range.insert(entry_index..entry_index + 1);
+                removed_chunk_indices.insert(chunk_index..(chunk_index + entry_chunk_count));
                 num_removed_chunks += entry_chunk_count;
                 continue;
             }
@@ -206,16 +180,7 @@ impl SampleToChunkAtom {
             };
 
             if chunks_to_remove > 0 {
-                removed_chunk_indices = Some(match removed_chunk_indices {
-                    Some(range) => {
-                        debug_assert_eq!(
-                            range.end, chunk_index,
-                            "invariant: non-contiguous chunk index range"
-                        );
-                        range.start..(chunk_index + chunks_to_remove)
-                    }
-                    None => chunk_index..(chunk_index + chunks_to_remove),
-                });
+                removed_chunk_indices.insert(chunk_index..(chunk_index + chunks_to_remove));
                 num_removed_chunks += chunks_to_remove;
             }
 
@@ -249,19 +214,19 @@ impl SampleToChunkAtom {
             self.entries.insert(insert_index, entry);
         }
 
-        if let Some(mut range) = remove_entry_range {
+        for mut range in remove_entry_range.into_iter() {
             // maybe merge entries before and after the removed ones
-            if *range.start() > 0 {
-                let prev_entry_index = *range.start() - 1;
-                let next_entry_index = *range.end() + 1;
-                if let Some(entry_prev) = self.entries.get(prev_entry_index) {
-                    if let Some(entry_next) = self.entries.get(next_entry_index) {
-                        if entry_prev.samples_per_chunk == entry_next.samples_per_chunk
-                            && entry_prev.sample_description_index
-                                == entry_next.sample_description_index
-                        {
-                            range = (*range.start())..=next_entry_index;
-                        }
+            if range.start > 0 {
+                if let Ok([entry_prev, entry_next]) = self
+                    .entries
+                    .as_mut_slice()
+                    .get_disjoint_mut([range.start - 1, range.end])
+                {
+                    if entry_prev.samples_per_chunk == entry_next.samples_per_chunk
+                        && entry_prev.sample_description_index
+                            == entry_next.sample_description_index
+                    {
+                        range.end += 1;
                     }
                 }
             }
@@ -269,7 +234,7 @@ impl SampleToChunkAtom {
             self.entries.drain(range);
         }
 
-        removed_chunk_indices.map_or_else(|| Vec::new(), |r| vec![r])
+        removed_chunk_indices.into_iter().collect()
     }
 }
 
