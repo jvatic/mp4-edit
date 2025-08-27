@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 use std::fmt::{self, Debug};
 use std::future::Future;
 use std::io::SeekFrom;
-use std::ops::{Deref, DerefMut, RangeBounds};
+use std::ops::{Deref, DerefMut, Range, RangeBounds};
 use std::time::Duration;
 use thiserror::Error;
 
@@ -1082,7 +1082,9 @@ impl<'a> MoovAtomRefMut<'a> {
 
 #[bon]
 impl<'a> MoovAtomRefMut<'a> {
-    /// Trim duration from tracks
+    /// Trim duration from tracks.
+    ///
+    /// See also [`Self::retain_duration`].
     #[builder(finish_fn(name = "trim"), builder_type = TrimDuration)]
     pub fn trim_duration(
         &mut self,
@@ -1099,6 +1101,18 @@ impl<'a> MoovAtomRefMut<'a> {
             .into_iter()
             .flatten()
             .collect::<Vec<_>>();
+        self.trim_duration_ranges(&trim_ranges)
+    }
+
+    /// Retains given duration range, trimming everything before and after.
+    ///
+    /// See also [`Self::trim_duration`].
+    pub fn retain_duration(&mut self, range: Range<Duration>) -> &mut Self {
+        use std::ops::Bound;
+        let trim_ranges = vec![
+            (Bound::Unbounded, Bound::Included(range.start)),
+            (Bound::Excluded(range.end), Bound::Unbounded),
+        ];
         self.trim_duration_ranges(&trim_ranges)
     }
 
