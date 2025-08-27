@@ -1078,30 +1078,31 @@ impl<'a> MoovAtomRefMut<'a> {
             .retain(|a| a.header.atom_type != TRAK || pred(TrakAtomRef::new(a)));
         self
     }
+}
 
-    /// Trims leading duration
-    #[deprecated = "use trim_duration instead"]
-    pub fn trim_start(&mut self, duration: Duration) -> &mut Self {
-        let range = Duration::ZERO..=duration;
-        self.trim_duration(&[range])
+#[bon]
+impl<'a> MoovAtomRefMut<'a> {
+    /// Trim duration from tracks
+    #[builder(finish_fn(name = "trim"), builder_type = TrimDuration)]
+    pub fn trim_duration(
+        &mut self,
+        from_start: Option<Duration>,
+        from_end: Option<Duration>,
+    ) -> &mut Self {
+        use std::ops::Bound;
+        let start_duration = from_start.map(|d| (Bound::Unbounded, Bound::Excluded(d)));
+        let end_duration = from_end.map(|d| {
+            let d = self.header().duration().saturating_sub(d);
+            (Bound::Included(d), Bound::Unbounded)
+        });
+        let trim_ranges = vec![start_duration, end_duration]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        self.trim_duration_ranges(&trim_ranges)
     }
 
-    /// Trims trailing duration
-    #[deprecated = "use trim_duration instead"]
-    pub fn trim_end(&mut self, duration: Duration) -> &mut Self {
-        // Get current movie duration and convert to Duration
-        let movie_header = self.header();
-        let movie_timescale = u64::from(movie_header.timescale);
-        let current_duration = unscaled_duration(movie_header.duration, movie_timescale);
-
-        // Calculate where to start trimming (from end - duration)
-        let trim_start = current_duration.saturating_sub(duration);
-        let range = trim_start..;
-        self.trim_duration(&[range])
-    }
-
-    /// Trims duration range from anywhere
-    pub fn trim_duration<R>(&mut self, trim_ranges: &[R]) -> &mut Self
+    fn trim_duration_ranges<R>(&mut self, trim_ranges: &[R]) -> &mut Self
     where
         R: RangeBounds<Duration> + Clone + Debug,
     {
@@ -1117,6 +1118,23 @@ impl<'a> MoovAtomRefMut<'a> {
             self.header().update_duration(|d| d - trimmed_duration);
         }
         self
+    }
+}
+
+#[bon]
+impl<'a, 'b, S: trim_duration::State> TrimDuration<'a, 'b, S> {
+    #[builder(finish_fn(name = "trim"), builder_type = TrimDurationRanges)]
+    pub fn ranges<R>(
+        self,
+        #[builder(start_fn)] ranges: impl IntoIterator<Item = R>,
+    ) -> &'b mut MoovAtomRefMut<'a>
+    where
+        R: RangeBounds<Duration> + Clone + Debug,
+        S::FromEnd: trim_duration::IsUnset,
+        S::FromStart: trim_duration::IsUnset,
+    {
+        self.self_receiver
+            .trim_duration_ranges(&ranges.into_iter().collect::<Vec<_>>())
     }
 }
 
@@ -2116,7 +2134,11 @@ mod tests {
 
         // Perform the trim operation with the range bounds
         let range = (test_case.start_bound, test_case.end_bound);
-        metadata.moov_mut().trim_duration(&[range]);
+        metadata
+            .moov_mut()
+            .trim_duration()
+            .ranges(vec![range])
+            .trim();
 
         // Verify movie header duration was updated
         let new_movie_duration = metadata.moov().header().map(|h| h.duration).unwrap_or(0);
