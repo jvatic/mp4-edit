@@ -57,14 +57,15 @@ pub struct TrackHeaderAtom {
 }
 
 impl TrackHeaderAtom {
+    pub fn duration(&self, movie_timescale: u64) -> Duration {
+        unscaled_duration(self.duration, movie_timescale)
+    }
+
     pub fn update_duration<F>(&mut self, movie_timescale: u64, mut closure: F) -> &mut Self
     where
         F: FnMut(Duration) -> Duration,
     {
-        self.duration = scaled_duration(
-            closure(unscaled_duration(self.duration, movie_timescale)),
-            movie_timescale,
-        );
+        self.duration = scaled_duration(closure(self.duration(movie_timescale)), movie_timescale);
         self
     }
 }

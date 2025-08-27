@@ -78,6 +78,10 @@ impl MovieHeaderAtom {
         );
         self
     }
+
+    pub fn duration(&self) -> Duration {
+        unscaled_duration(self.duration, u64::from(self.timescale))
+    }
 }
 
 impl Parse for MovieHeaderAtom {

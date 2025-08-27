@@ -145,14 +145,15 @@ pub struct MediaHeaderAtom {
 }
 
 impl MediaHeaderAtom {
+    pub fn duration(&self) -> Duration {
+        unscaled_duration(self.duration, u64::from(self.timescale))
+    }
+
     pub fn update_duration<F>(&mut self, mut closure: F) -> &mut Self
     where
         F: FnMut(Duration) -> Duration,
     {
-        self.duration = scaled_duration(
-            closure(unscaled_duration(self.duration, u64::from(self.timescale))),
-            u64::from(self.timescale),
-        );
+        self.duration = scaled_duration(closure(self.duration()), u64::from(self.timescale));
         self
     }
 }

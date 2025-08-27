@@ -90,7 +90,7 @@ impl SampleToChunkAtom {
     ///
     /// `sample_indices_to_remove` must contain contiguous sample indices as a single range,
     /// multiple ranges must not overlap.
-    pub fn remove_sample_indices(
+    pub(crate) fn remove_sample_indices(
         &mut self,
         sample_indices_to_remove: &[Range<usize>],
         total_chunks: usize,

@@ -91,7 +91,7 @@ impl TimeToSampleAtom {
     /// Returns actual duration trimmed and indices of removed samples.
     ///
     /// WARNING: failing to update other atoms appropriately will cause file corruption.
-    pub fn trim_duration<R>(&mut self, trim_ranges: &[R]) -> (u64, Vec<Range<usize>>)
+    pub(crate) fn trim_duration<R>(&mut self, trim_ranges: &[R]) -> (u64, Vec<Range<usize>>)
     where
         R: RangeBounds<u64> + Debug,
     {

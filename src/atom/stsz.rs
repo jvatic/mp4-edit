@@ -86,7 +86,7 @@ pub struct SampleSizeAtom {
 }
 
 impl SampleSizeAtom {
-    pub fn remove_sample_indices(&mut self, indices_to_remove: &[Range<usize>]) {
+    pub(crate) fn remove_sample_indices(&mut self, indices_to_remove: &[Range<usize>]) {
         let num_samples_removed = indices_to_remove
             .iter()
             .map(|r| r.end - r.start)
