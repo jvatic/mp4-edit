@@ -30,18 +30,13 @@ use crate::{
     atom::{
         chpl::{ChapterListAtom, CHPL},
         containers::{META, META_VERSION_FLAGS_SIZE},
-        dref::{DataReferenceAtom, DREF},
         elst::{EditListAtom, ELST},
-        free::{FreeAtom, FREE, SKIP},
         ftyp::{FileTypeAtom, FTYP},
         hdlr::{HandlerReferenceAtom, HDLR},
-        ilst::{ItemListAtom, ILST},
         mdhd::{MediaHeaderAtom, MDHD},
         mvhd::{MovieHeaderAtom, MVHD},
-        sbgp::{SampleToGroupAtom, SBGP},
-        sgpd::{SampleGroupDescriptionAtom, SGPD},
-        smhd::{SoundMediaHeaderAtom, SMHD},
-        stco_co64::{ChunkOffsetAtom, CO64, STCO},
+        smhd::SMHD,
+        stco_co64::{ChunkOffsetAtom, STCO},
         stsc::{SampleToChunkAtom, STSC},
         stsd::{SampleDescriptionTableAtom, STSD},
         stsz::{SampleSizeAtom, STSZ},
@@ -371,78 +366,20 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
     async fn parse_atom_data(&mut self, header: &AtomHeader) -> Result<AtomData, ParseError> {
         let content_data = self.reader.read_data(header.data_size).await?;
         let cursor = Cursor::new(content_data);
-        let atom_type = header.atom_type;
-        let atom_data = match atom_type.deref() {
-            FTYP => FileTypeAtom::parse(atom_type, cursor)
-                .await
-                .map(AtomData::from),
-            MVHD => MovieHeaderAtom::parse(atom_type, cursor)
-                .await
-                .map(AtomData::from),
-            MDHD => MediaHeaderAtom::parse(atom_type, cursor)
-                .await
-                .map(AtomData::from),
-            ELST => EditListAtom::parse(atom_type, cursor)
-                .await
-                .map(AtomData::from),
-            HDLR => HandlerReferenceAtom::parse(atom_type, cursor)
-                .await
-                .map(AtomData::from),
-            SMHD => SoundMediaHeaderAtom::parse(atom_type, cursor)
-                .await
-                .map(AtomData::from),
-            ILST => ItemListAtom::parse(atom_type, cursor)
-                .await
-                .map(AtomData::from),
-            TKHD => TrackHeaderAtom::parse(atom_type, cursor)
-                .await
-                .map(AtomData::from),
-            STSD => SampleDescriptionTableAtom::parse(atom_type, cursor)
-                .await
-                .map(AtomData::from),
-            TREF => TrackReferenceAtom::parse(atom_type, cursor)
-                .await
-                .map(AtomData::from),
-            DREF => DataReferenceAtom::parse(atom_type, cursor)
-                .await
-                .map(AtomData::from),
-            STSZ => SampleSizeAtom::parse(atom_type, cursor)
-                .await
-                .map(AtomData::from),
-            STCO | CO64 => ChunkOffsetAtom::parse(atom_type, cursor)
-                .await
-                .map(AtomData::from),
-            STTS => TimeToSampleAtom::parse(atom_type, cursor)
-                .await
-                .map(AtomData::from),
-            STSC => SampleToChunkAtom::parse(atom_type, cursor)
-                .await
-                .map(AtomData::from),
-            CHPL => ChapterListAtom::parse(atom_type, cursor)
-                .await
-                .map(AtomData::from),
-            SGPD => SampleGroupDescriptionAtom::parse(atom_type, cursor)
-                .await
-                .map(AtomData::from),
-            SBGP => SampleToGroupAtom::parse(atom_type, cursor)
-                .await
-                .map(AtomData::from),
-            FREE | SKIP => FreeAtom::parse(atom_type, cursor).await.map(AtomData::from),
-            fourcc => Ok(RawData::new(FourCC(*fourcc), cursor.get_ref().clone()).into()),
-        }
-        .map_err(|err| ParseError {
-            kind: ParseErrorKind::AtomParsing,
-            location: Some(err.location.map_or_else(
-                || header.location(),
-                |(offset, size)| {
-                    let (header_offset, header_size) = header.location();
-                    (header_offset + offset, size.min(header_size))
-                },
-            )),
-            source: Some(anyhow::Error::from(err).context(atom_type).into()),
-        })?;
 
-        Ok(atom_data)
+        AtomData::parse(header.atom_type, cursor)
+            .await
+            .map_err(|err| ParseError {
+                kind: ParseErrorKind::AtomParsing,
+                location: Some(err.location.map_or_else(
+                    || header.location(),
+                    |(offset, size)| {
+                        let (header_offset, header_size) = header.location();
+                        (header_offset + offset, size.min(header_size))
+                    },
+                )),
+                source: Some(anyhow::Error::from(err).context(header.atom_type).into()),
+            })
     }
 }
 
