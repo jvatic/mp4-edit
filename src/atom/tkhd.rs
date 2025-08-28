@@ -9,7 +9,7 @@ use crate::{
         util::{async_to_sync_read, mp4_timestamp_now, scaled_duration, unscaled_duration},
         FourCC,
     },
-    parser::Parse,
+    parser::ParseAtom,
     writer::SerializeAtom,
     ParseError,
 };
@@ -67,7 +67,7 @@ impl TrackHeaderAtom {
     }
 }
 
-impl Parse for TrackHeaderAtom {
+impl ParseAtom for TrackHeaderAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,

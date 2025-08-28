@@ -4,7 +4,7 @@ use std::fmt;
 
 use crate::{
     atom::util::{DebugEllipsis, FourCC},
-    parser::{Parse, ParseErrorKind},
+    parser::{ParseAtom, ParseErrorKind},
     writer::SerializeAtom,
     ParseError,
 };
@@ -32,7 +32,7 @@ impl fmt::Debug for FreeAtom {
     }
 }
 
-impl Parse for FreeAtom {
+impl ParseAtom for FreeAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         mut reader: R,

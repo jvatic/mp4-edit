@@ -49,7 +49,7 @@ pub mod containers {
 use bon::bon;
 
 use crate::{
-    parser::{Parse, ParseErrorKind},
+    parser::{ParseAtom, ParseErrorKind},
     writer::SerializeAtom,
     ParseError,
 };
@@ -357,7 +357,7 @@ impl From<RawData> for AtomData {
     }
 }
 
-impl Parse for AtomData {
+impl ParseAtom for AtomData {
     async fn parse<R: futures_io::AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         mut reader: R,

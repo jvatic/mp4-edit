@@ -1,7 +1,7 @@
 //! Test utilities for atom round-trip testing
 
 use crate::atom::FourCC;
-use crate::parser::Parse;
+use crate::parser::ParseAtom;
 use crate::writer::SerializeAtom;
 use anyhow::Result;
 use futures_util::io::Cursor;
@@ -64,7 +64,7 @@ pub fn discover_test_files(atom_type: &str) -> Vec<String> {
 /// ```
 pub async fn test_atom_roundtrip<T>(atom_type_bytes: &[u8; 4]) -> Result<()>
 where
-    T: Parse + SerializeAtom + Send,
+    T: ParseAtom + SerializeAtom + Send,
 {
     let atom_type_str = std::str::from_utf8(atom_type_bytes)
         .unwrap_or_else(|_| panic!("Invalid atom type bytes: {:?}", atom_type_bytes));
@@ -93,7 +93,7 @@ where
 /// Tests a single file for round-trip consistency
 async fn test_single_file<T>(atom_type_bytes: &[u8; 4], file_path: &str) -> Result<()>
 where
-    T: Parse + SerializeAtom + Send,
+    T: ParseAtom + SerializeAtom + Send,
 {
     let binary_data =
         fs::read(file_path).unwrap_or_else(|_| panic!("Failed to read test file: {}", file_path));
@@ -193,7 +193,7 @@ where
 /// ```
 pub fn test_atom_roundtrip_sync<T>(atom_type_bytes: &[u8; 4])
 where
-    T: Parse + SerializeAtom + Send,
+    T: ParseAtom + SerializeAtom + Send,
 {
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
     rt.block_on(async { test_atom_roundtrip::<T>(atom_type_bytes).await })

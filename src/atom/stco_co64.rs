@@ -9,7 +9,7 @@ use crate::{
         util::{async_to_sync_read, DebugEllipsis},
         FourCC,
     },
-    parser::Parse,
+    parser::ParseAtom,
     writer::SerializeAtom,
     ParseError,
 };
@@ -112,7 +112,7 @@ impl<S: chunk_offset_atom_builder::State> ChunkOffsetAtomBuilder<S> {
     }
 }
 
-impl Parse for ChunkOffsetAtom {
+impl ParseAtom for ChunkOffsetAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,

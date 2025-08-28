@@ -10,7 +10,7 @@ use crate::{
         util::{async_to_sync_read, DebugEllipsis, RangeCollection},
         FourCC,
     },
-    parser::Parse,
+    parser::ParseAtom,
     writer::SerializeAtom,
     ParseError,
 };
@@ -293,7 +293,7 @@ impl From<Vec<SampleToChunkEntry>> for SampleToChunkAtom {
     }
 }
 
-impl Parse for SampleToChunkAtom {
+impl ParseAtom for SampleToChunkAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,

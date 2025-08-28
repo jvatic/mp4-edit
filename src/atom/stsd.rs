@@ -11,7 +11,7 @@ use crate::{
         stsd::extension::parse_stsd_extensions,
         util::{async_to_sync_read, FourCC},
     },
-    parser::Parse,
+    parser::ParseAtom,
     writer::SerializeAtom,
     ParseError,
 };
@@ -238,7 +238,7 @@ impl SampleDescriptionTableAtom {
     }
 }
 
-impl Parse for SampleDescriptionTableAtom {
+impl ParseAtom for SampleDescriptionTableAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,

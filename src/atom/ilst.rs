@@ -9,7 +9,7 @@ use crate::atom::util::DebugEllipsis;
 use crate::ParseError;
 use crate::{
     atom::{util::async_to_sync_read, FourCC},
-    parser::Parse,
+    parser::ParseAtom,
     writer::SerializeAtom,
 };
 
@@ -112,7 +112,7 @@ pub struct ItemListAtom {
     pub items: Vec<MetadataItem>,
 }
 
-impl Parse for ItemListAtom {
+impl ParseAtom for ItemListAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,
