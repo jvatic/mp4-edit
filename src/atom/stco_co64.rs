@@ -94,10 +94,6 @@ impl ChunkOffsetAtom {
 
     /// Removes the specified chunk indices.
     pub(crate) fn remove_chunk_indices(&mut self, chunk_indices_to_remove: &[Range<usize>]) {
-        if chunk_indices_to_remove.is_empty() {
-            return;
-        }
-
         for range in chunk_indices_to_remove.iter().cloned() {
             self.chunk_offsets.drain(range);
         }
