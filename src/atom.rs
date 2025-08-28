@@ -1,3 +1,7 @@
+/*!
+ * This mod is concerned with mp4 atoms and how to {de}serialize them.
+*/
+
 pub mod chpl;
 pub mod dref;
 pub mod elst;
@@ -44,7 +48,11 @@ pub mod containers {
 
 use bon::bon;
 
-use crate::writer::SerializeAtom;
+use crate::{
+    parser::{Parse, ParseErrorKind},
+    writer::SerializeAtom,
+    ParseError,
+};
 
 pub use self::{
     chpl::ChapterListAtom, dref::DataReferenceAtom, elst::EditListAtom, free::FreeAtom,
@@ -55,6 +63,7 @@ pub use self::{
     stts::TimeToSampleAtom, tkhd::TrackHeaderAtom, tref::TrackReferenceAtom, util::FourCC,
 };
 
+/// Represents raw atom bytes.
 #[derive(Clone)]
 pub struct RawData {
     atom_type: FourCC,
@@ -118,6 +127,10 @@ impl AtomHeader {
     }
 }
 
+/// Represents a tree of mp4 atoms. Container atoms usually don't have [`Self::data`] (except for e.g. [meta]),
+/// and leaf atoms don't have any [`Self::children`].
+///
+/// This structure allows us to represent any tree of mp4 atoms (boxes), even ones we don't (yet) support (via [RawData]).
 #[derive(Debug, Clone)]
 pub struct Atom {
     pub header: AtomHeader,
@@ -190,6 +203,9 @@ impl SerializeAtom for Atom {
     }
 }
 
+/// Represents data contained in an atom (other than children).
+///
+/// Usually only leaf atoms contain data, but some container types such as [meta] have some extra headers.
 #[derive(Debug, Clone)]
 pub enum AtomData {
     FileType(FileTypeAtom),
@@ -215,7 +231,6 @@ pub enum AtomData {
     RawData(RawData),
 }
 
-// Implement From traits for all atom types
 impl From<FileTypeAtom> for AtomData {
     fn from(atom: FileTypeAtom) -> Self {
         AtomData::FileType(atom)
@@ -342,9 +357,118 @@ impl From<RawData> for AtomData {
     }
 }
 
+impl Parse for AtomData {
+    async fn parse<R: futures_io::AsyncRead + Unpin + Send>(
+        atom_type: FourCC,
+        mut reader: R,
+    ) -> Result<Self, ParseError> {
+        use std::ops::Deref;
+
+        use futures_util::AsyncReadExt;
+
+        use self::{
+            chpl::{ChapterListAtom, CHPL},
+            dref::{DataReferenceAtom, DREF},
+            elst::{EditListAtom, ELST},
+            free::{FreeAtom, FREE, SKIP},
+            ftyp::{FileTypeAtom, FTYP},
+            hdlr::{HandlerReferenceAtom, HDLR},
+            ilst::{ItemListAtom, ILST},
+            mdhd::{MediaHeaderAtom, MDHD},
+            mvhd::{MovieHeaderAtom, MVHD},
+            sbgp::{SampleToGroupAtom, SBGP},
+            sgpd::{SampleGroupDescriptionAtom, SGPD},
+            smhd::{SoundMediaHeaderAtom, SMHD},
+            stco_co64::{ChunkOffsetAtom, CO64, STCO},
+            stsc::{SampleToChunkAtom, STSC},
+            stsd::{SampleDescriptionTableAtom, STSD},
+            stsz::{SampleSizeAtom, STSZ},
+            stts::{TimeToSampleAtom, STTS},
+            tkhd::{TrackHeaderAtom, TKHD},
+            tref::{TrackReferenceAtom, TREF},
+            FourCC, RawData,
+        };
+
+        match atom_type.deref() {
+            FTYP => FileTypeAtom::parse(atom_type, reader)
+                .await
+                .map(AtomData::from),
+            MVHD => MovieHeaderAtom::parse(atom_type, reader)
+                .await
+                .map(AtomData::from),
+            MDHD => MediaHeaderAtom::parse(atom_type, reader)
+                .await
+                .map(AtomData::from),
+            ELST => EditListAtom::parse(atom_type, reader)
+                .await
+                .map(AtomData::from),
+            HDLR => HandlerReferenceAtom::parse(atom_type, reader)
+                .await
+                .map(AtomData::from),
+            SMHD => SoundMediaHeaderAtom::parse(atom_type, reader)
+                .await
+                .map(AtomData::from),
+            ILST => ItemListAtom::parse(atom_type, reader)
+                .await
+                .map(AtomData::from),
+            TKHD => TrackHeaderAtom::parse(atom_type, reader)
+                .await
+                .map(AtomData::from),
+            STSD => SampleDescriptionTableAtom::parse(atom_type, reader)
+                .await
+                .map(AtomData::from),
+            TREF => TrackReferenceAtom::parse(atom_type, reader)
+                .await
+                .map(AtomData::from),
+            DREF => DataReferenceAtom::parse(atom_type, reader)
+                .await
+                .map(AtomData::from),
+            STSZ => SampleSizeAtom::parse(atom_type, reader)
+                .await
+                .map(AtomData::from),
+            STCO | CO64 => ChunkOffsetAtom::parse(atom_type, reader)
+                .await
+                .map(AtomData::from),
+            STTS => TimeToSampleAtom::parse(atom_type, reader)
+                .await
+                .map(AtomData::from),
+            STSC => SampleToChunkAtom::parse(atom_type, reader)
+                .await
+                .map(AtomData::from),
+            CHPL => ChapterListAtom::parse(atom_type, reader)
+                .await
+                .map(AtomData::from),
+            SGPD => SampleGroupDescriptionAtom::parse(atom_type, reader)
+                .await
+                .map(AtomData::from),
+            SBGP => SampleToGroupAtom::parse(atom_type, reader)
+                .await
+                .map(AtomData::from),
+            FREE | SKIP => FreeAtom::parse(atom_type, reader).await.map(AtomData::from),
+            fourcc => {
+                let mut buffer = Vec::new();
+                reader
+                    .read_to_end(&mut buffer)
+                    .await
+                    .map_err(|err| ParseError {
+                        kind: ParseErrorKind::Io,
+                        location: None,
+                        source: Some(Box::new(err)),
+                    })?;
+                Ok(RawData::new(FourCC(*fourcc), buffer).into())
+            }
+        }
+    }
+}
+
 impl SerializeAtom for AtomData {
     fn atom_type(&self) -> FourCC {
-        use AtomData::{FileType, MovieHeader, TrackHeader, EditList, MediaHeader, HandlerReference, ItemList, SoundMediaHeader, GenericMediaHeader, SampleDescriptionTable, TrackReference, DataReference, SampleSize, ChunkOffset, TimeToSample, SampleToChunk, SampleToGroup, SampleGroupDescription, ChapterList, Free, RawData};
+        use AtomData::{
+            ChapterList, ChunkOffset, DataReference, EditList, FileType, Free, GenericMediaHeader,
+            HandlerReference, ItemList, MediaHeader, MovieHeader, RawData, SampleDescriptionTable,
+            SampleGroupDescription, SampleSize, SampleToChunk, SampleToGroup, SoundMediaHeader,
+            TimeToSample, TrackHeader, TrackReference,
+        };
         match self {
             FileType(atom) => atom.atom_type(),
             MovieHeader(atom) => atom.atom_type(),
@@ -371,7 +495,12 @@ impl SerializeAtom for AtomData {
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
-        use AtomData::{FileType, MovieHeader, TrackHeader, EditList, MediaHeader, HandlerReference, ItemList, SoundMediaHeader, GenericMediaHeader, SampleDescriptionTable, TrackReference, DataReference, SampleSize, ChunkOffset, TimeToSample, SampleToChunk, SampleToGroup, SampleGroupDescription, ChapterList, Free, RawData};
+        use AtomData::{
+            ChapterList, ChunkOffset, DataReference, EditList, FileType, Free, GenericMediaHeader,
+            HandlerReference, ItemList, MediaHeader, MovieHeader, RawData, SampleDescriptionTable,
+            SampleGroupDescription, SampleSize, SampleToChunk, SampleToGroup, SoundMediaHeader,
+            TimeToSample, TrackHeader, TrackReference,
+        };
         match self {
             FileType(atom) => atom.into_body_bytes(),
             MovieHeader(atom) => atom.into_body_bytes(),
