@@ -1,3 +1,7 @@
+/*!
+ * This mod is concerned with parsing mp4 files.
+ */
+
 use anyhow::anyhow;
 use bon::bon;
 use derive_more::Display;
@@ -11,47 +15,47 @@ use std::ops::{Deref, DerefMut, Range, RangeBounds};
 use std::time::Duration;
 use thiserror::Error;
 
-use crate::atom::containers::{
-    DINF, EDTS, MDIA, MFRA, MINF, MOOF, MOOV, SCHI, SINF, STBL, TRAF, TRAK, UDTA,
-};
-use crate::atom::hdlr::HandlerType;
-use crate::atom::stco_co64::ChunkOffsets;
-use crate::atom::stsc::SampleToChunkEntry;
-use crate::atom::stsd::{
-    AudioSampleEntry, BtrtExtension, DecoderSpecificInfo, EsdsExtension, SampleEntry,
-    SampleEntryData, SampleEntryType, StsdExtension,
-};
-use crate::atom::stts::TimeToSampleEntry;
-use crate::atom::util::{scaled_duration_range, unscaled_duration, DebugEllipsis};
-use crate::atom::AtomHeader;
-use crate::chunk_offset_builder::{ChunkInfo, ChunkOffsetBuilder};
-use crate::writer::SerializeAtom;
 use crate::{
     atom::{
         chpl::{ChapterListAtom, CHPL},
-        containers::{META, META_VERSION_FLAGS_SIZE},
+        containers::{
+            DINF, EDTS, MDIA, META, META_VERSION_FLAGS_SIZE, MFRA, MINF, MOOF, MOOV, SCHI, SINF,
+            STBL, TRAF, TRAK, UDTA,
+        },
         elst::{EditListAtom, ELST},
         ftyp::{FileTypeAtom, FTYP},
-        hdlr::{HandlerReferenceAtom, HDLR},
+        hdlr::{HandlerReferenceAtom, HandlerType, HDLR},
         mdhd::{MediaHeaderAtom, MDHD},
         mvhd::{MovieHeaderAtom, MVHD},
         smhd::SMHD,
-        stco_co64::{ChunkOffsetAtom, STCO},
-        stsc::{SampleToChunkAtom, STSC},
-        stsd::{SampleDescriptionTableAtom, STSD},
+        stco_co64::{ChunkOffsetAtom, ChunkOffsets, STCO},
+        stsc::{SampleToChunkAtom, SampleToChunkEntry, STSC},
+        stsd::{
+            AudioSampleEntry, BtrtExtension, DecoderSpecificInfo, EsdsExtension,
+            SampleDescriptionTableAtom, SampleEntry, SampleEntryData, SampleEntryType,
+            StsdExtension, STSD,
+        },
         stsz::{SampleSizeAtom, STSZ},
-        stts::{TimeToSampleAtom, STTS},
+        stts::{TimeToSampleAtom, TimeToSampleEntry, STTS},
         tkhd::{TrackHeaderAtom, TKHD},
         tref::{TrackReferenceAtom, TREF},
-        FourCC, RawData,
+        util::{scaled_duration_range, unscaled_duration, DebugEllipsis},
+        AtomHeader, FourCC, RawData,
     },
+    chunk_offset_builder::{ChunkInfo, ChunkOffsetBuilder},
+    writer::SerializeAtom,
     Atom, AtomData,
 };
 
 pub const MDAT: &[u8; 4] = b"mdat";
 
-/// Async trait for parsing atoms from an `AsyncRead` stream
-pub trait Parse: Sized {
+/// Async trait for parsing atoms from an [`AsyncRead`] stream.
+///
+/// The reader must be bounded to the atom being parsed,
+/// i.e. [`AsyncReadExt::read_to_end`] always returns exactly the atom data.
+///
+/// Note that the [`AtomHeader`] has already been consumed, this trait is concerned with parsing the data.
+pub trait ParseAtom: Sized {
     fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,

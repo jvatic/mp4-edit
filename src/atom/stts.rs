@@ -14,7 +14,7 @@ use crate::{
         util::{async_to_sync_read, DebugEllipsis, RangeCollection},
         FourCC,
     },
-    parser::Parse,
+    parser::ParseAtom,
     writer::SerializeAtom,
     ParseError,
 };
@@ -161,8 +161,7 @@ impl TimeToSampleAtom {
                     end => current_sample_index + end as usize - 1,
                 };
 
-            removed_sample_indices
-                .insert(trim_sample_start_index..(trim_sample_end_index + 1));
+            removed_sample_indices.insert(trim_sample_start_index..(trim_sample_end_index + 1));
 
             let num_samples_to_remove = trim_sample_end_index + 1 - trim_sample_start_index;
             entry.sample_count = entry.sample_count.sub(num_samples_to_remove as u32);
@@ -273,7 +272,7 @@ impl From<Vec<TimeToSampleEntry>> for TimeToSampleAtom {
     }
 }
 
-impl Parse for TimeToSampleAtom {
+impl ParseAtom for TimeToSampleAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,

@@ -14,7 +14,7 @@ use crate::{
         util::{async_to_sync_read, DebugEllipsis},
         FourCC,
     },
-    parser::Parse,
+    parser::ParseAtom,
     writer::SerializeAtom,
     ParseError,
 };
@@ -186,7 +186,7 @@ impl<S: sample_size_atom_builder::State> SampleSizeAtomBuilder<S> {
     }
 }
 
-impl Parse for SampleSizeAtom {
+impl ParseAtom for SampleSizeAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,

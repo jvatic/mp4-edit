@@ -13,7 +13,7 @@ use crate::{
         util::{async_to_sync_read, DebugEllipsis},
         FourCC,
     },
-    parser::Parse,
+    parser::ParseAtom,
     writer::SerializeAtom,
     ParseError,
 };
@@ -107,7 +107,7 @@ impl ChapterListAtom {
     }
 }
 
-impl Parse for ChapterListAtom {
+impl ParseAtom for ChapterListAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,
@@ -188,8 +188,8 @@ fn parse_chpl_data<R: Read>(mut reader: R) -> Result<ChapterListAtom, anyhow::Er
             .context(format!("read title for chapter {i}"))?;
         title_buf.pop(); // Remove trailing null byte
 
-        let title = String::from_utf8(title_buf)
-            .context(format!("invalid UTF-8 in chapter {i} title"))?;
+        let title =
+            String::from_utf8(title_buf).context(format!("invalid UTF-8 in chapter {i} title"))?;
 
         chapters.push(ChapterEntry { start_time, title });
     }

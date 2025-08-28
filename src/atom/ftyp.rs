@@ -5,7 +5,7 @@ use std::io::Read;
 
 use crate::{
     atom::util::{async_to_sync_read, FourCC},
-    parser::Parse,
+    parser::ParseAtom,
     writer::SerializeAtom,
     ParseError,
 };
@@ -37,7 +37,7 @@ impl Default for FileTypeAtom {
     }
 }
 
-impl Parse for FileTypeAtom {
+impl ParseAtom for FileTypeAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,

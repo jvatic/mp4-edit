@@ -5,7 +5,7 @@ use std::io::Read;
 
 use crate::{
     atom::util::{async_to_sync_read, FourCC},
-    parser::Parse,
+    parser::ParseAtom,
     writer::SerializeAtom,
     ParseError,
 };
@@ -121,7 +121,7 @@ impl<S: data_reference_atom_builder::State> DataReferenceAtomBuilder<S> {
     }
 }
 
-impl Parse for DataReferenceAtom {
+impl ParseAtom for DataReferenceAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,

@@ -9,7 +9,7 @@ use crate::{
         util::{async_to_sync_read, scaled_duration},
         FourCC,
     },
-    parser::Parse,
+    parser::ParseAtom,
     writer::SerializeAtom,
     ParseError,
 };
@@ -109,7 +109,7 @@ impl EditEntry {
     }
 }
 
-impl Parse for EditListAtom {
+impl ParseAtom for EditListAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,

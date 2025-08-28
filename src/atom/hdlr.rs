@@ -5,7 +5,7 @@ use std::io::Read;
 
 use crate::{
     atom::{util::async_to_sync_read, FourCC},
-    parser::Parse,
+    parser::ParseAtom,
     writer::SerializeAtom,
     ParseError,
 };
@@ -125,7 +125,7 @@ pub struct HandlerReferenceAtom {
     name_is_pascal_string: bool,
 }
 
-impl Parse for HandlerReferenceAtom {
+impl ParseAtom for HandlerReferenceAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,

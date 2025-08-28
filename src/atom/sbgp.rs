@@ -4,7 +4,7 @@ use std::io::{Cursor, Read};
 
 use crate::{
     atom::util::{async_to_sync_read, FourCC},
-    parser::Parse,
+    parser::ParseAtom,
     writer::SerializeAtom,
     ParseError,
 };
@@ -36,7 +36,7 @@ pub struct SampleToGroupEntry {
     pub group_description_index: u32,
 }
 
-impl Parse for SampleToGroupAtom {
+impl ParseAtom for SampleToGroupAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,

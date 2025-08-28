@@ -4,7 +4,7 @@ use std::{fmt, io::Read};
 
 use crate::{
     atom::util::{async_to_sync_read, FourCC},
-    parser::Parse,
+    parser::ParseAtom,
     writer::SerializeAtom,
     ParseError,
 };
@@ -102,7 +102,7 @@ impl fmt::Display for TrackReferenceAtom {
     }
 }
 
-impl Parse for TrackReferenceAtom {
+impl ParseAtom for TrackReferenceAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
         reader: R,
