@@ -113,7 +113,7 @@ impl SampleToChunkAtom {
             };
 
             // ensure we're updating chunk indices after removing/inserting chunks
-            entry.first_chunk = entry.first_chunk - num_removed_chunks as u32;
+            entry.first_chunk -= num_removed_chunks as u32;
 
             let entry_sample_count = entry.samples_per_chunk as usize * entry_chunk_count;
 

@@ -162,7 +162,7 @@ impl TimeToSampleAtom {
                 };
 
             removed_sample_indices
-                .insert((trim_sample_start_index as usize)..(trim_sample_end_index as usize + 1));
+                .insert(trim_sample_start_index..(trim_sample_end_index + 1));
 
             let num_samples_to_remove = trim_sample_end_index + 1 - trim_sample_start_index;
             entry.sample_count = entry.sample_count.sub(num_samples_to_remove as u32);
@@ -180,7 +180,7 @@ impl TimeToSampleAtom {
                     .get_disjoint_mut([range.start - 1, range.end])
                 {
                     if prev_entry.sample_duration == next_entry.sample_duration {
-                        prev_entry.sample_count = prev_entry.sample_count + next_entry.sample_count;
+                        prev_entry.sample_count += next_entry.sample_count;
                         range.end += 1;
                     }
                 }
