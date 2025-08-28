@@ -1,3 +1,7 @@
+/*!
+ * This crate provides tools for losslessly editing mp4 files.
+ */
+
 pub mod atom;
 pub mod chapter_track_builder;
 pub mod chunk_offset_builder;
