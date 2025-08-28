@@ -6,10 +6,7 @@ use std::{io::Read, time::Duration};
 
 use crate::{
     atom::{
-        util::{
-            async_to_sync_read,
-            time::{mp4_timestamp_now, scaled_duration, unscaled_duration},
-        },
+        util::{async_to_sync_read, mp4_timestamp_now, scaled_duration, unscaled_duration},
         FourCC,
     },
     parser::Parse,

@@ -6,7 +6,7 @@ use futures_io::AsyncRead;
 
 use crate::{
     atom::{
-        util::{async_to_sync_read, time::scaled_duration},
+        util::{async_to_sync_read, scaled_duration},
         FourCC,
     },
     parser::Parse,

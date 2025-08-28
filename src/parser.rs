@@ -22,8 +22,7 @@ use crate::atom::stsd::{
     SampleEntryData, SampleEntryType, StsdExtension,
 };
 use crate::atom::stts::TimeToSampleEntry;
-use crate::atom::util::time::{scaled_duration_range, unscaled_duration};
-use crate::atom::util::DebugEllipsis;
+use crate::atom::util::{scaled_duration_range, unscaled_duration, DebugEllipsis};
 use crate::atom::AtomHeader;
 use crate::chunk_offset_builder::{ChunkInfo, ChunkOffsetBuilder};
 use crate::writer::SerializeAtom;
@@ -1923,7 +1922,7 @@ mod tests {
         stsz::{SampleSizeAtom, STSZ},
         stts::{TimeToSampleAtom, TimeToSampleEntry, STTS},
         tkhd::{TrackHeaderAtom, TKHD},
-        util::time::scaled_duration,
+        util::scaled_duration,
         Atom, AtomHeader,
     };
     use std::time::Duration;
