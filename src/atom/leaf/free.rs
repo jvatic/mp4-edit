@@ -3,7 +3,7 @@ use futures_util::AsyncReadExt;
 use std::fmt;
 
 use crate::{
-    atom::util::{DebugEllipsis, FourCC},
+    atom::{util::DebugEllipsis, FourCC},
     parser::{ParseAtom, ParseErrorKind},
     writer::SerializeAtom,
     ParseError,

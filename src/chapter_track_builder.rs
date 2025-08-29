@@ -3,7 +3,7 @@ use std::time::Duration;
 use bon::bon;
 
 use crate::atom::{
-    containers::{DINF, EDTS, MDIA, MINF, STBL, TRAK},
+    container::{DINF, EDTS, MDIA, MINF, STBL, TRAK},
     dref::{DataReferenceEntry, DataReferenceEntryInner},
     elst::{EditEntry, ELST},
     gmhd::GenericMediaHeaderAtom,

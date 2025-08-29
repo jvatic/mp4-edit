@@ -2,49 +2,15 @@
  * This mod is concerned with mp4 atoms and how to {de}serialize them.
 */
 
-pub mod chpl;
-pub mod dref;
-pub mod elst;
-pub mod free;
-pub mod ftyp;
-pub mod gmhd;
-pub mod hdlr;
-pub mod ilst;
-pub mod mdhd;
-pub mod meta;
-pub mod mvhd;
-pub mod sbgp;
-pub mod sgpd;
-pub mod smhd;
-pub mod stco_co64;
-pub mod stsc;
-pub mod stsd;
-pub mod stsz;
-pub mod stts;
 #[cfg(test)]
 pub mod test_utils;
-pub mod tkhd;
-pub mod tref;
 pub(crate) mod util;
 
-pub mod containers {
-    pub const MOOV: &[u8; 4] = b"moov";
-    pub const MFRA: &[u8; 4] = b"mfra";
-    pub const UDTA: &[u8; 4] = b"udta";
-    pub const TRAK: &[u8; 4] = b"trak";
-    pub const EDTS: &[u8; 4] = b"edts";
-    pub const MDIA: &[u8; 4] = b"mdia";
-    pub const MINF: &[u8; 4] = b"minf";
-    pub const DINF: &[u8; 4] = b"dinf";
-    pub const STBL: &[u8; 4] = b"stbl";
-    pub const MOOF: &[u8; 4] = b"moof";
-    pub const TRAF: &[u8; 4] = b"traf";
-    pub const SINF: &[u8; 4] = b"sinf";
-    pub const SCHI: &[u8; 4] = b"schi";
-
-    pub const META: &[u8; 4] = b"meta";
-    pub const META_VERSION_FLAGS_SIZE: usize = 4;
-}
+pub(crate) mod atom_ref;
+pub mod container;
+pub mod fourcc;
+pub mod iter;
+pub mod leaf;
 
 use bon::bon;
 
@@ -54,14 +20,7 @@ use crate::{
     ParseError,
 };
 
-pub use self::{
-    chpl::ChapterListAtom, dref::DataReferenceAtom, elst::EditListAtom, free::FreeAtom,
-    ftyp::FileTypeAtom, gmhd::GenericMediaHeaderAtom, hdlr::HandlerReferenceAtom,
-    ilst::ItemListAtom, mdhd::MediaHeaderAtom, mvhd::MovieHeaderAtom, sbgp::SampleToGroupAtom,
-    sgpd::SampleGroupDescriptionAtom, smhd::SoundMediaHeaderAtom, stco_co64::ChunkOffsetAtom,
-    stsc::SampleToChunkAtom, stsd::SampleDescriptionTableAtom, stsz::SampleSizeAtom,
-    stts::TimeToSampleAtom, tkhd::TrackHeaderAtom, tref::TrackReferenceAtom, util::FourCC,
-};
+pub use self::{container::*, fourcc::*, leaf::*};
 
 /// Represents raw atom bytes.
 #[derive(Clone)]

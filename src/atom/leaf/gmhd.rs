@@ -1,4 +1,4 @@
-use crate::atom::util::FourCC;
+use crate::atom::FourCC;
 use crate::writer::SerializeAtom;
 
 pub const GMHD: &[u8; 4] = b"gmhd";

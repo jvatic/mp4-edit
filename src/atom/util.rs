@@ -1,11 +1,9 @@
+mod async_sync_bridge;
 mod debug;
-mod fourcc;
-mod parser;
 mod range;
 mod time;
 
+pub use async_sync_bridge::*;
 pub use debug::*;
-pub use fourcc::*;
-pub use parser::*;
 pub use range::*;
 pub use time::*;

@@ -9,7 +9,7 @@ pub use crate::atom::stsd::extension::{
 use crate::{
     atom::{
         stsd::extension::parse_stsd_extensions,
-        util::{async_to_sync_read, FourCC},
+        {util::async_to_sync_read, FourCC},
     },
     parser::ParseAtom,
     writer::SerializeAtom,
