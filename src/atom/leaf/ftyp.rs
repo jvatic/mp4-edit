@@ -4,13 +4,45 @@ use futures_io::AsyncRead;
 use std::io::Read;
 
 use crate::{
-    atom::util::{async_to_sync_read, FourCC},
+    atom::{atom_ref, util::async_to_sync_read, FourCC},
     parser::ParseAtom,
     writer::SerializeAtom,
-    ParseError,
+    AtomData, ParseError,
 };
 
 pub const FTYP: &[u8; 4] = b"ftyp";
+
+#[derive(Debug, Clone, Copy)]
+pub struct FtypAtomRef<'a>(pub(crate) atom_ref::AtomRef<'a>);
+
+impl<'a> FtypAtomRef<'a> {
+    pub fn data(&self) -> Option<&'a FileTypeAtom> {
+        self.0
+            .inner()
+            .and_then(|ftyp| ftyp.data.as_ref())
+            .and_then(|data| match data {
+                AtomData::FileType(data) => Some(data),
+                _ => None,
+            })
+    }
+}
+
+#[derive(Debug)]
+pub struct FtypAtomRefMut<'a>(pub(crate) atom_ref::AtomRefMut<'a>);
+
+impl<'a> FtypAtomRefMut<'a> {
+    pub fn as_ref(&self) -> FtypAtomRef<'_> {
+        FtypAtomRef(self.0.as_ref())
+    }
+
+    pub fn into_ref(self) -> FtypAtomRef<'a> {
+        FtypAtomRef(self.0.into_ref())
+    }
+
+    pub fn replace(&mut self, data: FileTypeAtom) {
+        self.0.atom_mut().data = Some(data.into());
+    }
+}
 
 /// File Type Atom (ftyp) - ISO/IEC 14496-12
 /// This atom identifies the specifications to which this file complies.

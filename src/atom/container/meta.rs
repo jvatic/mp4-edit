@@ -1,5 +1,9 @@
 use std::io::Read;
 
+pub const META: &[u8; 4] = b"meta";
+
+pub const META_VERSION_FLAGS_SIZE: usize = 4;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MetaHeader {
     pub version: u8,
@@ -8,9 +12,9 @@ pub struct MetaHeader {
 
 impl MetaHeader {
     /// Parse the META atom's 4-byte header from a byte slice
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ParseError> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ParseMetaError> {
         if bytes.len() < 4 {
-            return Err(ParseError::InsufficientData);
+            return Err(ParseMetaError::InsufficientData);
         }
 
         Ok(MetaHeader {
@@ -20,11 +24,11 @@ impl MetaHeader {
     }
 
     /// Parse the META atom's 4-byte header from a reader
-    pub fn from_reader<R: Read>(reader: &mut R) -> Result<Self, ParseError> {
+    pub fn from_reader<R: Read>(reader: &mut R) -> Result<Self, ParseMetaError> {
         let mut header_bytes = [0u8; 4];
         reader
             .read_exact(&mut header_bytes)
-            .map_err(|_| ParseError::ReadError)?;
+            .map_err(|_| ParseMetaError::ReadError)?;
 
         Ok(MetaHeader {
             version: header_bytes[0],
@@ -49,21 +53,23 @@ impl MetaHeader {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum ParseError {
+pub enum ParseMetaError {
     InsufficientData,
     ReadError,
 }
 
-impl std::fmt::Display for ParseError {
+impl std::fmt::Display for ParseMetaError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParseError::InsufficientData => write!(f, "Insufficient data to parse META header"),
-            ParseError::ReadError => write!(f, "Failed to read META header data"),
+            ParseMetaError::InsufficientData => {
+                write!(f, "Insufficient data to parse META header")
+            }
+            ParseMetaError::ReadError => write!(f, "Failed to read META header data"),
         }
     }
 }
 
-impl std::error::Error for ParseError {}
+impl std::error::Error for ParseMetaError {}
 
 #[cfg(test)]
 mod tests {
@@ -108,7 +114,7 @@ mod tests {
         let bytes = [0x00, 0x00]; // Only 2 bytes
         let result = MetaHeader::from_bytes(&bytes);
 
-        assert!(matches!(result, Err(ParseError::InsufficientData)));
+        assert!(matches!(result, Err(ParseMetaError::InsufficientData)));
     }
 
     #[test]

@@ -4,7 +4,7 @@ use futures_io::AsyncRead;
 use std::io::Read;
 
 use crate::{
-    atom::util::{async_to_sync_read, FourCC},
+    atom::{util::async_to_sync_read, FourCC},
     parser::ParseAtom,
     writer::SerializeAtom,
     ParseError,

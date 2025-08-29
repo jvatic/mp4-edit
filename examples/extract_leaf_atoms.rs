@@ -3,26 +3,26 @@ use std::{env, path::Path};
 use tokio::fs;
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
-use mp4_edit::{atom::containers, Atom, Parser};
+use mp4_edit::{atom::container, Atom, Parser};
 
 /// Check if an atom type is a container atom
 fn is_container_atom(atom_type: &[u8; 4]) -> bool {
     matches!(
         atom_type,
-        containers::MOOV
-            | containers::MFRA
-            | containers::UDTA
-            | containers::TRAK
-            | containers::EDTS
-            | containers::MDIA
-            | containers::MINF
-            | containers::DINF
-            | containers::STBL
-            | containers::MOOF
-            | containers::TRAF
-            | containers::SINF
-            | containers::SCHI
-            | containers::META
+        container::MOOV
+            | container::MFRA
+            | container::UDTA
+            | container::TRAK
+            | container::EDTS
+            | container::MDIA
+            | container::MINF
+            | container::DINF
+            | container::STBL
+            | container::MOOF
+            | container::TRAF
+            | container::SINF
+            | container::SCHI
+            | container::META
     )
 }
 

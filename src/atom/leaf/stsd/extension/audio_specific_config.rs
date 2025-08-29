@@ -3,7 +3,7 @@ use std::convert::TryFrom;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum ParseError {
+pub enum ParseAudioSpecificConfigError {
     #[error("too short")]
     TooShort,
     #[error("invalid audio object type")]
@@ -27,7 +27,7 @@ pub enum AudioObjectType {
 }
 
 impl TryFrom<u8> for AudioObjectType {
-    type Error = ParseError;
+    type Error = ParseAudioSpecificConfigError;
     fn try_from(v: u8) -> Result<Self, Self::Error> {
         let aot = match v {
             1 => AudioObjectType::AacMain,
@@ -36,7 +36,7 @@ impl TryFrom<u8> for AudioObjectType {
             4 => AudioObjectType::AacLtp,
             5 => AudioObjectType::Sbr,
             6..=31 => AudioObjectType::Unknown(v),
-            other => return Err(ParseError::InvalidAot(other)),
+            other => return Err(ParseAudioSpecificConfigError::InvalidAot(other)),
         };
         Ok(aot)
     }
@@ -116,7 +116,7 @@ impl SamplingFrequency {
 }
 
 impl TryFrom<u8> for SamplingFrequency {
-    type Error = ParseError;
+    type Error = ParseAudioSpecificConfigError;
     fn try_from(idx: u8) -> Result<Self, Self::Error> {
         let sf = match idx {
             0 => SamplingFrequency::Hz96000,
@@ -133,7 +133,7 @@ impl TryFrom<u8> for SamplingFrequency {
             11 => SamplingFrequency::Hz8000,
             12 => SamplingFrequency::Hz7350,
             15 => SamplingFrequency::Explicit(0), // placeholder
-            other => return Err(ParseError::InvalidSfIndex(other)),
+            other => return Err(ParseAudioSpecificConfigError::InvalidSfIndex(other)),
         };
         Ok(sf)
     }
@@ -152,7 +152,7 @@ pub enum ChannelConfiguration {
 }
 
 impl TryFrom<u8> for ChannelConfiguration {
-    type Error = ParseError;
+    type Error = ParseAudioSpecificConfigError;
     fn try_from(v: u8) -> Result<Self, Self::Error> {
         let cfg = match v {
             1 => ChannelConfiguration::Mono,
@@ -162,7 +162,7 @@ impl TryFrom<u8> for ChannelConfiguration {
             5 => ChannelConfiguration::Five,
             6 => ChannelConfiguration::FiveOne,
             7 => ChannelConfiguration::SevenOne,
-            other => return Err(ParseError::InvalidChannel(other)),
+            other => return Err(ParseAudioSpecificConfigError::InvalidChannel(other)),
         };
         Ok(cfg)
     }
@@ -194,9 +194,9 @@ pub struct AudioSpecificConfig {
 
 impl AudioSpecificConfig {
     /// Parse the 2- or 5-byte config
-    pub fn parse(data: &[u8]) -> Result<Self, ParseError> {
+    pub fn parse(data: &[u8]) -> Result<Self, ParseAudioSpecificConfigError> {
         if data.len() < 2 {
-            return Err(ParseError::TooShort);
+            return Err(ParseAudioSpecificConfigError::TooShort);
         }
         let b0 = data[0];
         let b1 = data[1];
@@ -208,9 +208,10 @@ impl AudioSpecificConfig {
 
         let (bytes_read, sampling_frequency) = if idx == 15 {
             if data.len() < 5 {
-                return Err(ParseError::TooShort);
+                return Err(ParseAudioSpecificConfigError::TooShort);
             }
-            let explicit = (u32::from(data[2]) << 16) | (u32::from(data[3]) << 8) | u32::from(data[4]);
+            let explicit =
+                (u32::from(data[2]) << 16) | (u32::from(data[3]) << 8) | u32::from(data[4]);
             sf = SamplingFrequency::Explicit(explicit);
             (5, sf)
         } else {
