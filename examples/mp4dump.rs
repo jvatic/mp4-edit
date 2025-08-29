@@ -178,8 +178,8 @@ async fn main() -> anyhow::Result<()> {
     } else {
         eprintln!("parsing as seekable");
         let file = fs::File::open(input_name).await?;
-        let parser = Parser::new(file.compat());
-        let metadata = parser.parse_metadata_seek().await?;
+        let parser = Parser::new_seekable(file.compat());
+        let metadata = parser.parse_metadata().await?;
         let mdat_header = metadata.mdat_header().cloned();
         print_atoms(metadata.into_metadata(), mdat_header).await?
     };

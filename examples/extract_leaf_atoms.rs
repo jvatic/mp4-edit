@@ -40,7 +40,7 @@ async fn extract_leaf_atoms(input_path: &str, output_dir: &str) -> Result<()> {
 
     // Parse the MP4 file
     println!("📂 Parsing MP4 file: {}", input_path);
-    let parser = Parser::new(file.compat());
+    let parser = Parser::new_seekable(file.compat());
     let metadata = parser
         .parse_metadata()
         .await
