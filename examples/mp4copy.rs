@@ -8,7 +8,11 @@ use tokio::{
 };
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use mp4_edit::{atom::FourCC, parser::MDAT, Mp4Writer, Parser};
+use mp4_edit::{
+    atom::FourCC,
+    parser::{ReadCapability, MDAT},
+    Mp4Writer, Parser,
+};
 
 async fn create_output_file(output_name: &str) -> anyhow::Result<fs::File> {
     if output_name == "-" {
@@ -48,9 +52,9 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("parsing file as seekable");
         let file = fs::File::open(input_name).await?;
         let input_reader = file.compat();
-        let parser = Parser::new(input_reader);
+        let parser = Parser::new_seekable(input_reader);
         let input_metadata = parser
-            .parse_metadata_seek()
+            .parse_metadata()
             .await
             .context("Failed to parse metadata from input file")?;
 
@@ -60,8 +64,8 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn process_mp4_copy<R>(
-    metadata: mp4_edit::parser::MdatParser<R>,
+async fn process_mp4_copy<R, C: ReadCapability>(
+    metadata: mp4_edit::parser::MdatParser<R, C>,
     output_name: &str,
 ) -> anyhow::Result<()>
 where

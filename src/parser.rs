@@ -11,6 +11,7 @@ use std::collections::VecDeque;
 use std::fmt::{self, Debug};
 use std::future::Future;
 use std::io::SeekFrom;
+use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut, Range, RangeBounds};
 use std::time::Duration;
 use thiserror::Error;
@@ -120,39 +121,41 @@ impl ParseError {
     }
 }
 
-pub struct Mp4Reader<R> {
+mod sealed {
+    pub trait Sealed {}
+}
+
+pub struct Seekable;
+pub struct NonSeekable;
+
+impl sealed::Sealed for Seekable {}
+impl sealed::Sealed for NonSeekable {}
+
+pub trait ReadCapability: sealed::Sealed {}
+
+impl ReadCapability for NonSeekable {}
+
+impl ReadCapability for Seekable {}
+
+pub struct Mp4Reader<R, C: ReadCapability> {
     reader: R,
     current_offset: usize,
     peek_buffer: Vec<u8>,
+    _capability: PhantomData<C>,
 }
 
-impl<R: AsyncRead + Unpin + Send> Mp4Reader<R> {
+impl<R: AsyncRead + Unpin + Send> Mp4Reader<R, NonSeekable> {
     fn new(reader: R) -> Self {
         Self {
             reader,
             current_offset: 0,
             peek_buffer: Vec::new(),
+            _capability: PhantomData,
         }
     }
+}
 
-    async fn seek(&mut self, pos: SeekFrom) -> Result<(), ParseError>
-    where
-        R: AsyncSeek,
-    {
-        match self.reader.seek(pos).await {
-            Ok(offset) => {
-                self.current_offset = offset as usize;
-                self.peek_buffer = Vec::new();
-                Ok(())
-            }
-            Err(err) => Err(ParseError {
-                kind: ParseErrorKind::Io,
-                location: None,
-                source: Some(Box::new(err)),
-            }),
-        }
-    }
-
+impl<R: AsyncRead + Unpin + Send, C: ReadCapability> Mp4Reader<R, C> {
     async fn peek_exact(&mut self, buf: &mut [u8]) -> Result<(), ParseError> {
         let size = buf.len();
         if self.peek_buffer.len() < size {
@@ -191,24 +194,47 @@ impl<R: AsyncRead + Unpin + Send> Mp4Reader<R> {
     }
 }
 
-pub struct Parser<R> {
-    reader: Mp4Reader<R>,
+impl<R: AsyncRead + AsyncSeek + Unpin + Send> Mp4Reader<R, Seekable> {
+    fn new(reader: R) -> Self {
+        Self {
+            reader,
+            current_offset: 0,
+            peek_buffer: Vec::new(),
+            _capability: PhantomData,
+        }
+    }
+
+    async fn seek(&mut self, pos: SeekFrom) -> Result<(), ParseError> {
+        match self.reader.seek(pos).await {
+            Ok(offset) => {
+                self.current_offset = offset as usize;
+                self.peek_buffer = Vec::new();
+                Ok(())
+            }
+            Err(err) => Err(ParseError {
+                kind: ParseErrorKind::Io,
+                location: None,
+                source: Some(Box::new(err)),
+            }),
+        }
+    }
+}
+
+pub struct Parser<R, C: ReadCapability = NonSeekable> {
+    reader: Mp4Reader<R, C>,
     mdat: Option<AtomHeader>,
 }
 
-impl<R: AsyncRead + Unpin + Send> Parser<R> {
-    pub fn new(reader: R) -> Self {
+impl<R: AsyncRead + AsyncSeek + Unpin + Send> Parser<R, Seekable> {
+    pub fn new_seekable(reader: R) -> Self {
         Parser {
-            reader: Mp4Reader::new(reader),
+            reader: Mp4Reader::<R, Seekable>::new(reader),
             mdat: None,
         }
     }
 
     /// parses metadata atoms, both before and after mdat if moov isn't found before
-    pub async fn parse_metadata_seek(mut self) -> Result<MdatParser<R>, ParseError>
-    where
-        R: AsyncSeek,
-    {
+    pub async fn parse_metadata(mut self) -> Result<MdatParser<R, Seekable>, ParseError> {
         let mut atoms = self.parse_metadata_inner(None).await?;
         let mdat = match self.mdat.take() {
             Some(mdat) if !atoms.iter().any(|a| a.header.atom_type == MOOV) => {
@@ -228,9 +254,18 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
         };
         Ok(MdatParser::new(self.reader, Metadata::new(atoms), mdat))
     }
+}
+
+impl<R: AsyncRead + Unpin + Send> Parser<R, NonSeekable> {
+    pub fn new(reader: R) -> Self {
+        Parser {
+            reader: Mp4Reader::<R, NonSeekable>::new(reader),
+            mdat: None,
+        }
+    }
 
     /// parses metadata atoms until mdat found
-    pub async fn parse_metadata(mut self) -> Result<MdatParser<R>, ParseError> {
+    pub async fn parse_metadata(mut self) -> Result<MdatParser<R, NonSeekable>, ParseError> {
         let atoms = self.parse_metadata_inner(None).await?;
         Ok(MdatParser::new(
             self.reader,
@@ -238,7 +273,9 @@ impl<R: AsyncRead + Unpin + Send> Parser<R> {
             self.mdat,
         ))
     }
+}
 
+impl<R: AsyncRead + Unpin + Send, C: ReadCapability> Parser<R, C> {
     async fn parse_metadata_inner(
         &mut self,
         length_limit: Option<usize>,
@@ -408,13 +445,13 @@ fn is_container_atom(atom_type: &[u8; 4]) -> bool {
     )
 }
 
-pub struct MdatParser<R> {
+pub struct MdatParser<R, C: ReadCapability> {
     meta: Metadata,
-    reader: Option<Mp4Reader<R>>,
+    reader: Option<Mp4Reader<R, C>>,
     mdat: Option<AtomHeader>,
 }
 
-impl<R> Clone for MdatParser<R> {
+impl<R, C: ReadCapability> Clone for MdatParser<R, C> {
     fn clone(&self) -> Self {
         Self {
             meta: self.meta.clone(),
@@ -424,7 +461,7 @@ impl<R> Clone for MdatParser<R> {
     }
 }
 
-impl<R> Deref for MdatParser<R> {
+impl<R, C: ReadCapability> Deref for MdatParser<R, C> {
     type Target = Metadata;
 
     fn deref(&self) -> &Self::Target {
@@ -432,14 +469,14 @@ impl<R> Deref for MdatParser<R> {
     }
 }
 
-impl<R> DerefMut for MdatParser<R> {
+impl<R, C: ReadCapability> DerefMut for MdatParser<R, C> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.meta
     }
 }
 
-impl<R> MdatParser<R> {
-    fn new(reader: Mp4Reader<R>, meta: Metadata, mdat: Option<AtomHeader>) -> Self {
+impl<R, C: ReadCapability> MdatParser<R, C> {
+    fn new(reader: Mp4Reader<R, C>, meta: Metadata, mdat: Option<AtomHeader>) -> Self {
         Self {
             reader: Some(reader),
             meta,
@@ -457,7 +494,7 @@ impl<R> MdatParser<R> {
     }
 
     /// Parse chunks along with related metadata
-    pub fn chunks(&mut self) -> Result<ChunkParser<'_, R>, ParseError> {
+    pub fn chunks(&mut self) -> Result<ChunkParser<'_, R, C>, ParseError> {
         let _ = self.mdat.take().ok_or_else(|| ParseError {
             kind: ParseErrorKind::InsufficientData,
             location: None,
@@ -1663,8 +1700,8 @@ impl<'a> StblAtomRefMut<'a> {
     }
 }
 
-pub struct ChunkParser<'a, R> {
-    reader: Mp4Reader<R>,
+pub struct ChunkParser<'a, R, C: ReadCapability> {
+    reader: Mp4Reader<R, C>,
     /// Reference to each track's metadata
     tracks: Vec<TrakAtomRef<'a>>,
     /// Chunk offsets for each track
@@ -1679,7 +1716,7 @@ pub struct ChunkParser<'a, R> {
     chunk_info: Vec<VecDeque<ChunkInfo>>,
 }
 
-impl<'a, R: AsyncRead + Unpin + Send> ChunkParser<'a, R> {
+impl<'a, R: AsyncRead + Unpin + Send, C: ReadCapability> ChunkParser<'a, R, C> {
     pub async fn read_next_chunk(&mut self) -> Result<Option<Chunk<'a>>, ParseError> {
         let current_offset = self.reader.current_offset as u64;
 
