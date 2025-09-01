@@ -59,7 +59,7 @@ impl SampleEntrySizes {
         Self(sizes)
     }
 
-    /// Convert to the inner Vec<u32>
+    /// Convert to the inner `Vec<u32>`
     pub fn to_vec(&self) -> Vec<u32> {
         self.0.clone()
     }
