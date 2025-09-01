@@ -1,3 +1,7 @@
+/*!
+ * This example demonstrates inspecting the atom structure of an mp4 file.
+ */
+
 use std::env;
 use tokio::{
     fs,
