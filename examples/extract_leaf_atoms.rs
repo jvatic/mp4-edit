@@ -1,3 +1,7 @@
+/*!
+ * Slice metadata leaf atoms into bin files for round-trip testing.
+ */
+
 use anyhow::{anyhow, Context, Result};
 use std::{env, path::Path};
 use tokio::fs;

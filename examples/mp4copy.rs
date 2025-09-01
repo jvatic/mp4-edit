@@ -1,3 +1,7 @@
+/*!
+ * This example demonstrates copying an MP4 file. When using a seekable input, it moves metadata to the start of the file for fast-start (streaming) opimization. Using a non-seekable input requires the file to already be fast-start.
+ */
+
 use anyhow::{anyhow, Context};
 use futures_util::io::{BufReader, BufWriter};
 use progress_bar::pb::ProgressBar;
