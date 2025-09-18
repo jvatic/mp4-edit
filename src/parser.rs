@@ -104,7 +104,10 @@ impl ParseError {
     }
 
     pub(crate) fn from_winnow(
-        error: winnow::error::ParseError<&winnow::Bytes, winnow::error::ContextError>,
+        error: winnow::error::ParseError<
+            winnow::LocatingSlice<&winnow::Bytes>,
+            winnow::error::ContextError,
+        >,
     ) -> Self {
         use winnow::error::StrContext;
         let mut ctx_iter = error.inner().context().peekable();

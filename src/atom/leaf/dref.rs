@@ -191,29 +191,28 @@ impl SerializeAtom for DataReferenceAtom {
 
 mod parser {
     use winnow::{
-        binary::{be_u32, u8},
-        combinator::{repeat, trace},
-        error::{StrContext, StrContextValue},
-        Bytes, Parser,
+        binary::u8,
+        combinator::{repeat, seq, trace},
+        error::StrContext,
+        Parser,
     };
 
     use super::{DataReferenceAtom, DataReferenceEntry, DataReferenceEntryInner};
-    use crate::FourCC;
-
-    type Stream<'i> = &'i Bytes;
-
-    fn stream(b: &[u8]) -> Stream<'_> {
-        Bytes::new(b)
-    }
+    use crate::{
+        atom::util::parser::{
+            combinators::with_len, flags3, fourcc, stream, usize_be_u32, version1, Stream,
+        },
+        FourCC,
+    };
 
     pub fn parse_dref_data(input: &[u8]) -> Result<DataReferenceAtom, crate::ParseError> {
         parse_dref_data_inner
-            .parse(stream(&input))
+            .parse(stream(input))
             .map_err(crate::ParseError::from_winnow)
     }
 
     fn parse_dref_data_inner(input: &mut Stream<'_>) -> winnow::ModalResult<DataReferenceAtom> {
-        (version, flags, entries)
+        (version1, flags3, entries)
             .map(|(version, flags, entries)| DataReferenceAtom {
                 version,
                 flags,
@@ -223,28 +222,10 @@ mod parser {
             .parse_next(input)
     }
 
-    fn version(input: &mut Stream<'_>) -> winnow::ModalResult<u8> {
-        trace("version", u8)
-            .context(StrContext::Label("version"))
-            .parse_next(input)
-    }
-
-    fn flags(input: &mut Stream<'_>) -> winnow::ModalResult<[u8; 3]> {
-        trace(
-            "flags",
-            (
-                u8.context(StrContext::Label("[0]")),
-                u8.context(StrContext::Label("[1]")),
-                u8.context(StrContext::Label("[2]")),
-            ),
-        )
-        .map(|(a, b, c)| [a, b, c])
-        .context(StrContext::Label("flags"))
-        .parse_next(input)
-    }
-
     fn entries(input: &mut Stream<'_>) -> winnow::ModalResult<Vec<DataReferenceEntry>> {
-        let entry_count = entry_count(input)?;
+        let entry_count = usize_be_u32
+            .context(StrContext::Label("entry_count"))
+            .parse_next(input)?;
         trace(
             "entries",
             repeat(
@@ -255,45 +236,35 @@ mod parser {
         .parse_next(input)
     }
 
-    fn entry_count(input: &mut Stream<'_>) -> winnow::ModalResult<usize> {
-        trace("entry_count", be_u32)
-            .map(|s| s as usize)
-            .parse_next(input)
-    }
-
-    fn entry_size(input: &mut Stream<'_>) -> winnow::ModalResult<usize> {
-        trace(
-            "entry_size",
-            be_u32
-                .map(|s| s as usize)
-                .context(StrContext::Label("entry_size"))
-                .context(StrContext::Expected(StrContextValue::Description("be u32"))),
-        )
-        .parse_next(input)
-    }
-
-    fn fourcc(input: &mut Stream<'_>) -> winnow::ModalResult<FourCC> {
-        trace(
-            "fourcc",
-            (
-                u8.context(StrContext::Label("[0]")),
-                u8.context(StrContext::Label("[1]")),
-                u8.context(StrContext::Label("[2]")),
-                u8.context(StrContext::Label("[3]")),
-            )
-                .map(|(a, b, c, d)| FourCC([a, b, c, d]))
-                .context(StrContext::Label("fourcc")),
-        )
-        .parse_next(input)
-    }
-
     fn entry(input: &mut Stream<'_>) -> winnow::ModalResult<DataReferenceEntry> {
-        let start_len = input.len();
-        let size = entry_size(input)?;
-        let typ = fourcc(input)?;
-        let version = version(input)?;
-        let flags = flags(input)?;
-        let header_size = start_len - input.len();
+        struct EntryHeader {
+            size: usize,
+            typ: FourCC,
+            version: u8,
+            flags: [u8; 3],
+        }
+
+        fn entry_header(input: &mut Stream<'_>) -> winnow::ModalResult<EntryHeader> {
+            seq!(EntryHeader {
+                size: usize_be_u32,
+                typ: fourcc,
+                version: version1,
+                flags: flags3
+            })
+            .context(StrContext::Label("entry_header"))
+            .parse_next(input)
+        }
+
+        let (
+            EntryHeader {
+                size,
+                typ,
+                version,
+                flags,
+            },
+            header_size,
+        ) = with_len(entry_header).parse_next(input)?;
+
         let data: Vec<u8> = trace("entry_data", repeat(size - header_size, u8))
             .context(StrContext::Label("entry_data"))
             .parse_next(input)?;
