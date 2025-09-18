@@ -355,7 +355,6 @@ impl ChapterTrack {
         let dref = DataReferenceAtom {
             version: 0,
             flags: [0u8; 3],
-            entry_count: 1,
             entries: vec![DataReferenceEntry {
                 inner: DataReferenceEntryInner::Url(String::new()),
                 version: 0,

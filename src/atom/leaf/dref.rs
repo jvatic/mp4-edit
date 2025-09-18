@@ -1,10 +1,14 @@
-use anyhow::{anyhow, Context};
 use bon::Builder;
 use futures_io::AsyncRead;
-use std::io::Read;
+use winnow::{
+    binary::{be_u32, u8},
+    combinator::{repeat, trace},
+    error::{StrContext, StrContextValue},
+    Bytes, Parser,
+};
 
 use crate::{
-    atom::{util::async_to_sync_read, FourCC},
+    atom::{util::read_to_end, FourCC},
     parser::ParseAtom,
     writer::SerializeAtom,
     ParseError,
@@ -104,9 +108,6 @@ pub struct DataReferenceAtom {
     /// Data reference entries
     #[builder(with = FromIterator::from_iter)]
     pub entries: Vec<DataReferenceEntry>,
-    /// Number of entries in the table
-    #[builder(skip = u32::try_from(entries.len()).expect("entries len should fit in u32"))]
-    pub entry_count: u32,
 }
 
 impl<S: data_reference_atom_builder::State> DataReferenceAtomBuilder<S> {
@@ -129,7 +130,10 @@ impl ParseAtom for DataReferenceAtom {
         if atom_type != DREF {
             return Err(ParseError::new_unexpected_atom(atom_type, DREF));
         }
-        parse_dref_data(async_to_sync_read(reader).await?).map_err(ParseError::new_atom_parse)
+        let data = read_to_end(reader).await?;
+        parse_dref_data
+            .parse(stream(&data))
+            .map_err(ParseError::from_winnow)
     }
 }
 
@@ -148,7 +152,11 @@ impl SerializeAtom for DataReferenceAtom {
         data.extend_from_slice(&self.flags);
 
         // Entry count (4 bytes, big-endian)
-        data.extend_from_slice(&self.entry_count.to_be_bytes());
+        data.extend_from_slice(
+            &u32::try_from(self.entries.len())
+                .expect("entries len must fit in a u32")
+                .to_be_bytes(),
+        );
 
         // Entries
         for entry in self.entries {
@@ -191,116 +199,102 @@ impl SerializeAtom for DataReferenceAtom {
     }
 }
 
-fn parse_dref_data<R: Read>(mut reader: R) -> Result<DataReferenceAtom, anyhow::Error> {
-    // Read version and flags (4 bytes)
-    let mut version_flags = [0u8; 4];
-    reader
-        .read_exact(&mut version_flags)
-        .context("read version and flags")?;
+type Stream<'i> = &'i Bytes;
 
-    let version = version_flags[0];
-    let flags = [version_flags[1], version_flags[2], version_flags[3]];
+fn stream(b: &[u8]) -> Stream<'_> {
+    Bytes::new(b)
+}
 
-    // Read entry count (4 bytes)
-    let mut entry_count_bytes = [0u8; 4];
-    reader
-        .read_exact(&mut entry_count_bytes)
-        .context("read entry count")?;
-    let entry_count = u32::from_be_bytes(entry_count_bytes);
+fn parse_dref_data(input: &mut Stream<'_>) -> winnow::ModalResult<DataReferenceAtom> {
+    (parse_version, parse_flags, parse_entries)
+        .map(|(version, flags, entries)| DataReferenceAtom {
+            version,
+            flags,
+            entries,
+        })
+        .context(StrContext::Label("dref"))
+        .parse_next(input)
+}
 
-    // Read remaining data for entries
-    let mut remaining_data = Vec::new();
-    reader
-        .read_to_end(&mut remaining_data)
-        .context("read entries data")?;
+fn parse_version(input: &mut Stream<'_>) -> winnow::ModalResult<u8> {
+    trace("version", u8)
+        .context(StrContext::Label("version"))
+        .parse_next(input)
+}
 
-    // Parse entries
-    let mut entries = Vec::new();
-    let mut offset = 0;
+fn parse_flags(input: &mut Stream<'_>) -> winnow::ModalResult<[u8; 3]> {
+    trace(
+        "flags",
+        (
+            u8.context(StrContext::Label("[0]")),
+            u8.context(StrContext::Label("[1]")),
+            u8.context(StrContext::Label("[2]")),
+        ),
+    )
+    .map(|(a, b, c)| [a, b, c])
+    .context(StrContext::Label("flags"))
+    .parse_next(input)
+}
 
-    for i in 0..entry_count {
-        if offset + 8 > remaining_data.len() {
-            return Err(anyhow!(
-                "Incomplete entry header at entry {} (offset {})",
-                i,
-                offset
-            ));
-        }
-
-        // Read entry size (4 bytes)
-        let entry_size = u32::from_be_bytes([
-            remaining_data[offset],
-            remaining_data[offset + 1],
-            remaining_data[offset + 2],
-            remaining_data[offset + 3],
-        ]) as usize;
-
-        if entry_size < 8 {
-            return Err(anyhow!("Invalid entry size: {} (minimum 8)", entry_size));
-        }
-
-        if offset + entry_size > remaining_data.len() {
-            return Err(anyhow!(
-                "Entry {} extends beyond data: offset={}, size={}, data_len={}",
-                i,
-                offset,
-                entry_size,
-                remaining_data.len()
-            ));
-        }
-
-        // Read entry type (4 bytes)
-        let entry_type = FourCC([
-            remaining_data[offset + 4],
-            remaining_data[offset + 5],
-            remaining_data[offset + 6],
-            remaining_data[offset + 7],
-        ]);
-
-        // Read entry version and flags (4 bytes)
-        if offset + 12 > remaining_data.len() {
-            return Err(anyhow!(
-                "Incomplete entry version/flags at entry {} (offset {})",
-                i,
-                offset
-            ));
-        }
-
-        let entry_version = remaining_data[offset + 8];
-        let entry_flags = [
-            remaining_data[offset + 9],
-            remaining_data[offset + 10],
-            remaining_data[offset + 11],
-        ];
-
-        // Read entry data (remaining bytes after 12-byte header)
-        let data_start = offset + 12;
-        let data_end = offset + entry_size;
-        let entry_data = remaining_data[data_start..data_end].to_vec();
-
-        entries.push(DataReferenceEntry {
-            inner: DataReferenceEntryInner::new(entry_type, entry_data),
-            version: entry_version,
-            flags: entry_flags,
-        });
-
-        offset += entry_size;
-    }
-
-    // Verify we parsed the expected number of entries
-    if entries.len() != entry_count as usize {
-        return Err(anyhow!(
-            "Entry count mismatch: expected {}, parsed {}",
+fn parse_entries(input: &mut Stream<'_>) -> winnow::ModalResult<Vec<DataReferenceEntry>> {
+    let entry_count = parse_entry_count(input)?;
+    trace(
+        "entries",
+        repeat(
             entry_count,
-            entries.len()
-        ));
-    }
+            trace("entry", parse_entry.context(StrContext::Label("entry"))),
+        ),
+    )
+    .parse_next(input)
+}
 
-    Ok(DataReferenceAtom {
+fn parse_entry_count(input: &mut Stream<'_>) -> winnow::ModalResult<usize> {
+    trace("entry_count", be_u32)
+        .map(|s| s as usize)
+        .parse_next(input)
+}
+
+fn parse_entry_size(input: &mut Stream<'_>) -> winnow::ModalResult<usize> {
+    trace(
+        "entry_size",
+        be_u32
+            .map(|s| s as usize)
+            .context(StrContext::Label("entry_size"))
+            .context(StrContext::Expected(StrContextValue::Description("be u32"))),
+    )
+    .parse_next(input)
+}
+
+fn parse_fourcc(input: &mut Stream<'_>) -> winnow::ModalResult<FourCC> {
+    trace(
+        "fourcc",
+        (
+            u8.context(StrContext::Label("[0]")),
+            u8.context(StrContext::Label("[1]")),
+            u8.context(StrContext::Label("[2]")),
+            u8.context(StrContext::Label("[3]")),
+        )
+            .map(|(a, b, c, d)| FourCC([a, b, c, d]))
+            .context(StrContext::Label("fourcc")),
+    )
+    .parse_next(input)
+}
+
+fn parse_entry(input: &mut Stream<'_>) -> winnow::ModalResult<DataReferenceEntry> {
+    let start_len = input.len();
+    let size = parse_entry_size(input)?;
+    let typ = parse_fourcc(input)?;
+    let version = parse_version(input)?;
+    let flags = parse_flags(input)?;
+    let header_size = start_len - input.len();
+    let data: Vec<u8> = trace("entry_data", repeat(size - header_size, u8))
+        .context(StrContext::Label("entry_data"))
+        .parse_next(input)?;
+
+    Ok(DataReferenceEntry {
+        inner: DataReferenceEntryInner::new(typ, data),
         version,
         flags,
-        entry_count,
-        entries,
     })
 }
 

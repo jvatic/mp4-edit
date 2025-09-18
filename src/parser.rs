@@ -102,6 +102,43 @@ impl ParseError {
             source: Some(source.into_boxed_dyn_error()),
         }
     }
+
+    pub(crate) fn from_winnow(
+        error: winnow::error::ParseError<&winnow::Bytes, winnow::error::ContextError>,
+    ) -> Self {
+        use winnow::error::StrContext;
+        let mut ctx_iter = error.inner().context().peekable();
+        let mut ctx_tree = Vec::with_capacity(ctx_iter.size_hint().0);
+        while let Some(ctx) = ctx_iter.next() {
+            eprintln!("ctx: {ctx:?}");
+            match ctx {
+                StrContext::Expected(exp) => {
+                    let mut label = None;
+                    if matches!(ctx_iter.peek(), Some(StrContext::Label(_))) {
+                        label = Some(ctx_iter.next().unwrap().to_string());
+                    }
+                    ctx_tree.push(format!(
+                        "{}({exp})",
+                        label.map(|label| label.to_string()).unwrap_or_default()
+                    ));
+                }
+                StrContext::Label(label) => {
+                    ctx_tree.push(label.to_string());
+                }
+                _ => {}
+            }
+        }
+        ctx_tree.reverse();
+
+        Self {
+            kind: crate::parser::ParseErrorKind::AtomParsing,
+            location: Some((error.offset(), error.offset())),
+            source: match ctx_tree {
+                ctx if ctx.is_empty() => None,
+                ctx => Some(anyhow::format_err!("{}", ctx.join(" -> ")).into_boxed_dyn_error()),
+            },
+        }
+    }
 }
 
 mod sealed {
