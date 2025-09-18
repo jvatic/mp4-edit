@@ -1,11 +1,5 @@
 use bon::Builder;
 use futures_io::AsyncRead;
-use winnow::{
-    binary::{be_u32, u8},
-    combinator::{repeat, trace},
-    error::{StrContext, StrContextValue},
-    Bytes, Parser,
-};
 
 use crate::{
     atom::{util::read_to_end, FourCC},
@@ -131,9 +125,7 @@ impl ParseAtom for DataReferenceAtom {
             return Err(ParseError::new_unexpected_atom(atom_type, DREF));
         }
         let data = read_to_end(reader).await?;
-        parse_dref_data
-            .parse(stream(&data))
-            .map_err(ParseError::from_winnow)
+        parser::parse_dref_data(&data)
     }
 }
 
@@ -197,103 +189,121 @@ impl SerializeAtom for DataReferenceAtom {
     }
 }
 
-type Stream<'i> = &'i Bytes;
+mod parser {
+    use winnow::{
+        binary::{be_u32, u8},
+        combinator::{repeat, trace},
+        error::{StrContext, StrContextValue},
+        Bytes, Parser,
+    };
 
-fn stream(b: &[u8]) -> Stream<'_> {
-    Bytes::new(b)
-}
+    use super::{DataReferenceAtom, DataReferenceEntry, DataReferenceEntryInner};
+    use crate::FourCC;
 
-fn parse_dref_data(input: &mut Stream<'_>) -> winnow::ModalResult<DataReferenceAtom> {
-    (parse_version, parse_flags, parse_entries)
-        .map(|(version, flags, entries)| DataReferenceAtom {
+    type Stream<'i> = &'i Bytes;
+
+    fn stream(b: &[u8]) -> Stream<'_> {
+        Bytes::new(b)
+    }
+
+    pub fn parse_dref_data(input: &[u8]) -> Result<DataReferenceAtom, crate::ParseError> {
+        parse_dref_data_inner
+            .parse(stream(&input))
+            .map_err(crate::ParseError::from_winnow)
+    }
+
+    fn parse_dref_data_inner(input: &mut Stream<'_>) -> winnow::ModalResult<DataReferenceAtom> {
+        (version, flags, entries)
+            .map(|(version, flags, entries)| DataReferenceAtom {
+                version,
+                flags,
+                entries,
+            })
+            .context(StrContext::Label("dref"))
+            .parse_next(input)
+    }
+
+    fn version(input: &mut Stream<'_>) -> winnow::ModalResult<u8> {
+        trace("version", u8)
+            .context(StrContext::Label("version"))
+            .parse_next(input)
+    }
+
+    fn flags(input: &mut Stream<'_>) -> winnow::ModalResult<[u8; 3]> {
+        trace(
+            "flags",
+            (
+                u8.context(StrContext::Label("[0]")),
+                u8.context(StrContext::Label("[1]")),
+                u8.context(StrContext::Label("[2]")),
+            ),
+        )
+        .map(|(a, b, c)| [a, b, c])
+        .context(StrContext::Label("flags"))
+        .parse_next(input)
+    }
+
+    fn entries(input: &mut Stream<'_>) -> winnow::ModalResult<Vec<DataReferenceEntry>> {
+        let entry_count = entry_count(input)?;
+        trace(
+            "entries",
+            repeat(
+                entry_count,
+                trace("entry", entry.context(StrContext::Label("entry"))),
+            ),
+        )
+        .parse_next(input)
+    }
+
+    fn entry_count(input: &mut Stream<'_>) -> winnow::ModalResult<usize> {
+        trace("entry_count", be_u32)
+            .map(|s| s as usize)
+            .parse_next(input)
+    }
+
+    fn entry_size(input: &mut Stream<'_>) -> winnow::ModalResult<usize> {
+        trace(
+            "entry_size",
+            be_u32
+                .map(|s| s as usize)
+                .context(StrContext::Label("entry_size"))
+                .context(StrContext::Expected(StrContextValue::Description("be u32"))),
+        )
+        .parse_next(input)
+    }
+
+    fn fourcc(input: &mut Stream<'_>) -> winnow::ModalResult<FourCC> {
+        trace(
+            "fourcc",
+            (
+                u8.context(StrContext::Label("[0]")),
+                u8.context(StrContext::Label("[1]")),
+                u8.context(StrContext::Label("[2]")),
+                u8.context(StrContext::Label("[3]")),
+            )
+                .map(|(a, b, c, d)| FourCC([a, b, c, d]))
+                .context(StrContext::Label("fourcc")),
+        )
+        .parse_next(input)
+    }
+
+    fn entry(input: &mut Stream<'_>) -> winnow::ModalResult<DataReferenceEntry> {
+        let start_len = input.len();
+        let size = entry_size(input)?;
+        let typ = fourcc(input)?;
+        let version = version(input)?;
+        let flags = flags(input)?;
+        let header_size = start_len - input.len();
+        let data: Vec<u8> = trace("entry_data", repeat(size - header_size, u8))
+            .context(StrContext::Label("entry_data"))
+            .parse_next(input)?;
+
+        Ok(DataReferenceEntry {
+            inner: DataReferenceEntryInner::new(typ, data),
             version,
             flags,
-            entries,
         })
-        .context(StrContext::Label("dref"))
-        .parse_next(input)
-}
-
-fn parse_version(input: &mut Stream<'_>) -> winnow::ModalResult<u8> {
-    trace("version", u8)
-        .context(StrContext::Label("version"))
-        .parse_next(input)
-}
-
-fn parse_flags(input: &mut Stream<'_>) -> winnow::ModalResult<[u8; 3]> {
-    trace(
-        "flags",
-        (
-            u8.context(StrContext::Label("[0]")),
-            u8.context(StrContext::Label("[1]")),
-            u8.context(StrContext::Label("[2]")),
-        ),
-    )
-    .map(|(a, b, c)| [a, b, c])
-    .context(StrContext::Label("flags"))
-    .parse_next(input)
-}
-
-fn parse_entries(input: &mut Stream<'_>) -> winnow::ModalResult<Vec<DataReferenceEntry>> {
-    let entry_count = parse_entry_count(input)?;
-    trace(
-        "entries",
-        repeat(
-            entry_count,
-            trace("entry", parse_entry.context(StrContext::Label("entry"))),
-        ),
-    )
-    .parse_next(input)
-}
-
-fn parse_entry_count(input: &mut Stream<'_>) -> winnow::ModalResult<usize> {
-    trace("entry_count", be_u32)
-        .map(|s| s as usize)
-        .parse_next(input)
-}
-
-fn parse_entry_size(input: &mut Stream<'_>) -> winnow::ModalResult<usize> {
-    trace(
-        "entry_size",
-        be_u32
-            .map(|s| s as usize)
-            .context(StrContext::Label("entry_size"))
-            .context(StrContext::Expected(StrContextValue::Description("be u32"))),
-    )
-    .parse_next(input)
-}
-
-fn parse_fourcc(input: &mut Stream<'_>) -> winnow::ModalResult<FourCC> {
-    trace(
-        "fourcc",
-        (
-            u8.context(StrContext::Label("[0]")),
-            u8.context(StrContext::Label("[1]")),
-            u8.context(StrContext::Label("[2]")),
-            u8.context(StrContext::Label("[3]")),
-        )
-            .map(|(a, b, c, d)| FourCC([a, b, c, d]))
-            .context(StrContext::Label("fourcc")),
-    )
-    .parse_next(input)
-}
-
-fn parse_entry(input: &mut Stream<'_>) -> winnow::ModalResult<DataReferenceEntry> {
-    let start_len = input.len();
-    let size = parse_entry_size(input)?;
-    let typ = parse_fourcc(input)?;
-    let version = parse_version(input)?;
-    let flags = parse_flags(input)?;
-    let header_size = start_len - input.len();
-    let data: Vec<u8> = trace("entry_data", repeat(size - header_size, u8))
-        .context(StrContext::Label("entry_data"))
-        .parse_next(input)?;
-
-    Ok(DataReferenceEntry {
-        inner: DataReferenceEntryInner::new(typ, data),
-        version,
-        flags,
-    })
+    }
 }
 
 #[cfg(test)]
