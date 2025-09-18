@@ -135,57 +135,87 @@ impl SerializeAtom for DataReferenceAtom {
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
-        let mut data = Vec::new();
+        serializer::serialize_dref_data(self)
+    }
+}
 
-        // Version (1 byte)
-        data.push(self.version);
+mod serializer {
+    use crate::atom::{
+        dref::{entry_types, DataReferenceEntry, DataReferenceEntryInner},
+        DataReferenceAtom,
+    };
 
-        // Flags (3 bytes)
-        data.extend_from_slice(&self.flags);
+    pub fn serialize_dref_data(data: DataReferenceAtom) -> Vec<u8> {
+        let entries = data.entries;
+        vec![
+            version(data.version),
+            flags(data.flags),
+            entry_count(entries.len()),
+            entries.into_iter().flat_map(entry).collect(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
 
-        // Entry count (4 bytes, big-endian)
-        data.extend_from_slice(
-            &u32::try_from(self.entries.len())
-                .expect("entries len must fit in a u32")
-                .to_be_bytes(),
-        );
+    fn version(version: u8) -> Vec<u8> {
+        vec![version]
+    }
 
-        // Entries
-        for entry in self.entries {
-            let mut entry_data = Vec::new();
+    fn flags(flags: [u8; 3]) -> Vec<u8> {
+        flags.to_vec()
+    }
 
-            // Entry version and flags (4 bytes)
-            entry_data.push(entry.version);
-            entry_data.extend_from_slice(&entry.flags);
+    fn entry_count(n: usize) -> Vec<u8> {
+        u32::try_from(n)
+            .expect("entries len must fit in a u32")
+            .to_be_bytes()
+            .to_vec()
+    }
 
-            // Entry data based on type
-            let (entry_type, entry_payload) = match entry.inner {
-                DataReferenceEntryInner::Url(url) => (entry_types::URL.clone(), url.into_bytes()),
-                DataReferenceEntryInner::Urn(urn) => (entry_types::URN.clone(), urn.into_bytes()),
-                DataReferenceEntryInner::Alias(alias_data) => {
-                    (entry_types::ALIS.clone(), alias_data)
-                }
-                DataReferenceEntryInner::Unknown(typ, unknown_data) => (typ.0, unknown_data),
-            };
+    fn entry(e: DataReferenceEntry) -> Vec<u8> {
+        let e = raw_entry(e);
+        let data: Vec<u8> = vec![version(e.version), flags(e.flags), e.data]
+            .into_iter()
+            .flatten()
+            .collect();
+        let header_size = 4 + 4; // size + type
+        vec![
+            entry_size(header_size + data.len()).to_vec(),
+            e.typ.to_vec(),
+            data,
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
 
-            entry_data.extend_from_slice(&entry_payload);
+    fn entry_size(n: usize) -> [u8; 4] {
+        u32::try_from(n)
+            .expect("entry size len must fit in a u32")
+            .to_be_bytes()
+    }
 
-            // Calculate total entry size (4 + 4 + entry_data.len())
-            let entry_size = 8 + entry_data.len();
+    struct RawEntry {
+        version: u8,
+        flags: [u8; 3],
+        typ: [u8; 4],
+        data: Vec<u8>,
+    }
 
-            // Write entry size (4 bytes, big-endian)
-            data.extend_from_slice(
-                &(u32::try_from(entry_size).expect("entry_size should fit in u32")).to_be_bytes(),
-            );
-
-            // Write entry type (4 bytes)
-            data.extend_from_slice(&entry_type);
-
-            // Write entry data (version + flags + payload)
-            data.extend_from_slice(&entry_data);
+    fn raw_entry(e: DataReferenceEntry) -> RawEntry {
+        let (typ, data) = match e.inner {
+            DataReferenceEntryInner::Url(url) => (*entry_types::URL, url.into_bytes()),
+            DataReferenceEntryInner::Urn(urn) => (*entry_types::URN, urn.into_bytes()),
+            DataReferenceEntryInner::Alias(alias_data) => (*entry_types::ALIS, alias_data),
+            DataReferenceEntryInner::Unknown(typ, unknown_data) => (typ.0, unknown_data),
+        };
+        RawEntry {
+            version: e.version,
+            flags: e.flags,
+            typ,
+            data,
         }
-
-        data
     }
 }
 
