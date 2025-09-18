@@ -37,7 +37,7 @@ pub enum DataReferenceEntryInner {
     Url(String),
     Urn(String),
     Alias(Vec<u8>),
-    Unknown(Vec<u8>),
+    Unknown(FourCC, Vec<u8>),
 }
 
 impl DataReferenceEntryInner {
@@ -46,7 +46,7 @@ impl DataReferenceEntryInner {
             entry_types::URL => DataReferenceEntryInner::Url(String::from_utf8(data).unwrap()),
             entry_types::URN => DataReferenceEntryInner::Urn(String::from_utf8(data).unwrap()),
             entry_types::ALIS => DataReferenceEntryInner::Alias(data),
-            _ => DataReferenceEntryInner::Unknown(data),
+            _ => DataReferenceEntryInner::Unknown(entry_type, data),
         }
     }
 }
@@ -168,14 +168,12 @@ impl SerializeAtom for DataReferenceAtom {
 
             // Entry data based on type
             let (entry_type, entry_payload) = match entry.inner {
-                DataReferenceEntryInner::Url(url) => (entry_types::URL, url.into_bytes()),
-                DataReferenceEntryInner::Urn(urn) => (entry_types::URN, urn.into_bytes()),
-                DataReferenceEntryInner::Alias(alias_data) => (entry_types::ALIS, alias_data),
-                DataReferenceEntryInner::Unknown(unknown_data) => {
-                    // For unknown types, we can't determine the original type,
-                    // so we'll use a generic approach
-                    (b"unkn", unknown_data)
+                DataReferenceEntryInner::Url(url) => (entry_types::URL.clone(), url.into_bytes()),
+                DataReferenceEntryInner::Urn(urn) => (entry_types::URN.clone(), urn.into_bytes()),
+                DataReferenceEntryInner::Alias(alias_data) => {
+                    (entry_types::ALIS.clone(), alias_data)
                 }
+                DataReferenceEntryInner::Unknown(typ, unknown_data) => (typ.0, unknown_data),
             };
 
             entry_data.extend_from_slice(&entry_payload);
@@ -189,7 +187,7 @@ impl SerializeAtom for DataReferenceAtom {
             );
 
             // Write entry type (4 bytes)
-            data.extend_from_slice(entry_type);
+            data.extend_from_slice(&entry_type);
 
             // Write entry data (version + flags + payload)
             data.extend_from_slice(&entry_data);
