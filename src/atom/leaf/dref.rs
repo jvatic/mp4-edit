@@ -221,7 +221,7 @@ mod serializer {
 
 mod parser {
     use winnow::{
-        binary::u8,
+        binary::{length_repeat, u8},
         combinator::{repeat, seq, trace},
         error::StrContext,
         Parser,
@@ -242,24 +242,24 @@ mod parser {
     }
 
     fn parse_dref_data_inner(input: &mut Stream<'_>) -> winnow::ModalResult<DataReferenceAtom> {
-        (version, flags3, entries)
-            .map(|(version, flags, entries)| DataReferenceAtom {
-                version,
-                flags,
-                entries,
-            })
-            .context(StrContext::Label("dref"))
-            .parse_next(input)
+        trace(
+            "dref",
+            (version, flags3, entries)
+                .map(|(version, flags, entries)| DataReferenceAtom {
+                    version,
+                    flags,
+                    entries,
+                })
+                .context(StrContext::Label("dref")),
+        )
+        .parse_next(input)
     }
 
     fn entries(input: &mut Stream<'_>) -> winnow::ModalResult<Vec<DataReferenceEntry>> {
-        let entry_count = usize_be_u32
-            .context(StrContext::Label("entry_count"))
-            .parse_next(input)?;
         trace(
             "entries",
-            repeat(
-                entry_count,
+            length_repeat(
+                usize_be_u32.context(StrContext::Label("entry_count")),
                 trace("entry", entry.context(StrContext::Label("entry"))),
             ),
         )
@@ -275,13 +275,16 @@ mod parser {
         }
 
         fn entry_header(input: &mut Stream<'_>) -> winnow::ModalResult<EntryHeader> {
-            seq!(EntryHeader {
-                size: usize_be_u32,
-                typ: fourcc,
-                version: version,
-                flags: flags3
-            })
-            .context(StrContext::Label("entry_header"))
+            trace(
+                "entry_header",
+                seq!(EntryHeader {
+                    size: usize_be_u32,
+                    typ: fourcc,
+                    version: version,
+                    flags: flags3
+                })
+                .context(StrContext::Label("entry_header")),
+            )
             .parse_next(input)
         }
 
