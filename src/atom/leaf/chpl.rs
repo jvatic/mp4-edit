@@ -184,7 +184,7 @@ mod parser {
     use super::ChapterListAtom;
     use crate::atom::{
         chpl::{ChapterEntries, ChapterEntry},
-        util::parser::{flags3, stream, version1, Stream},
+        util::parser::{flags3, stream, version, Stream},
     };
 
     pub fn parse_chpl_data(input: &[u8]) -> Result<ChapterListAtom, crate::ParseError> {
@@ -195,7 +195,7 @@ mod parser {
 
     fn parse_chpl_data_inner(input: &mut Stream<'_>) -> ModalResult<ChapterListAtom> {
         seq!(ChapterListAtom {
-            version: version1.verify(|v| *v == 1),
+            version: version.verify(|v| *v == 1),
             flags: flags3,
             _: reserved,
             chapters: chapters,
