@@ -11,7 +11,7 @@ pub const GMHD: &[u8; 4] = b"gmhd";
 pub struct GenericMediaHeaderAtom {
     pub version: u8,
     pub flags: [u8; 3],
-    /// Generic media information data - typically empty for basic implementations
+    /// Generic media information data
     pub data: Vec<u8>,
 }
 
