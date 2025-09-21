@@ -1,16 +1,11 @@
-use anyhow::{anyhow, Context};
 use bon::bon;
 use derive_more::Deref;
 use futures_io::AsyncRead;
-use std::{
-    fmt,
-    io::{BufRead, BufReader, Read},
-    time::Duration,
-};
+use std::{fmt, time::Duration};
 
 use crate::{
     atom::{
-        util::{async_to_sync_read, DebugEllipsis},
+        util::{read_to_end, DebugEllipsis},
         FourCC,
     },
     parser::ParseAtom,
@@ -115,7 +110,8 @@ impl ParseAtom for ChapterListAtom {
         if atom_type != CHPL {
             return Err(ParseError::new_unexpected_atom(atom_type, CHPL));
         }
-        parse_chpl_data(async_to_sync_read(reader).await?).map_err(ParseError::new_atom_parse)
+        let data = read_to_end(reader).await?;
+        parser::parse_chpl_data(&data)
     }
 }
 
@@ -125,80 +121,113 @@ impl SerializeAtom for ChapterListAtom {
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
-        let mut data = Vec::new();
-
-        // Version (1 byte)
-        data.push(self.version);
-
-        // Flags (3 bytes)
-        data.extend_from_slice(&self.flags);
-
-        // Reserved field (8 bytes) - should be zero
-        data.extend_from_slice(&[0u8; 8]);
-
-        // Chapter entries
-        for chapter in self.chapters.iter() {
-            // Start time (8 bytes, big-endian)
-            data.extend_from_slice(&chapter.start_time.to_be_bytes());
-
-            // Title as UTF-8 string with null terminator
-            data.extend_from_slice(chapter.title.as_bytes());
-            data.push(0x00); // Null terminator
-        }
-
-        data
+        serializer::serialize_chpl_data(self)
     }
 }
 
-fn parse_chpl_data<R: Read>(mut reader: R) -> Result<ChapterListAtom, anyhow::Error> {
-    // Read version and flags (4 bytes)
-    let mut version_flags = [0u8; 4];
-    reader
-        .read_exact(&mut version_flags)
-        .context("read version and flags")?;
+mod serializer {
+    use crate::atom::chpl::{ChapterEntries, ChapterEntry};
 
-    let version = version_flags[0];
-    let flags = [version_flags[1], version_flags[2], version_flags[3]];
+    use super::ChapterListAtom;
 
-    // Validate version (chpl typically uses version 1)
-    if version != 1 {
-        return Err(anyhow!("unsupported chpl version {}", version));
+    pub fn serialize_chpl_data(atom: ChapterListAtom) -> Vec<u8> {
+        vec![
+            version(atom.version),
+            flags(atom.flags),
+            chapters(atom.chapters),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
     }
 
-    // Read reserved field (4 bytes) - should be zero
-    let mut reserved = [0u8; 8];
-    reader
-        .read_exact(&mut reserved)
-        .context("read reserved field")?;
-
-    let mut chapters = Vec::new();
-
-    let mut reader = BufReader::new(reader);
-
-    // Read start time (8 bytes, big-endian)
-    let mut start_time_buf = [0u8; 8];
-    let mut i = -1;
-    while let Ok(()) = reader.read_exact(&mut start_time_buf) {
-        i += 1;
-        let start_time = u64::from_be_bytes(start_time_buf);
-
-        let mut title_buf = Vec::new();
-        reader
-            .read_until(0x00, &mut title_buf)
-            .context(format!("read title for chapter {i}"))?;
-        title_buf.pop(); // Remove trailing null byte
-
-        let title =
-            String::from_utf8(title_buf).context(format!("invalid UTF-8 in chapter {i} title"))?;
-
-        chapters.push(ChapterEntry { start_time, title });
+    fn version(version: u8) -> Vec<u8> {
+        vec![version]
     }
 
-    Ok(ChapterListAtom {
-        version,
-        flags,
-        chapters: ChapterEntries(chapters),
-    })
+    fn flags(flags: [u8; 3]) -> Vec<u8> {
+        flags.to_vec()
+    }
+
+    fn chapters(chapters: ChapterEntries) -> Vec<u8> {
+        chapters.0.into_iter().flat_map(chapter).collect()
+    }
+
+    fn chapter(chapter: ChapterEntry) -> Vec<u8> {
+        vec![start_time(chapter.start_time), title(chapter.title)]
+            .into_iter()
+            .flatten()
+            .collect()
+    }
+
+    fn start_time(start_time: u64) -> Vec<u8> {
+        start_time.to_be_bytes().to_vec()
+    }
+
+    fn title(title: String) -> Vec<u8> {
+        vec![title.into_bytes(), vec![0x00]]
+            .into_iter()
+            .flatten()
+            .collect()
+    }
+}
+
+mod parser {
+    use winnow::{
+        binary::{be_u64, u8},
+        combinator::{repeat, seq},
+        error::StrContext,
+        token::{literal, take_until},
+        ModalResult, Parser,
+    };
+
+    use super::ChapterListAtom;
+    use crate::atom::{
+        chpl::{ChapterEntries, ChapterEntry},
+        util::parser::{flags3, stream, version1, Stream},
+    };
+
+    pub fn parse_chpl_data(input: &[u8]) -> Result<ChapterListAtom, crate::ParseError> {
+        parse_chpl_data_inner
+            .parse(stream(input))
+            .map_err(crate::ParseError::from_winnow)
+    }
+
+    fn parse_chpl_data_inner(input: &mut Stream<'_>) -> ModalResult<ChapterListAtom> {
+        seq!(ChapterListAtom {
+            version: version1.verify(|v| *v == 1),
+            flags: flags3,
+            _: reserved,
+            chapters: chapters,
+        })
+        .context(StrContext::Label("chpl"))
+        .parse_next(input)
+    }
+
+    fn reserved(input: &mut Stream<'_>) -> ModalResult<()> {
+        repeat(8, u8)
+            .context(StrContext::Label("reserved"))
+            .parse_next(input)
+    }
+
+    fn chapters(input: &mut Stream<'_>) -> ModalResult<ChapterEntries> {
+        repeat(1.., chapter)
+            .map(ChapterEntries)
+            .context(StrContext::Label("chapters"))
+            .parse_next(input)
+    }
+
+    fn chapter(input: &mut Stream<'_>) -> ModalResult<ChapterEntry> {
+        seq!(ChapterEntry {
+            start_time: be_u64.context(StrContext::Label("start_time")),
+            title: take_until(1.., 0x00)
+                .try_map(|buf: &[u8]| String::from_utf8(buf.to_vec()))
+                .context(StrContext::Label("title")),
+            _: literal(0x00), // discard the literal, TODO: clean this up so above expr consumes this
+        })
+        .context(StrContext::Label("chapter"))
+        .parse_next(input)
+    }
 }
 
 #[cfg(test)]
