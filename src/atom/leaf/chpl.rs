@@ -175,7 +175,7 @@ mod serializer {
 mod parser {
     use winnow::{
         binary::{be_u64, u8},
-        combinator::{repeat, seq},
+        combinator::{repeat, seq, trace},
         error::StrContext,
         token::{literal, take_until},
         ModalResult, Parser,
@@ -194,38 +194,49 @@ mod parser {
     }
 
     fn parse_chpl_data_inner(input: &mut Stream<'_>) -> ModalResult<ChapterListAtom> {
-        seq!(ChapterListAtom {
-            version: version.verify(|v| *v == 1),
-            flags: flags3,
-            _: reserved,
-            chapters: chapters,
-        })
-        .context(StrContext::Label("chpl"))
+        trace(
+            "chpl",
+            seq!(ChapterListAtom {
+                version: version.verify(|v| *v == 1),
+                flags: flags3,
+                _: reserved,
+                chapters: chapters,
+            })
+            .context(StrContext::Label("chpl")),
+        )
         .parse_next(input)
     }
 
     fn reserved(input: &mut Stream<'_>) -> ModalResult<()> {
-        repeat(8, u8)
-            .context(StrContext::Label("reserved"))
-            .parse_next(input)
+        trace(
+            "reserved",
+            repeat(8, u8).context(StrContext::Label("reserved")),
+        )
+        .parse_next(input)
     }
 
     fn chapters(input: &mut Stream<'_>) -> ModalResult<ChapterEntries> {
-        repeat(1.., chapter)
-            .map(ChapterEntries)
-            .context(StrContext::Label("chapters"))
-            .parse_next(input)
+        trace(
+            "chapters",
+            repeat(1.., chapter)
+                .map(ChapterEntries)
+                .context(StrContext::Label("chapters")),
+        )
+        .parse_next(input)
     }
 
     fn chapter(input: &mut Stream<'_>) -> ModalResult<ChapterEntry> {
-        seq!(ChapterEntry {
-            start_time: be_u64.context(StrContext::Label("start_time")),
-            title: take_until(1.., 0x00)
-                .try_map(|buf: &[u8]| String::from_utf8(buf.to_vec()))
-                .context(StrContext::Label("title")),
-            _: literal(0x00), // discard the literal, TODO: clean this up so above expr consumes this
-        })
-        .context(StrContext::Label("chapter"))
+        trace(
+            "chapter",
+            seq!(ChapterEntry {
+                start_time: be_u64.context(StrContext::Label("start_time")),
+                title: take_until(1.., 0x00)
+                    .try_map(|buf: &[u8]| String::from_utf8(buf.to_vec()))
+                    .context(StrContext::Label("title")),
+                _: literal(0x00), // discard the literal, TODO: clean this up so above expr consumes this
+            })
+            .context(StrContext::Label("chapter")),
+        )
         .parse_next(input)
     }
 }
