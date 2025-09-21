@@ -1,12 +1,11 @@
-use std::{io::Read, time::Duration};
+use std::time::Duration;
 
-use anyhow::{anyhow, Context};
 use bon::bon;
 use futures_io::AsyncRead;
 
 use crate::{
     atom::{
-        util::{async_to_sync_read, scaled_duration},
+        util::{read_to_end, scaled_duration},
         FourCC,
     },
     parser::ParseAtom,
@@ -117,7 +116,8 @@ impl ParseAtom for EditListAtom {
         if atom_type != ELST {
             return Err(ParseError::new_unexpected_atom(atom_type, ELST));
         }
-        parse_elst_data(async_to_sync_read(reader).await?).map_err(ParseError::new_atom_parse)
+        let data = read_to_end(reader).await?;
+        parser::parse_elst_data(&data)
     }
 }
 
@@ -127,168 +127,204 @@ impl SerializeAtom for EditListAtom {
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
-        let mut data = Vec::new();
-
-        // Version (1 byte)
-        data.push(self.version);
-
-        // Flags (3 bytes)
-        data.extend_from_slice(&self.flags);
-
-        // Entry count (4 bytes, big-endian)
-        data.extend_from_slice(
-            &(u32::try_from(self.entries.len()).expect("entries len should fit in u32"))
-                .to_be_bytes(),
-        );
-
-        // Entries
-        for entry in self.entries {
-            match self.version {
-                0 => {
-                    // Version 0: 32-bit fields
-                    data.extend_from_slice(
-                        &(u32::try_from(entry.segment_duration)
-                            .expect("segment_duration should fit in u32"))
-                        .to_be_bytes(),
-                    );
-                    data.extend_from_slice(
-                        &(i32::try_from(entry.media_time).expect("media_time should fit in i32"))
-                            .to_be_bytes(),
-                    );
-                    // Convert f32 to fixed-point 16.16
-                    let rate_fixed = (entry.media_rate * 65536.0) as u32;
-                    data.extend_from_slice(&rate_fixed.to_be_bytes());
-                }
-                1 => {
-                    // Version 1: 64-bit fields for duration and time
-                    data.extend_from_slice(&entry.segment_duration.to_be_bytes());
-                    data.extend_from_slice(&entry.media_time.to_be_bytes());
-                    // Convert f32 to fixed-point 16.16
-                    let rate_fixed = (entry.media_rate * 65536.0) as u32;
-                    data.extend_from_slice(&rate_fixed.to_be_bytes());
-                }
-                _ => {
-                    // Fallback to version 0 format for unknown versions
-                    data.extend_from_slice(&(entry.segment_duration as u32).to_be_bytes());
-                    data.extend_from_slice(&(entry.media_time as i32).to_be_bytes());
-                    let rate_fixed = (entry.media_rate * 65536.0) as u32;
-                    data.extend_from_slice(&rate_fixed.to_be_bytes());
-                }
-            }
-        }
-
-        data
+        serializer::serialize_elst_atom(self)
     }
 }
 
-fn parse_elst_data<R: Read>(mut reader: R) -> Result<EditListAtom, anyhow::Error> {
-    // Read version and flags (4 bytes)
-    let mut version_flags = [0u8; 4];
-    reader
-        .read_exact(&mut version_flags)
-        .context("read version and flags")?;
+const FIXED_POINT_SCALE: f32 = 65536.0;
 
-    let version = version_flags[0];
-    let flags = [version_flags[1], version_flags[2], version_flags[3]];
+mod serializer {
+    use crate::atom::elst::{EditEntry, FIXED_POINT_SCALE};
 
-    // Read entry count
-    let mut count_buf = [0u8; 4];
-    reader
-        .read_exact(&mut count_buf)
-        .context("read entry count")?;
-    let entry_count = u32::from_be_bytes(count_buf);
+    use super::EditListAtom;
 
-    // Validate entry count
-    if entry_count > 65535 {
-        return Err(anyhow!("Too many edit entries: {}", entry_count));
+    pub fn serialize_elst_atom(atom: EditListAtom) -> Vec<u8> {
+        vec![
+            version(atom.version),
+            flags(atom.flags),
+            entry_count(atom.entries.len()),
+            entries(atom.version, atom.entries),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
     }
 
-    let entries = match version {
-        0 => parse_elst_entries_v0(&mut reader, entry_count as usize)?,
-        1 => parse_elst_entries_v1(&mut reader, entry_count as usize)?,
-        v => return Err(anyhow!("unsupported version {v}")),
+    fn version(version: u8) -> Vec<u8> {
+        vec![version]
+    }
+
+    fn flags(flags: [u8; 3]) -> Vec<u8> {
+        flags.to_vec()
+    }
+
+    fn entry_count(count: usize) -> Vec<u8> {
+        u32::try_from(count)
+            .expect("entries len should fit in u32")
+            .to_be_bytes()
+            .to_vec()
+    }
+
+    fn entries(version: u8, entries: Vec<EditEntry>) -> Vec<u8> {
+        match version {
+            1 => entries.into_iter().flat_map(entry_u64).collect(),
+            _ => entries.into_iter().flat_map(entry_u32).collect(),
+        }
+    }
+
+    fn entry_u32(entry: EditEntry) -> Vec<u8> {
+        vec![
+            u32::try_from(entry.segment_duration)
+                .expect("segument_duration should fit in u32")
+                .to_be_bytes()
+                .to_vec(),
+            i32::try_from(entry.media_time)
+                .expect("media_time should fit in u32")
+                .to_be_bytes()
+                .to_vec(),
+            media_rate(entry.media_rate),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+
+    fn entry_u64(entry: EditEntry) -> Vec<u8> {
+        vec![
+            entry.segment_duration.to_be_bytes().to_vec(),
+            entry.media_time.to_be_bytes().to_vec(),
+            media_rate(entry.media_rate),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+
+    fn media_rate(media_rate: f32) -> Vec<u8> {
+        // Convert f32 to fixed-point 16.16
+        let rate_fixed = (media_rate * FIXED_POINT_SCALE) as u32;
+        rate_fixed.to_be_bytes().to_vec()
+    }
+}
+
+mod parser {
+    use winnow::{
+        binary::{be_i32, be_i64, be_u32, be_u64, length_repeat},
+        combinator::{seq, trace},
+        error::StrContext,
+        ModalResult, Parser,
     };
 
-    Ok(EditListAtom {
-        version,
-        flags,
-        entries,
-    })
-}
+    use super::EditListAtom;
+    use crate::atom::{
+        elst::{EditEntry, FIXED_POINT_SCALE},
+        util::parser::{flags3, stream, version, Stream},
+    };
 
-fn parse_elst_entries_v0<R: Read>(
-    mut reader: R,
-    entry_count: usize,
-) -> Result<Vec<EditEntry>, anyhow::Error> {
-    let mut entries = Vec::with_capacity(entry_count);
-    let mut buf = [0u8; 4];
-
-    for i in 0..entry_count {
-        // Segment duration (32-bit)
-        reader
-            .read_exact(&mut buf)
-            .context(format!("read segment_duration for entry {i}"))?;
-        let segment_duration = u64::from(u32::from_be_bytes(buf));
-
-        // Media time (32-bit signed)
-        reader
-            .read_exact(&mut buf)
-            .context(format!("read media_time for entry {i}"))?;
-        let media_time = i64::from(i32::from_be_bytes(buf));
-
-        // Media rate (fixed-point 16.16)
-        reader
-            .read_exact(&mut buf)
-            .context(format!("read media_rate for entry {i}"))?;
-        let rate_fixed = u32::from_be_bytes(buf);
-        let media_rate = (rate_fixed as f32) / 65536.0;
-
-        entries.push(EditEntry {
-            segment_duration,
-            media_time,
-            media_rate,
-        });
+    pub fn parse_elst_data(input: &[u8]) -> Result<EditListAtom, crate::ParseError> {
+        parse_elst_data_inner
+            .parse(stream(input))
+            .map_err(crate::ParseError::from_winnow)
     }
 
-    Ok(entries)
-}
-
-fn parse_elst_entries_v1<R: Read>(
-    mut reader: R,
-    entry_count: usize,
-) -> Result<Vec<EditEntry>, anyhow::Error> {
-    let mut entries = Vec::with_capacity(entry_count);
-    let mut buf4 = [0u8; 4];
-    let mut buf8 = [0u8; 8];
-
-    for i in 0..entry_count {
-        // Segment duration (64-bit)
-        reader
-            .read_exact(&mut buf8)
-            .context(format!("read segment_duration for entry {i}"))?;
-        let segment_duration = u64::from_be_bytes(buf8);
-
-        // Media time (64-bit signed)
-        reader
-            .read_exact(&mut buf8)
-            .context(format!("read media_time for entry {i}"))?;
-        let media_time = i64::from_be_bytes(buf8);
-
-        // Media rate (fixed-point 16.16)
-        reader
-            .read_exact(&mut buf4)
-            .context(format!("read media_rate for entry {i}"))?;
-        let rate_fixed = u32::from_be_bytes(buf4);
-        let media_rate = (rate_fixed as f32) / 65536.0;
-
-        entries.push(EditEntry {
-            segment_duration,
-            media_time,
-            media_rate,
-        });
+    fn parse_elst_data_inner(input: &mut Stream<'_>) -> ModalResult<EditListAtom> {
+        trace(
+            "elst",
+            seq!(EditListAtom {
+                version: version,
+                flags: flags3,
+                entries: length_repeat(
+                    entry_count,
+                    match version {
+                        1 => entry_64,
+                        _ => entry_32,
+                    }
+                ),
+            })
+            .context(StrContext::Label("elst")),
+        )
+        .parse_next(input)
     }
 
-    Ok(entries)
+    fn entry_count(input: &mut Stream<'_>) -> ModalResult<u32> {
+        trace(
+            "entry_count",
+            be_u32.context(StrContext::Label("entry_count")),
+        )
+        .parse_next(input)
+    }
+
+    fn entry_32(input: &mut Stream<'_>) -> ModalResult<EditEntry> {
+        trace(
+            "entry_u32",
+            seq!(EditEntry {
+                segment_duration: segment_duration_u32,
+                media_time: media_time_i32,
+                media_rate: media_rate,
+            })
+            .context(StrContext::Label("entry")),
+        )
+        .parse_next(input)
+    }
+
+    fn entry_64(input: &mut Stream<'_>) -> ModalResult<EditEntry> {
+        trace(
+            "entry_u64",
+            seq!(EditEntry {
+                segment_duration: segment_duration_u64,
+                media_time: media_time_i64,
+                media_rate: media_rate,
+            })
+            .context(StrContext::Label("entry")),
+        )
+        .parse_next(input)
+    }
+
+    fn segment_duration_u64(input: &mut Stream<'_>) -> ModalResult<u64> {
+        trace(
+            "segment_duration_u64",
+            be_u64.context(StrContext::Label("segment_duration")),
+        )
+        .parse_next(input)
+    }
+
+    fn segment_duration_u32(input: &mut Stream<'_>) -> ModalResult<u64> {
+        trace(
+            "segment_duration_u32",
+            be_u32
+                .map(|v| v as u64)
+                .context(StrContext::Label("segment_duration")),
+        )
+        .parse_next(input)
+    }
+
+    fn media_time_i64(input: &mut Stream<'_>) -> ModalResult<i64> {
+        trace(
+            "media_time_i64",
+            be_i64.context(StrContext::Label("media_time")),
+        )
+        .parse_next(input)
+    }
+
+    fn media_time_i32(input: &mut Stream<'_>) -> ModalResult<i64> {
+        trace(
+            "media_time_i32",
+            be_i32
+                .map(|v| v as i64)
+                .context(StrContext::Label("media_time")),
+        )
+        .parse_next(input)
+    }
+
+    fn media_rate(input: &mut Stream<'_>) -> ModalResult<f32> {
+        trace(
+            "media_rate",
+            be_u32
+                .map(|v| (v as f32) / FIXED_POINT_SCALE)
+                .context(StrContext::Label("media_time")),
+        )
+        .parse_next(input)
+    }
 }
 
 #[cfg(test)]
