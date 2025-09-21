@@ -230,7 +230,7 @@ mod parser {
     use super::{DataReferenceAtom, DataReferenceEntry, DataReferenceEntryInner};
     use crate::{
         atom::util::parser::{
-            combinators::with_len, flags3, fourcc, stream, usize_be_u32, version1, Stream,
+            combinators::with_len, flags3, fourcc, stream, usize_be_u32, version, Stream,
         },
         FourCC,
     };
@@ -242,7 +242,7 @@ mod parser {
     }
 
     fn parse_dref_data_inner(input: &mut Stream<'_>) -> winnow::ModalResult<DataReferenceAtom> {
-        (version1, flags3, entries)
+        (version, flags3, entries)
             .map(|(version, flags, entries)| DataReferenceAtom {
                 version,
                 flags,
@@ -278,7 +278,7 @@ mod parser {
             seq!(EntryHeader {
                 size: usize_be_u32,
                 typ: fourcc,
-                version: version1,
+                version: version,
                 flags: flags3
             })
             .context(StrContext::Label("entry_header"))

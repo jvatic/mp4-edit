@@ -28,7 +28,7 @@ pub fn fourcc(input: &mut Stream<'_>) -> winnow::ModalResult<FourCC> {
     .parse_next(input)
 }
 
-pub fn version1(input: &mut Stream<'_>) -> winnow::ModalResult<u8> {
+pub fn version(input: &mut Stream<'_>) -> winnow::ModalResult<u8> {
     trace("version", u8)
         .context(StrContext::Label("version"))
         .parse_next(input)
