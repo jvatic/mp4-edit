@@ -1,10 +1,8 @@
-use anyhow::{anyhow, Context};
 use bon::Builder;
 use futures_io::AsyncRead;
-use std::io::Read;
 
 use crate::{
-    atom::{atom_ref, util::async_to_sync_read, FourCC},
+    atom::{atom_ref, util::read_to_end, FourCC},
     parser::ParseAtom,
     writer::SerializeAtom,
     AtomData, ParseError,
@@ -77,48 +75,42 @@ impl ParseAtom for FileTypeAtom {
         if atom_type != FTYP {
             return Err(ParseError::new_unexpected_atom(atom_type, FTYP));
         }
-        parse_ftyp_data(async_to_sync_read(reader).await?).map_err(ParseError::new_atom_parse)
+        let data = read_to_end(reader).await?;
+        parser::parse_ftyp_data(&data)
     }
 }
 
-fn parse_ftyp_data<R: Read>(mut reader: R) -> Result<FileTypeAtom, anyhow::Error> {
-    // Minimum size check: major_brand (4) + minor_version (4) = 8 bytes
-    let mut buf = Vec::new();
-    reader.read_to_end(&mut buf).context("reading ftyp data")?;
+mod parser {
+    use winnow::{
+        binary::be_u32,
+        combinator::{repeat, seq, trace},
+        error::StrContext,
+        ModalResult, Parser,
+    };
 
-    if buf.len() < 8 {
-        return Err(anyhow!("ftyp atom too small: {} bytes", buf.len()));
+    use super::FileTypeAtom;
+    use crate::atom::util::parser::{fourcc, stream, Stream};
+
+    pub fn parse_ftyp_data(input: &[u8]) -> Result<FileTypeAtom, crate::ParseError> {
+        parse_ftyp_data_inner
+            .parse(stream(input))
+            .map_err(crate::ParseError::from_winnow)
     }
 
-    // Major brand (4 bytes)
-    let major_brand = FourCC([buf[0], buf[1], buf[2], buf[3]]);
-
-    // Minor version (4 bytes)
-    let minor_version = u32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]);
-
-    // Compatible brands (remaining bytes, must be multiple of 4)
-    let remaining_bytes = &buf[8..];
-    if remaining_bytes.len() % 4 != 0 {
-        return Err(anyhow!(
-            "Invalid ftyp atom: compatible brands section has {} bytes, must be multiple of 4",
-            remaining_bytes.len()
-        ));
+    fn parse_ftyp_data_inner(input: &mut Stream<'_>) -> ModalResult<FileTypeAtom> {
+        trace(
+            "ftyp",
+            seq!(FileTypeAtom {
+                major_brand: fourcc.context(StrContext::Label("major_brand")),
+                minor_version: be_u32.context(StrContext::Label("minor_version")),
+                compatible_brands: repeat(
+                    0..,
+                    fourcc.context(StrContext::Label("compatible_brand"))
+                ),
+            }),
+        )
+        .parse_next(input)
     }
-
-    let mut compatible_brands = Vec::new();
-    for chunk in remaining_bytes.chunks_exact(4) {
-        let brand = FourCC([chunk[0], chunk[1], chunk[2], chunk[3]]);
-        if brand == &[0u8; 4] {
-            continue;
-        }
-        compatible_brands.push(brand);
-    }
-
-    Ok(FileTypeAtom {
-        major_brand,
-        minor_version,
-        compatible_brands,
-    })
 }
 
 impl SerializeAtom for FileTypeAtom {
