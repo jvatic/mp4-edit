@@ -221,9 +221,10 @@ mod serializer {
 
 mod parser {
     use winnow::{
-        binary::{length_repeat, u8},
-        combinator::{repeat, seq, trace},
+        binary::length_repeat,
+        combinator::{seq, trace},
         error::StrContext,
+        token::take,
         Parser,
     };
 
@@ -298,9 +299,12 @@ mod parser {
             header_size,
         ) = with_len(entry_header).parse_next(input)?;
 
-        let data: Vec<u8> = trace("entry_data", repeat(size - header_size, u8))
-            .context(StrContext::Label("entry_data"))
-            .parse_next(input)?;
+        let data: Vec<u8> = trace(
+            "entry_data",
+            take(size - header_size).map(|data: &[u8]| data.to_vec()),
+        )
+        .context(StrContext::Label("entry_data"))
+        .parse_next(input)?;
 
         Ok(DataReferenceEntry {
             inner: DataReferenceEntryInner::new(typ, data),
