@@ -161,15 +161,6 @@ impl From<&str> for HandlerName {
 }
 
 impl HandlerName {
-    pub fn to_string(self) -> String {
-        match self {
-            Self::Raw(str) => str,
-            Self::Pascal(str) => str,
-            Self::CString(str) => str,
-            Self::CString2(str) => str,
-        }
-    }
-
     fn as_string(&self) -> &String {
         match self {
             Self::Raw(str) => str,
