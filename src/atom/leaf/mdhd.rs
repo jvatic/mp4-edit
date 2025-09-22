@@ -15,105 +15,82 @@ use crate::{
 
 pub const MDHD: &[u8; 4] = b"mdhd";
 
-/// Language code (ISO 639-2/T language code)
-#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LanguageCode {
-    English,
-    Spanish,
-    French,
-    German,
-    Italian,
-    Japanese,
-    Korean,
-    Chinese,
-    Russian,
-    Arabic,
-    Portuguese,
-    #[default]
-    Undetermined,
-    Other([char; 3]),
-}
-
-impl From<[u8; 3]> for LanguageCode {
-    fn from(value: [u8; 3]) -> Self {
-        // Decode the packed language format
-        let packed = u16::from_be_bytes([value[0], value[1]]);
-        let char1 = (((packed >> 10) & 0x1F) + 0x60) as u8 as char;
-        let char2 = (((packed >> 5) & 0x1F) + 0x60) as u8 as char;
-        let char3 = ((packed & 0x1F) + 0x60) as u8 as char;
-
-        let lang_str = format!("{char1}{char2}{char3}");
-
-        match lang_str.as_str() {
-            "eng" => LanguageCode::English,
-            "spa" => LanguageCode::Spanish,
-            "fra" => LanguageCode::French,
-            "deu" => LanguageCode::German,
-            "ita" => LanguageCode::Italian,
-            "jpn" => LanguageCode::Japanese,
-            "kor" => LanguageCode::Korean,
-            "chi" => LanguageCode::Chinese,
-            "rus" => LanguageCode::Russian,
-            "ara" => LanguageCode::Arabic,
-            "por" => LanguageCode::Portuguese,
-            "und" => LanguageCode::Undetermined,
-            _ => LanguageCode::Other([char1, char2, char3]),
+macro_rules! define_language_code_enum {
+    ($( #[$meta:meta] )* $name:ident { $( $( #[$tag:meta] )* $variant:ident => $chars:literal ),+ $(,)? }) => {
+        $(#[$meta])*
+        pub enum $name {
+            $( $( #[$tag] )* $variant ),+,
+            Other([char; 3]),
         }
-    }
-}
 
-impl LanguageCode {
-    /// Convert the language code to packed bytes format
-    fn serialize(&self) -> [u8; 2] {
-        let chars = match self {
-            LanguageCode::English => ['e', 'n', 'g'],
-            LanguageCode::Spanish => ['s', 'p', 'a'],
-            LanguageCode::French => ['f', 'r', 'a'],
-            LanguageCode::German => ['d', 'e', 'u'],
-            LanguageCode::Italian => ['i', 't', 'a'],
-            LanguageCode::Japanese => ['j', 'p', 'n'],
-            LanguageCode::Korean => ['k', 'o', 'r'],
-            LanguageCode::Chinese => ['c', 'h', 'i'],
-            LanguageCode::Russian => ['r', 'u', 's'],
-            LanguageCode::Arabic => ['a', 'r', 'a'],
-            LanguageCode::Portuguese => ['p', 'o', 'r'],
-            LanguageCode::Undetermined => ['u', 'n', 'd'],
-            LanguageCode::Other(chars) => *chars,
-        };
+        impl From<[u8; 3]> for $name {
+            fn from(value: [u8; 3]) -> Self {
+                // Decode the packed language format
+                let packed = u16::from_be_bytes([value[0], value[1]]);
+                let char1 = (((packed >> 10) & 0x1F) + 0x60) as u8;
+                let char2 = (((packed >> 5) & 0x1F) + 0x60) as u8;
+                let char3 = ((packed & 0x1F) + 0x60) as u8;
 
-        // Pack into 16-bit format (3 x 5-bit values)
-        let char1_bits = (chars[0] as u8 - 0x60) & 0x1F;
-        let char2_bits = (chars[1] as u8 - 0x60) & 0x1F;
-        let char3_bits = (chars[2] as u8 - 0x60) & 0x1F;
+                let lang: [u8; 3] = [char1, char2, char3];
+                let lang_chars: [char; 3] = [char1 as char, char2 as char, char3 as char];
 
-        let packed =
-            (u16::from(char1_bits) << 10) | (u16::from(char2_bits) << 5) | u16::from(char3_bits);
-        packed.to_be_bytes()
-    }
-}
-
-impl fmt::Display for LanguageCode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let code = match self {
-            LanguageCode::English => "eng",
-            LanguageCode::Spanish => "spa",
-            LanguageCode::French => "fra",
-            LanguageCode::German => "deu",
-            LanguageCode::Italian => "ita",
-            LanguageCode::Japanese => "jpn",
-            LanguageCode::Korean => "kor",
-            LanguageCode::Chinese => "chi",
-            LanguageCode::Russian => "rus",
-            LanguageCode::Arabic => "ara",
-            LanguageCode::Portuguese => "por",
-            LanguageCode::Undetermined => "und",
-            LanguageCode::Other(chars) => {
-                return write!(f, "{}{}{}", chars[0], chars[1], chars[2]);
+                match &lang {
+                    $( $chars => Self::$variant ),+,
+                    _ => Self::Other(lang_chars),
+                }
             }
-        };
-        write!(f, "{code}")
-    }
+        }
+
+        impl $name {
+            /// Convert the language code to packed bytes format
+            fn serialize(&self) -> [u8; 2] {
+                let chars = match self {
+                    $( Self::$variant => $chars ),+,
+                    Self::Other(chars) => &[chars[0] as u8, chars[1] as u8, chars[2] as u8],
+                };
+
+                // Pack into 16-bit format (3 x 5-bit values)
+                let char1_bits = (chars[0] - 0x60) & 0x1F;
+                let char2_bits = (chars[1] - 0x60) & 0x1F;
+                let char3_bits = (chars[2] - 0x60) & 0x1F;
+
+                let packed =
+                    (u16::from(char1_bits) << 10) | (u16::from(char2_bits) << 5) | u16::from(char3_bits);
+                packed.to_be_bytes()
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let chars = match self {
+                    $( Self::$variant => $chars ),+,
+                    Self::Other(chars) => &[chars[0] as u8, chars[1] as u8, chars[2] as u8],
+                };
+                write!(f, "{}{}{}", chars[0] as char, chars[1] as char, chars[2] as char)
+            }
+        }
+    };
 }
+
+define_language_code_enum!(
+    /// Language code (ISO 639-2/T language code)
+    #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+    LanguageCode {
+        English => b"eng",
+        Spanish => b"spa",
+        French => b"fra",
+        German => b"deu",
+        Italian => b"ita",
+        Japanese => b"jpn",
+        Korean => b"kor",
+        Chinese => b"chi",
+        Russian => b"rus",
+        Arabic => b"ara",
+        Portuguese => b"por",
+        #[default]
+        Undetermined => b"und",
+    }
+);
 
 #[derive(Default, Debug, Clone, Builder)]
 pub struct MediaHeaderAtom {
