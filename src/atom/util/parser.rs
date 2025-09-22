@@ -2,6 +2,7 @@ use winnow::{
     binary::{be_u32, u8},
     combinator::trace,
     error::{StrContext, StrContextValue},
+    token::take,
     Bytes, LocatingSlice, Parser,
 };
 
@@ -56,6 +57,10 @@ pub fn flags3(input: &mut Stream<'_>) -> winnow::ModalResult<[u8; 3]> {
     .map(|(a, b, c)| [a, b, c])
     .context(StrContext::Label("flags"))
     .parse_next(input)
+}
+
+pub fn byte_array<const N: usize>(input: &mut Stream<'_>) -> winnow::ModalResult<[u8; N]> {
+    take(N).try_map(|b: &[u8]| b.try_into()).parse_next(input)
 }
 
 pub mod combinators {

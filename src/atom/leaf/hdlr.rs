@@ -1,10 +1,9 @@
-use anyhow::{anyhow, Context};
 use bon::Builder;
+use core::fmt;
 use futures_io::AsyncRead;
-use std::io::Read;
 
 use crate::{
-    atom::{util::async_to_sync_read, FourCC},
+    atom::{util::read_to_end, FourCC},
     parser::ParseAtom,
     writer::SerializeAtom,
     ParseError,
@@ -114,15 +113,75 @@ pub struct HandlerReferenceAtom {
     /// Component flags mask (usually 0)
     #[builder(default = 0)]
     pub component_flags_mask: u32,
-    /// Human-readable name of the handler (null-terminated string)
+    /// Human-readable name of the handler
     #[builder(into)]
-    pub name: String,
-    /// Whether the original name was encoded as a null byte
-    #[builder(skip = false)]
-    name_extra_null_byte: bool,
-    /// Whether the original name was encoded as a Pascal string
-    #[builder(skip = false)]
-    name_is_pascal_string: bool,
+    pub name: Option<HandlerName>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HandlerName {
+    /// just string data
+    Raw(String),
+    /// length followed by string data
+    Pascal(String),
+    /// null terminated string
+    CString(String),
+    /// double-null terminated string
+    CString2(String),
+}
+
+impl Default for HandlerName {
+    fn default() -> Self {
+        Self::Raw(String::new())
+    }
+}
+
+impl fmt::Display for HandlerName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fmt::Display::fmt(self.as_string(), f)
+    }
+}
+
+impl From<String> for HandlerName {
+    fn from(value: String) -> Self {
+        Self::CString(value)
+    }
+}
+
+impl From<&String> for HandlerName {
+    fn from(value: &String) -> Self {
+        Self::CString(value.to_owned())
+    }
+}
+
+impl From<&str> for HandlerName {
+    fn from(value: &str) -> Self {
+        Self::CString(value.to_owned())
+    }
+}
+
+impl HandlerName {
+    pub fn to_string(self) -> String {
+        match self {
+            Self::Raw(str) => str,
+            Self::Pascal(str) => str,
+            Self::CString(str) => str,
+            Self::CString2(str) => str,
+        }
+    }
+
+    fn as_string(&self) -> &String {
+        match self {
+            Self::Raw(str) => str,
+            Self::Pascal(str) => str,
+            Self::CString(str) => str,
+            Self::CString2(str) => str,
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.as_string().as_str()
+    }
 }
 
 impl ParseAtom for HandlerReferenceAtom {
@@ -133,123 +192,9 @@ impl ParseAtom for HandlerReferenceAtom {
         if atom_type != HDLR {
             return Err(ParseError::new_unexpected_atom(atom_type, HDLR));
         }
-        parse_hdlr_data(async_to_sync_read(reader).await?).map_err(ParseError::new_atom_parse)
+        let data = read_to_end(reader).await?;
+        parser::parse_hdlr_data(&data)
     }
-}
-
-fn parse_hdlr_data<R: Read>(mut reader: R) -> Result<HandlerReferenceAtom, anyhow::Error> {
-    // Read version and flags (4 bytes)
-    let mut version_flags = [0u8; 4];
-    reader
-        .read_exact(&mut version_flags)
-        .context("read version and flags")?;
-
-    let version = version_flags[0];
-    let flags = [version_flags[1], version_flags[2], version_flags[3]];
-
-    // Validate version
-    if version != 0 {
-        return Err(anyhow!("unsupported version {}", version));
-    }
-
-    // Read component type (4 bytes, pre-defined)
-    let mut component_type = [0u8; 4];
-    reader
-        .read_exact(&mut component_type)
-        .context("read component_type")?;
-
-    // Read handler type (4 bytes)
-    let mut handler_type_bytes = [0u8; 4];
-    reader
-        .read_exact(&mut handler_type_bytes)
-        .context("read handler_type")?;
-    let handler_type = HandlerType::from_bytes(&handler_type_bytes);
-
-    // Read component manufacturer (4 bytes)
-    let mut component_manufacturer = [0u8; 4];
-    reader
-        .read_exact(&mut component_manufacturer)
-        .context("read component_manufacturer")?;
-
-    // Read component flags (4 bytes)
-    let mut flags_buf = [0u8; 4];
-    reader
-        .read_exact(&mut flags_buf)
-        .context("read component_flags")?;
-    let component_flags = u32::from_be_bytes(flags_buf);
-
-    // Read component flags mask (4 bytes)
-    reader
-        .read_exact(&mut flags_buf)
-        .context("read component_flags_mask")?;
-    let component_flags_mask = u32::from_be_bytes(flags_buf);
-
-    // Read the remaining data as the name (null-terminated string)
-    let mut name_bytes = Vec::new();
-    reader
-        .read_to_end(&mut name_bytes)
-        .context("read handler name")?;
-
-    // Parse the name string and detect format
-    let (name, name_is_pascal_string) = parse_handler_name_with_format(&name_bytes)?;
-
-    // Empty names can end with two null bytes (00 00)
-    let extra_null_byte = !name_is_pascal_string
-        && name.is_empty()
-        && name_bytes.len() >= 2
-        && name_bytes[name_bytes.len() - 2..] == [0, 0];
-
-    Ok(HandlerReferenceAtom {
-        version,
-        flags,
-        component_type,
-        handler_type,
-        component_manufacturer,
-        component_flags,
-        component_flags_mask,
-        name,
-        name_extra_null_byte: extra_null_byte,
-        name_is_pascal_string,
-    })
-}
-
-fn parse_handler_name_with_format(name_bytes: &[u8]) -> Result<(String, bool), anyhow::Error> {
-    if name_bytes.is_empty() {
-        return Ok((String::new(), false));
-    }
-
-    // The name can be either:
-    // 1. A Pascal string (first byte is length, followed by string data)
-    // 2. A C string (null-terminated)
-    // 3. Just raw string data
-
-    let (name_str, is_pascal) = if name_bytes.len() > 1
-        && name_bytes[0] as usize == name_bytes.len() - 1
-    {
-        // Pascal string format
-        let length = name_bytes[0] as usize;
-        if length > 0 && length < name_bytes.len() {
-            (
-                std::str::from_utf8(&name_bytes[1..=length])
-                    .context("invalid UTF-8 in Pascal string")?,
-                true,
-            )
-        } else {
-            ("", true)
-        }
-    } else {
-        // Try to find null terminator
-        let end_pos = name_bytes
-            .iter()
-            .position(|&b| b == 0)
-            .unwrap_or(name_bytes.len());
-        (
-            std::str::from_utf8(&name_bytes[..end_pos]).context("invalid UTF-8 in handler name")?,
-            false,
-        )
-    };
-
-    Ok((name_str.to_string(), is_pascal))
 }
 
 impl SerializeAtom for HandlerReferenceAtom {
@@ -258,48 +203,277 @@ impl SerializeAtom for HandlerReferenceAtom {
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
+        serializer::serialize_hdlr_atom(self)
+    }
+}
+
+mod serializer {
+    use super::{HandlerName, HandlerReferenceAtom, HandlerType};
+
+    pub fn serialize_hdlr_atom(atom: HandlerReferenceAtom) -> Vec<u8> {
+        vec![
+            version(atom.version),
+            flags(atom.flags),
+            component_type(atom.component_type),
+            handler_type(atom.handler_type),
+            component_manufacturer(atom.component_manufacturer),
+            component_flags(atom.component_flags),
+            component_flags_mask(atom.component_flags_mask),
+            atom.name.map(name).unwrap_or_default(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+
+    fn version(version: u8) -> Vec<u8> {
+        vec![version]
+    }
+
+    fn flags(flags: [u8; 3]) -> Vec<u8> {
+        flags.to_vec()
+    }
+
+    fn component_type(component_type: [u8; 4]) -> Vec<u8> {
+        component_type.to_vec()
+    }
+
+    fn handler_type(handler_type: HandlerType) -> Vec<u8> {
+        handler_type.to_bytes().to_vec()
+    }
+
+    fn component_manufacturer(manufacturer: [u8; 4]) -> Vec<u8> {
+        manufacturer.to_vec()
+    }
+
+    fn component_flags(flags: u32) -> Vec<u8> {
+        flags.to_be_bytes().to_vec()
+    }
+
+    fn component_flags_mask(flags_mask: u32) -> Vec<u8> {
+        flags_mask.to_be_bytes().to_vec()
+    }
+
+    fn name(name: HandlerName) -> Vec<u8> {
         let mut data = Vec::new();
-
-        // Version and flags (4 bytes)
-        let version_flags = u32::from(self.version) << 24
-            | u32::from(self.flags[0]) << 16
-            | u32::from(self.flags[1]) << 8
-            | u32::from(self.flags[2]);
-        data.extend_from_slice(&version_flags.to_be_bytes());
-
-        // Component type (4 bytes)
-        data.extend_from_slice(&self.component_type);
-
-        // Handler type (4 bytes)
-        data.extend_from_slice(&self.handler_type.to_bytes());
-
-        // Component manufacturer (4 bytes)
-        data.extend_from_slice(&self.component_manufacturer);
-
-        // Component flags (4 bytes)
-        data.extend_from_slice(&self.component_flags.to_be_bytes());
-
-        // Component flags mask (4 bytes)
-        data.extend_from_slice(&self.component_flags_mask.to_be_bytes());
-
-        // Handler name - format depends on original encoding
-        if self.name_is_pascal_string {
-            // Pascal string format: length byte followed by string data
-            let name_bytes = self.name.as_bytes();
-            data.push(name_bytes.len() as u8);
-            data.extend_from_slice(name_bytes);
-        } else {
-            // Null-terminated string format
-            data.extend_from_slice(self.name.as_bytes());
-            data.push(0); // Null terminator
-
-            // Add extra null byte if flag is set
-            if self.name_extra_null_byte {
-                data.push(0);
+        match name {
+            HandlerName::Pascal(name) => {
+                let name_bytes = name.as_bytes();
+                let len = u8::try_from(name_bytes.len())
+                    .expect("HandlerName::Pascal length must not exceed u8::MAX");
+                data.push(len);
+                data.extend_from_slice(name_bytes);
+            }
+            HandlerName::CString(name) => {
+                data.extend_from_slice(name.as_bytes());
+                data.push(0); // Null terminator
+            }
+            HandlerName::CString2(name) => {
+                data.extend_from_slice(name.as_bytes());
+                data.push(0); // 1st null terminator
+                data.push(0); // 2nd null terminator
+            }
+            HandlerName::Raw(name) => {
+                data.extend_from_slice(name.as_bytes());
             }
         }
-
         data
+    }
+}
+
+mod parser {
+    use winnow::{
+        binary::{be_u32, length_take, u8},
+        combinator::{alt, opt, repeat_till, seq, trace},
+        error::StrContext,
+        token::{literal, rest},
+        ModalResult, Parser,
+    };
+
+    use super::{HandlerName, HandlerReferenceAtom, HandlerType};
+    use crate::atom::util::parser::{byte_array, flags3, stream, version, Stream};
+
+    pub fn parse_hdlr_data(input: &[u8]) -> Result<HandlerReferenceAtom, crate::ParseError> {
+        parse_hdlr_data_inner
+            .parse(stream(input))
+            .map_err(crate::ParseError::from_winnow)
+    }
+
+    fn parse_hdlr_data_inner(input: &mut Stream<'_>) -> ModalResult<HandlerReferenceAtom> {
+        trace(
+            "hdlr",
+            seq!(HandlerReferenceAtom {
+                version: version,
+                flags: flags3,
+                component_type: component_type,
+                handler_type: handler_type,
+                component_manufacturer: component_manufacturer,
+                component_flags: component_flags,
+                component_flags_mask: component_flags_mask,
+                name: opt(name),
+            })
+            .context(StrContext::Label("hdlr")),
+        )
+        .parse_next(input)
+    }
+
+    fn component_type(input: &mut Stream<'_>) -> ModalResult<[u8; 4]> {
+        trace(
+            "component_type",
+            byte_array.context(StrContext::Label("component_type")),
+        )
+        .parse_next(input)
+    }
+
+    fn handler_type(input: &mut Stream<'_>) -> ModalResult<HandlerType> {
+        trace(
+            "handler_type",
+            byte_array
+                .map(|fourcc| HandlerType::from_bytes(&fourcc))
+                .context(StrContext::Label("handler_type")),
+        )
+        .parse_next(input)
+    }
+
+    fn component_manufacturer(input: &mut Stream<'_>) -> ModalResult<[u8; 4]> {
+        trace(
+            "component_manufacturer",
+            byte_array.context(StrContext::Label("component_manufacturer")),
+        )
+        .parse_next(input)
+    }
+
+    fn component_flags(input: &mut Stream<'_>) -> ModalResult<u32> {
+        trace(
+            "component_flags",
+            be_u32.context(StrContext::Label("component_flags")),
+        )
+        .parse_next(input)
+    }
+
+    fn component_flags_mask(input: &mut Stream<'_>) -> ModalResult<u32> {
+        trace(
+            "component_flags_mask",
+            be_u32.context(StrContext::Label("component_flags_mask")),
+        )
+        .parse_next(input)
+    }
+
+    fn name(input: &mut Stream<'_>) -> ModalResult<HandlerName> {
+        trace(
+            "name",
+            alt((name_cstr, name_pascal, name_raw)).context(StrContext::Label("name")),
+        )
+        .parse_next(input)
+    }
+
+    fn name_cstr(input: &mut Stream<'_>) -> ModalResult<HandlerName> {
+        trace(
+            "name_cstr",
+            repeat_till(1.., u8, null_term).map(|(data, null2): (Vec<u8>, Option<()>)| {
+                let str = String::from_utf8_lossy(&data).to_string();
+                match null2 {
+                    Some(_) => HandlerName::CString2(str),
+                    None => HandlerName::CString(str),
+                }
+            }),
+        )
+        .parse_next(input)
+    }
+
+    fn null_term(input: &mut Stream<'_>) -> ModalResult<Option<()>> {
+        trace(
+            "null_term",
+            (literal(0x00), opt(literal(0x00))).map(|(_, null2)| null2.map(|_| ())),
+        )
+        .parse_next(input)
+    }
+
+    fn name_pascal(input: &mut Stream<'_>) -> ModalResult<HandlerName> {
+        trace(
+            "name_pascal",
+            length_take(u8)
+                .map(|data| HandlerName::Pascal(String::from_utf8_lossy(data).to_string())),
+        )
+        .parse_next(input)
+    }
+
+    fn name_raw(input: &mut Stream<'_>) -> ModalResult<HandlerName> {
+        trace(
+            "name_raw",
+            rest.map(|data| HandlerName::Raw(String::from_utf8_lossy(data).to_string())),
+        )
+        .parse_next(input)
+    }
+
+    #[cfg(test)]
+    mod tests {
+
+        use super::*;
+
+        #[test]
+        fn test_handler_type_from_bytes() {
+            assert_eq!(HandlerType::from_bytes(b"vide"), HandlerType::Video);
+            assert_eq!(HandlerType::from_bytes(b"soun"), HandlerType::Audio);
+            assert_eq!(HandlerType::from_bytes(b"text"), HandlerType::Text);
+            assert_eq!(HandlerType::from_bytes(b"meta"), HandlerType::Meta);
+            assert_eq!(
+                HandlerType::from_bytes(b"abcd"),
+                HandlerType::Unknown(*b"abcd")
+            );
+        }
+
+        #[test]
+        fn test_handler_type_methods() {
+            let video_handler = HandlerType::Video;
+            assert!(video_handler.is_media_handler());
+            assert_eq!(video_handler.as_str(), "Video");
+            assert_eq!(video_handler.to_bytes(), *b"vide");
+
+            let unknown_handler = HandlerType::Unknown(*b"test");
+            assert!(!unknown_handler.is_media_handler());
+            assert_eq!(unknown_handler.as_str(), "Unknown");
+            assert_eq!(unknown_handler.to_bytes(), *b"test");
+        }
+
+        #[test]
+        fn test_parse_handler_name_pascal() {
+            // Pascal string: length byte followed by string
+            let pascal_name = b"\x0CHello World!";
+            let result = name.parse(stream(pascal_name)).unwrap();
+            assert_eq!(result, HandlerName::Pascal("Hello World!".to_owned()));
+        }
+
+        #[test]
+        fn test_parse_handler_name_null_terminated() {
+            // C-style null-terminated string
+            let c_name = b"Hello World!\0";
+            let result = name.parse(stream(c_name)).unwrap();
+            assert_eq!(result, HandlerName::CString("Hello World!".to_owned()));
+        }
+
+        #[test]
+        fn test_parse_handler_name_double_null_terminated() {
+            // C-style null-terminated string
+            let c_name = b"Hello World!\0\0";
+            let result = name.parse(stream(c_name)).unwrap();
+            assert_eq!(result, HandlerName::CString2("Hello World!".to_owned()));
+        }
+
+        #[test]
+        fn test_parse_handler_name_raw() {
+            // Raw string without null terminator
+            let raw_name = b"Hello World!";
+            let result = name.parse(stream(raw_name)).unwrap();
+            assert_eq!(result, HandlerName::Raw("Hello World!".to_owned()));
+        }
+
+        #[test]
+        fn test_parse_handler_name_empty() {
+            let empty_name = b"";
+            let result = name.parse(stream(empty_name)).unwrap();
+            assert_eq!(result, HandlerName::Raw(String::new()));
+        }
     }
 }
 
@@ -307,265 +481,6 @@ impl SerializeAtom for HandlerReferenceAtom {
 mod tests {
     use super::*;
     use crate::atom::test_utils::test_atom_roundtrip_sync;
-    use std::io::Cursor;
-
-    #[test]
-    fn test_handler_type_from_bytes() {
-        assert_eq!(HandlerType::from_bytes(b"vide"), HandlerType::Video);
-        assert_eq!(HandlerType::from_bytes(b"soun"), HandlerType::Audio);
-        assert_eq!(HandlerType::from_bytes(b"text"), HandlerType::Text);
-        assert_eq!(HandlerType::from_bytes(b"meta"), HandlerType::Meta);
-        assert_eq!(
-            HandlerType::from_bytes(b"abcd"),
-            HandlerType::Unknown(*b"abcd")
-        );
-    }
-
-    #[test]
-    fn test_handler_type_methods() {
-        let video_handler = HandlerType::Video;
-        assert!(video_handler.is_media_handler());
-        assert_eq!(video_handler.as_str(), "Video");
-        assert_eq!(video_handler.to_bytes(), *b"vide");
-
-        let unknown_handler = HandlerType::Unknown(*b"test");
-        assert!(!unknown_handler.is_media_handler());
-        assert_eq!(unknown_handler.as_str(), "Unknown");
-        assert_eq!(unknown_handler.to_bytes(), *b"test");
-    }
-
-    #[test]
-    fn test_parse_handler_name_pascal() {
-        // Pascal string: length byte followed by string
-        let pascal_name = b"\x0CHello World!";
-        let result = parse_handler_name_with_format(pascal_name).unwrap().0;
-        assert_eq!(result, "Hello World!");
-    }
-
-    #[test]
-    fn test_parse_handler_name_null_terminated() {
-        // C-style null-terminated string
-        let c_name = b"Hello World!\0";
-        let result = parse_handler_name_with_format(c_name).unwrap().0;
-        assert_eq!(result, "Hello World!");
-    }
-
-    #[test]
-    fn test_parse_handler_name_raw() {
-        // Raw string without null terminator
-        let raw_name = b"Hello World!";
-        let result = parse_handler_name_with_format(raw_name).unwrap().0;
-        assert_eq!(result, "Hello World!");
-    }
-
-    #[test]
-    fn test_parse_handler_name_empty() {
-        let empty_name = b"";
-        let result = parse_handler_name_with_format(empty_name).unwrap().0;
-        assert_eq!(result, "");
-    }
-
-    #[test]
-    fn test_hdlr_mdir_round_trip() {
-        // Create the exact hdlr atom that Apple expects for metadata
-        let original_hdlr = HandlerReferenceAtom {
-            version: 0,
-            flags: [0, 0, 0],
-            component_type: [0, 0, 0, 0],
-            handler_type: HandlerType::Mdir, // This should be 'mdir' for metadata
-            component_manufacturer: [97, 112, 112, 108], // 'appl'
-            component_flags: 0,
-            component_flags_mask: 0,
-            name: "".to_string(), // Empty name is common
-            name_extra_null_byte: false,
-            name_is_pascal_string: false,
-        };
-
-        // Convert to bytes
-        let bytes: Vec<u8> = original_hdlr.clone().into_body_bytes();
-
-        // Parse back from bytes
-        let cursor = Cursor::new(&bytes);
-        let parsed_hdlr = parse_hdlr_data(cursor).unwrap();
-
-        // Verify all fields match
-        assert_eq!(parsed_hdlr.version, original_hdlr.version);
-        assert_eq!(parsed_hdlr.flags, original_hdlr.flags);
-        assert_eq!(parsed_hdlr.component_type, original_hdlr.component_type);
-        assert_eq!(parsed_hdlr.handler_type, original_hdlr.handler_type);
-        assert_eq!(
-            parsed_hdlr.component_manufacturer,
-            original_hdlr.component_manufacturer
-        );
-        assert_eq!(parsed_hdlr.component_flags, original_hdlr.component_flags);
-        assert_eq!(
-            parsed_hdlr.component_flags_mask,
-            original_hdlr.component_flags_mask
-        );
-        assert_eq!(parsed_hdlr.name, original_hdlr.name);
-    }
-
-    #[test]
-    fn test_hdlr_raw_bytes_mdir() {
-        // Test with raw bytes that represent a valid Apple metadata hdlr atom
-        let raw_hdlr_data = vec![
-            // version (1 byte) + flags (3 bytes)
-            0x00, 0x00, 0x00, 0x00, // component_type (4 bytes) - usually zeros
-            0x00, 0x00, 0x00, 0x00, // handler_type (4 bytes) - 'mdir' in ASCII
-            0x6D, 0x64, 0x69, 0x72, // 'm', 'd', 'i', 'r'
-            // component_manufacturer (4 bytes) - 'appl' in ASCII
-            0x61, 0x70, 0x70, 0x6C, // 'a', 'p', 'p', 'l'
-            // component_flags (4 bytes) - usually zero
-            0x00, 0x00, 0x00, 0x00, // component_flags_mask (4 bytes) - usually zero
-            0x00, 0x00, 0x00, 0x00, // name - empty (null terminated)
-            0x00,
-        ];
-
-        let cursor = Cursor::new(&raw_hdlr_data);
-        let parsed_hdlr = parse_hdlr_data(cursor).unwrap();
-
-        // Verify the handler type is correctly parsed as mdir
-        assert_eq!(parsed_hdlr.handler_type, HandlerType::Mdir);
-        assert_eq!(parsed_hdlr.version, 0);
-        assert_eq!(parsed_hdlr.flags, [0, 0, 0]);
-        assert_eq!(parsed_hdlr.component_manufacturer, [0x61, 0x70, 0x70, 0x6C]); // 'appl'
-        assert_eq!(parsed_hdlr.name, "");
-    }
-
-    #[test]
-    fn test_hdlr_write_produces_correct_mdir_bytes() {
-        let hdlr = HandlerReferenceAtom {
-            version: 0,
-            flags: [0, 0, 0],
-            component_type: [0, 0, 0, 0],
-            handler_type: HandlerType::Mdir,
-            component_manufacturer: [97, 112, 112, 108], // 'appl'
-            component_flags: 0,
-            component_flags_mask: 0,
-            name: "".to_string(),
-            name_extra_null_byte: false,
-            name_is_pascal_string: false,
-        };
-
-        let bytes: Vec<u8> = hdlr.into_body_bytes();
-
-        // Check that the handler type bytes are exactly 'mdir'
-        let handler_type_offset = 8; // version(1) + flags(3) + component_type(4) = 8
-        assert_eq!(
-            &bytes[handler_type_offset..handler_type_offset + 4],
-            &[109, 100, 105, 114] // 'mdir'
-        );
-
-        // Check that component manufacturer is 'appl'
-        let manufacturer_offset = 12; // handler_type is at offset 8, so manufacturer at 12
-        assert_eq!(
-            &bytes[manufacturer_offset..manufacturer_offset + 4],
-            &[97, 112, 112, 108] // 'appl'
-        );
-    }
-
-    #[test]
-    fn test_hdlr_with_name() {
-        let hdlr = HandlerReferenceAtom {
-            version: 0,
-            flags: [0, 0, 0],
-            component_type: [0, 0, 0, 0],
-            handler_type: HandlerType::Mdir,
-            component_manufacturer: [97, 112, 112, 108], // 'appl'
-            component_flags: 0,
-            component_flags_mask: 0,
-            name: "Apple Metadata Handler".to_string(),
-            name_extra_null_byte: false,
-            name_is_pascal_string: false,
-        };
-
-        // Round trip test
-        let bytes: Vec<u8> = hdlr.clone().into_body_bytes();
-        let cursor = Cursor::new(&bytes);
-        let parsed_hdlr = parse_hdlr_data(cursor).unwrap();
-
-        assert_eq!(parsed_hdlr.name, hdlr.name);
-        assert_eq!(parsed_hdlr.handler_type, HandlerType::Mdir);
-    }
-
-    #[test]
-    fn test_hdlr_unknown_handler_type() {
-        // Test that unknown handler types are preserved correctly
-        let raw_data = vec![
-            0x00, 0x00, 0x00, 0x00, // version + flags
-            0x00, 0x00, 0x00, 0x00, // component_type
-            0x78, 0x79, 0x7A, 0x77, // 'xyzw' - unknown handler type
-            0x61, 0x70, 0x70, 0x6C, // 'appl'
-            0x00, 0x00, 0x00, 0x00, // component_flags
-            0x00, 0x00, 0x00, 0x00, // component_flags_mask
-            0x00, // empty name
-        ];
-
-        let cursor = Cursor::new(&raw_data);
-        let parsed_hdlr = parse_hdlr_data(cursor).unwrap();
-
-        // Should be parsed as Unknown with the correct bytes
-        match parsed_hdlr.handler_type {
-            HandlerType::Unknown(bytes) => {
-                assert_eq!(bytes, [0x78, 0x79, 0x7A, 0x77]); // 'xyzw'
-            }
-            _ => panic!("Expected Unknown handler type"),
-        }
-
-        // Round trip should preserve the unknown type
-        let output_bytes: Vec<u8> = parsed_hdlr.into_body_bytes();
-        let cursor2 = Cursor::new(&output_bytes);
-        let reparsed_hdlr = parse_hdlr_data(cursor2).unwrap();
-
-        match reparsed_hdlr.handler_type {
-            HandlerType::Unknown(bytes) => {
-                assert_eq!(bytes, [0x78, 0x79, 0x7A, 0x77]);
-            }
-            _ => panic!("Expected Unknown handler type after round trip"),
-        }
-    }
-
-    #[test]
-    fn test_your_actual_hdlr_data() {
-        // This tests the exact data you showed in your debug output
-        let hdlr = HandlerReferenceAtom {
-            version: 0,
-            flags: [0, 0, 0],
-            component_type: [0, 0, 0, 0],
-            handler_type: HandlerType::Unknown([109, 100, 105, 114]), // Your actual data
-            component_manufacturer: [97, 112, 112, 108],              // 'appl'
-            component_flags: 0,
-            component_flags_mask: 0,
-            name: "".to_string(),
-            name_extra_null_byte: false,
-            name_is_pascal_string: false,
-        };
-
-        // Convert to bytes and back
-        let bytes: Vec<u8> = hdlr.into_body_bytes();
-        let cursor = Cursor::new(&bytes);
-        let parsed_hdlr = parse_hdlr_data(cursor).unwrap();
-
-        // The key test: those Unknown bytes [109, 100, 105, 114] should be 'mdir'
-        // Your parser should recognize this as HandlerType::Mdir, not Unknown
-        println!(
-            "Handler type after round trip: {:?}",
-            parsed_hdlr.handler_type
-        );
-
-        // Check the raw bytes in the output
-        let handler_type_offset = 8;
-        println!(
-            "Raw handler type bytes: {:?}",
-            &bytes[handler_type_offset..handler_type_offset + 4]
-        );
-
-        // These should be [109, 100, 105, 114] which is 'mdir'
-        assert_eq!(
-            &bytes[handler_type_offset..handler_type_offset + 4],
-            &[109, 100, 105, 114]
-        );
-    }
 
     /// Test round-trip for all available hdlr test data files
     #[test]
