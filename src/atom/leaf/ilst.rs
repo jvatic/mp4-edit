@@ -1,14 +1,14 @@
-use anyhow::bail;
 use bon::bon;
 use core::fmt;
 use derive_more::Deref;
 use futures_io::AsyncRead;
-use std::io::Read;
 
-use crate::atom::util::DebugEllipsis;
 use crate::ParseError;
 use crate::{
-    atom::{util::async_to_sync_read, FourCC},
+    atom::{
+        util::{read_to_end, DebugEllipsis},
+        FourCC,
+    },
     parser::ParseAtom,
     writer::SerializeAtom,
 };
@@ -120,7 +120,8 @@ impl ParseAtom for ItemListAtom {
         if atom_type != ILST {
             return Err(ParseError::new_unexpected_atom(atom_type, ILST));
         }
-        parse_ilst_data(async_to_sync_read(reader).await?).map_err(ParseError::new_atom_parse)
+        let data = read_to_end(reader).await?;
+        parser::parse_ilst_data(&data)
     }
 }
 
@@ -130,201 +131,183 @@ impl SerializeAtom for ItemListAtom {
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
-        let mut output = Vec::new();
+        serializer::serialize_ilst_atom(self)
+    }
+}
 
-        for item in self.items {
-            // Calculate item data
+mod serializer {
+    use super::{
+        DataAtom, ItemListAtom, ListItemData, MetadataItem, DATA_TYPE_JPEG, DATA_TYPE_TEXT,
+    };
+
+    pub fn serialize_ilst_atom(atom: ItemListAtom) -> Vec<u8> {
+        atom.items.into_iter().flat_map(serialize_item).collect()
+    }
+
+    fn serialize_item(item: MetadataItem) -> Vec<u8> {
+        prepend_size(move || {
             let mut item_data = Vec::new();
 
-            if let Some(mean_data) = &item.mean {
-                let mean_size =
-                    u32::try_from(8 + mean_data.len()).expect("mean size should fit in u32");
-                item_data.extend_from_slice(&mean_size.to_be_bytes());
-                item_data.extend_from_slice(b"mean");
-                item_data.extend_from_slice(mean_data);
+            item_data.extend(item.item_type.into_bytes());
+
+            if let Some(mean) = item.mean {
+                item_data.extend(prepend_size(move || {
+                    let mut mean_data = Vec::new();
+                    mean_data.extend(b"mean");
+                    mean_data.extend(mean);
+                    mean_data
+                }));
             }
 
-            if let Some(name_data) = &item.name {
-                let name_size =
-                    u32::try_from(8 + name_data.len()).expect("name size should fit in u32");
-                item_data.extend_from_slice(&name_size.to_be_bytes());
-                item_data.extend_from_slice(b"name");
-                item_data.extend_from_slice(name_data);
+            if let Some(name) = item.name {
+                item_data.extend(prepend_size(move || {
+                    let mut name_data = Vec::new();
+                    name_data.extend(b"name");
+                    name_data.extend(name);
+                    name_data
+                }));
             }
 
             for data_atom in item.data_atoms {
-                let data_type = match &data_atom.data {
-                    ListItemData::Text(_) => DATA_TYPE_TEXT,
-                    ListItemData::Jpeg(_) => DATA_TYPE_JPEG,
-                    _ => data_atom.data_type,
-                };
-                let data: Vec<u8> = data_atom.data.to_bytes();
-                let data_size =
-                    u32::try_from(16 + data.len()).expect("data size should fit in u32"); // header + type flags + reserved + data
-
-                // Write data atom
-                item_data.extend_from_slice(&data_size.to_be_bytes());
-                item_data.extend_from_slice(b"data");
-                item_data.extend_from_slice(&data_type.to_be_bytes());
-                item_data.extend_from_slice(&data_atom.reserved.to_be_bytes());
-                item_data.extend_from_slice(&data);
+                item_data.extend(prepend_size(move || {
+                    let mut atom_data = Vec::new();
+                    atom_data.extend(b"data");
+                    atom_data.extend(serialize_data_type(&data_atom));
+                    atom_data.extend(data_atom.reserved.to_be_bytes());
+                    atom_data.extend(data_atom.data.to_bytes());
+                    atom_data
+                }));
             }
 
-            let item_size =
-                u32::try_from(8 + item_data.len()).expect("item size should fit in u32"); // size + type + data
-
-            // Write item
-            output.extend_from_slice(&item_size.to_be_bytes());
-            output.extend_from_slice(&item.item_type.into_bytes());
-            output.extend_from_slice(&item_data);
-        }
-
-        output
+            item_data
+        })
     }
-}
 
-fn parse_ilst_data<R: std::io::Read>(mut reader: R) -> anyhow::Result<ItemListAtom> {
-    let mut items = Vec::new();
-
-    loop {
-        // Try to read size
-        let Ok(size) = read_u32(&mut reader) else {
-            break;
-        };
-
-        if size == 0 {
-            break;
+    fn serialize_data_type(data_atom: &DataAtom) -> Vec<u8> {
+        match &data_atom.data {
+            ListItemData::Text(_) => DATA_TYPE_TEXT,
+            ListItemData::Jpeg(_) => DATA_TYPE_JPEG,
+            _ => data_atom.data_type,
         }
+        .to_be_bytes()
+        .to_vec()
+    }
 
-        let actual_size = if size == 1 {
-            read_u64(&mut reader)?
+    fn prepend_size<F>(f: F) -> Vec<u8>
+    where
+        F: FnOnce() -> Vec<u8>,
+    {
+        let inner = f();
+        let mut size = serialize_size(inner.len());
+        size.extend(inner);
+        size
+    }
+
+    fn serialize_size(size: usize) -> Vec<u8> {
+        const U32_BYTE_SIZE: usize = 4;
+        const U64_BYTE_SIZE: usize = 8;
+        if size + U32_BYTE_SIZE <= u32::MAX as usize {
+            ((size + U32_BYTE_SIZE) as u32).to_be_bytes().to_vec()
         } else {
-            u64::from(size)
-        };
-
-        let item_type = read_fourcc(&mut reader)?;
-
-        // Calculate remaining bytes for this item
-        let header_size = if size == 1 { 16 } else { 8 }; // size + type + optional extended size
-        let remaining_size = actual_size - header_size;
-
-        // Read the item data
-        let item_data = read_bytes(
-            &mut reader,
-            usize::try_from(remaining_size).expect("u64 should fit in usize"),
-        )?;
-        let mut item_reader = std::io::Cursor::new(&item_data);
-
-        let mut data_atoms = Vec::new();
-        let mut mean_data = None;
-        let mut name_data = None;
-
-        while item_reader.position() < item_data.len() as u64 {
-            let Ok(data_size) = read_u32(&mut item_reader) else {
-                break;
-            };
-
-            if data_size == 0 {
-                break;
-            }
-
-            let data_actual_size = if data_size == 1 {
-                read_u64(&mut item_reader)?
-            } else {
-                u64::from(data_size)
-            };
-
-            let atom_type = read_fourcc(&mut item_reader)?;
-            let remaining_atom_size = data_actual_size - if data_size == 1 { 16 } else { 8 };
-
-            match atom_type.as_slice() {
-                b"data" => {
-                    let data_atom = parse_data_atom(&mut item_reader, remaining_atom_size)?;
-                    data_atoms.push(data_atom);
-                }
-                b"mean" => {
-                    // Parse mean atom (for ---- items)
-                    if item_type == b"----" {
-                        let mean_bytes = read_bytes(
-                            &mut item_reader,
-                            usize::try_from(remaining_atom_size).expect("u64 should fit in usize"),
-                        )?;
-                        mean_data = Some(mean_bytes);
-                    } else {
-                        bail!("unexpected 'mean' atom in non-'----' item");
-                    }
-                }
-                b"name" => {
-                    // Parse name atom (for ---- items)
-                    if item_type == b"----" {
-                        let name_bytes = read_bytes(
-                            &mut item_reader,
-                            usize::try_from(remaining_atom_size).expect("u64 should fit in usize"),
-                        )?;
-                        name_data = Some(name_bytes);
-                    } else {
-                        bail!("unexpected 'name' atom in non-'----' item");
-                    }
-                }
-                _ => {
-                    bail!("unexpected atom type '{atom_type}' in {item_type} item");
-                }
-            }
+            let mut output = vec![1];
+            output.extend(((size + U64_BYTE_SIZE) as u64).to_be_bytes());
+            output
         }
+    }
+}
 
-        items.push(MetadataItem {
-            item_type,
-            mean: mean_data,
-            name: name_data,
-            data_atoms,
-        });
+mod parser {
+    use winnow::{
+        binary::{be_u32, be_u64, length_and_then},
+        combinator::{opt, preceded, repeat, seq, trace},
+        error::StrContext,
+        token::{literal, rest},
+        ModalResult, Parser,
+    };
+
+    use super::{DataAtom, ItemListAtom, ListItemData, MetadataItem};
+    use crate::atom::util::parser::{combinators::with_len, fourcc, stream, Stream};
+
+    pub fn parse_ilst_data(input: &[u8]) -> Result<ItemListAtom, crate::ParseError> {
+        parse_ilst_data_inner
+            .parse(stream(input))
+            .map_err(crate::ParseError::from_winnow)
     }
 
-    Ok(ItemListAtom { items })
-}
-
-fn parse_data_atom<R: Read>(reader: &mut R, size: u64) -> anyhow::Result<DataAtom> {
-    if size < 8 {
-        bail!("Data atom too small");
+    fn parse_ilst_data_inner(input: &mut Stream<'_>) -> ModalResult<ItemListAtom> {
+        trace(
+            "ilst",
+            seq!(ItemListAtom {
+                items: repeat(0.., item),
+            })
+            .context(StrContext::Label("ilst")),
+        )
+        .parse_next(input)
     }
 
-    let data_type = read_u32(reader)?;
-    let reserved = read_u32(reader)?;
-    let data_size = size - 8; // size - data_type - reserved
-    let data = read_bytes(
-        reader,
-        usize::try_from(data_size).expect("u64 should fit in usize"),
-    )?;
+    fn item(input: &mut Stream<'_>) -> ModalResult<MetadataItem> {
+        trace(
+            "item",
+            length_and_then(size, item_inner).context(StrContext::Label("item")),
+        )
+        .parse_next(input)
+    }
 
-    Ok(DataAtom {
-        data_type,
-        reserved,
-        data: ListItemData::new(data_type, data),
-    })
-}
+    fn item_inner(input: &mut Stream<'_>) -> ModalResult<MetadataItem> {
+        seq!(MetadataItem {
+            item_type: fourcc,
+            mean: opt(length_and_then(
+                size,
+                preceded(literal(b"mean"), rest_vec_u8)
+            ))
+            .context(StrContext::Label("mean")),
+            name: opt(length_and_then(
+                size,
+                preceded(literal(b"name"), rest_vec_u8)
+            ))
+            .context(StrContext::Label("name")),
+            data_atoms: repeat(
+                0..,
+                length_and_then(size, preceded(literal(b"data"), data_atom))
+            ),
+        })
+        .parse_next(input)
+    }
 
-fn read_u32<R: Read>(reader: &mut R) -> anyhow::Result<u32> {
-    let mut buf = [0u8; 4];
-    reader.read_exact(&mut buf)?;
-    Ok(u32::from_be_bytes(buf))
-}
+    fn data_atom(input: &mut Stream<'_>) -> ModalResult<DataAtom> {
+        trace(
+            "data_atom",
+            seq!(DataAtom {
+                data_type: be_u32,
+                reserved: be_u32,
+                data: rest.map(|data: &[u8]| ListItemData::new(data_type, data.to_vec())),
+            })
+            .context(StrContext::Label("data_atom")),
+        )
+        .parse_next(input)
+    }
 
-fn read_u64<R: Read>(reader: &mut R) -> anyhow::Result<u64> {
-    let mut buf = [0u8; 8];
-    reader.read_exact(&mut buf)?;
-    Ok(u64::from_be_bytes(buf))
-}
+    fn rest_vec_u8(input: &mut Stream<'_>) -> ModalResult<Vec<u8>> {
+        trace("rest_vec_u8", rest.map(|data: &[u8]| data.to_vec())).parse_next(input)
+    }
 
-fn read_fourcc<R: Read>(reader: &mut R) -> anyhow::Result<FourCC> {
-    let mut buf = [0u8; 4];
-    reader.read_exact(&mut buf)?;
-    Ok(FourCC::from(buf))
-}
+    fn size(input: &mut Stream<'_>) -> ModalResult<u64> {
+        trace(
+            "size",
+            with_len(size_inner).map(|(size, header_size)| size - header_size as u64),
+        )
+        .parse_next(input)
+    }
 
-fn read_bytes<R: Read>(reader: &mut R, count: usize) -> anyhow::Result<Vec<u8>> {
-    let mut buf = vec![0u8; count];
-    reader.read_exact(&mut buf)?;
-    Ok(buf)
+    fn size_inner(input: &mut Stream<'_>) -> ModalResult<u64> {
+        trace("size_inner", move |input: &mut Stream<'_>| {
+            Ok(match be_u32.parse_next(input)? {
+                1 => be_u64.parse_next(input)?,
+                size => size as u64,
+            })
+        })
+        .parse_next(input)
+    }
 }
 
 #[cfg(test)]
