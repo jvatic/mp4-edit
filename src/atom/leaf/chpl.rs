@@ -174,7 +174,7 @@ mod serializer {
 
 mod parser {
     use winnow::{
-        binary::{be_u64, u8},
+        binary::be_u64,
         combinator::{repeat, seq, trace},
         error::StrContext,
         token::{literal, take, take_until},
