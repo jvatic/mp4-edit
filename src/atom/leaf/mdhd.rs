@@ -75,6 +75,7 @@ macro_rules! define_language_code_enum {
 define_language_code_enum!(
     /// Language code (ISO 639-2/T language code)
     #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+    #[non_exhaustive]
     LanguageCode {
         English => b"eng",
         Spanish => b"spa",
