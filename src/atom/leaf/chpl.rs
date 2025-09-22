@@ -177,7 +177,7 @@ mod parser {
         binary::{be_u64, u8},
         combinator::{repeat, seq, trace},
         error::StrContext,
-        token::{literal, take_until},
+        token::{literal, take, take_until},
         ModalResult, Parser,
     };
 
@@ -210,7 +210,7 @@ mod parser {
     fn reserved(input: &mut Stream<'_>) -> ModalResult<()> {
         trace(
             "reserved",
-            repeat(8, u8).context(StrContext::Label("reserved")),
+            take(8usize).void().context(StrContext::Label("reserved")),
         )
         .parse_next(input)
     }
