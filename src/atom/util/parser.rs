@@ -3,7 +3,7 @@ use winnow::{
     combinator::trace,
     error::{StrContext, StrContextValue},
     token::take,
-    Bytes, LocatingSlice, Parser,
+    Bytes, LocatingSlice, ModalResult, Parser,
 };
 
 use crate::FourCC;
@@ -40,6 +40,16 @@ pub fn usize_be_u32(input: &mut Stream<'_>) -> winnow::ModalResult<usize> {
         "usize_be_u32",
         be_u32
             .map(|s| s as usize)
+            .context(StrContext::Expected(StrContextValue::Description("be u32"))),
+    )
+    .parse_next(input)
+}
+
+pub fn be_u32_as_u64(input: &mut Stream<'_>) -> ModalResult<u64> {
+    trace(
+        "be_u32_as_u64",
+        be_u32
+            .map(|s| s as u64)
             .context(StrContext::Expected(StrContextValue::Description("be u32"))),
     )
     .parse_next(input)
