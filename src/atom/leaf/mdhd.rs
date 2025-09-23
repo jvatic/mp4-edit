@@ -161,12 +161,15 @@ mod serializer {
     pub fn serialize_mdhd_atom(mdhd: MediaHeaderAtom) -> Vec<u8> {
         let mut data = Vec::new();
 
-        // Determine version based on whether values fit in 32-bit
-        let needs_64_bit = mdhd.creation_time > u64::from(u32::MAX)
+        let version: u8 = if mdhd.version == 1
+            || mdhd.creation_time > u64::from(u32::MAX)
             || mdhd.modification_time > u64::from(u32::MAX)
-            || mdhd.duration > u64::from(u32::MAX);
-
-        let version: u8 = if needs_64_bit { 1 } else { 0 };
+            || mdhd.duration > u64::from(u32::MAX)
+        {
+            1
+        } else {
+            0
+        };
 
         let be_u32_or_u64 = |v: u64| match version {
             0 => u32::try_from(v).unwrap().to_be_bytes().to_vec(),
