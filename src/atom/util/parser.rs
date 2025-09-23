@@ -1,7 +1,9 @@
+use std::fmt::Debug;
+
 use winnow::{
-    binary::{be_u32, u8},
+    binary::{be_u16, be_u32, u8},
     combinator::trace,
-    error::{StrContext, StrContextValue},
+    error::{ParserError, StrContext, StrContextValue},
     token::take,
     Bytes, LocatingSlice, ModalResult, Parser,
 };
@@ -32,6 +34,15 @@ pub fn fourcc(input: &mut Stream<'_>) -> winnow::ModalResult<FourCC> {
 pub fn version(input: &mut Stream<'_>) -> winnow::ModalResult<u8> {
     trace("version", u8)
         .context(StrContext::Label("version"))
+        .parse_next(input)
+}
+
+pub fn version_0_or_1(input: &mut Stream<'_>) -> ModalResult<u8> {
+    version
+        .verify(|version| *version <= 1)
+        .context(StrContext::Expected(StrContextValue::Description(
+            "expected version 0 or 1",
+        )))
         .parse_next(input)
 }
 
@@ -71,6 +82,45 @@ pub fn flags3(input: &mut Stream<'_>) -> winnow::ModalResult<[u8; 3]> {
 
 pub fn byte_array<const N: usize>(input: &mut Stream<'_>) -> winnow::ModalResult<[u8; N]> {
     take(N).try_map(|b: &[u8]| b.try_into()).parse_next(input)
+}
+
+pub fn fixed_array<'i, const N: usize, Input, Output, Error, ParseNext>(
+    mut parser: ParseNext,
+) -> impl Parser<Input, [Output; N], Error> + 'i
+where
+    Input: winnow::stream::Stream + 'i,
+    ParseNext: Parser<Input, Output, Error> + 'i,
+    Error: ParserError<Input> + 'i,
+    Output: Debug + 'i,
+{
+    trace("fill", move |input: &mut Input| {
+        let mut list: Vec<Output> = Vec::with_capacity(N);
+        for _ in 0..N {
+            list.push(parser.parse_next(input)?);
+        }
+        let out: [Output; N] = list.try_into().unwrap();
+        Ok(out)
+    })
+}
+
+pub const FIXED_POINT_16X16_SCALE: f32 = 65536.0;
+
+pub fn fixed_point_16x16(input: &mut Stream<'_>) -> ModalResult<f32> {
+    trace(
+        "fixed_point_16_x_16",
+        be_u32.map(|v| (v as f32) / FIXED_POINT_16X16_SCALE),
+    )
+    .parse_next(input)
+}
+
+pub const FIXED_POINT_8X8_SCALE: f32 = 256.0;
+
+pub fn fixed_point_8x8(input: &mut Stream<'_>) -> ModalResult<f32> {
+    trace(
+        "fixed_point_8x8",
+        be_u16.map(|v| (v as f32) / FIXED_POINT_8X8_SCALE),
+    )
+    .parse_next(input)
 }
 
 pub mod combinators {
