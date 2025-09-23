@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use winnow::{
     binary::{be_u16, be_u32, u8},
-    combinator::{empty, trace},
+    combinator::trace,
     error::{ParserError, StrContext, StrContextValue},
     token::take,
     Bytes, LocatingSlice, ModalResult, Parser,

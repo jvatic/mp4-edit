@@ -183,8 +183,6 @@ pub enum AtomData {
     ChunkOffset(ChunkOffsetAtom),
     TimeToSample(TimeToSampleAtom),
     SampleToChunk(SampleToChunkAtom),
-    SampleToGroup(SampleToGroupAtom),
-    SampleGroupDescription(SampleGroupDescriptionAtom),
     ChapterList(ChapterListAtom),
     Free(FreeAtom),
     RawData(RawData),
@@ -286,21 +284,9 @@ impl From<SampleToChunkAtom> for AtomData {
     }
 }
 
-impl From<SampleToGroupAtom> for AtomData {
-    fn from(atom: SampleToGroupAtom) -> Self {
-        AtomData::SampleToGroup(atom)
-    }
-}
-
 impl From<ChapterListAtom> for AtomData {
     fn from(atom: ChapterListAtom) -> Self {
         AtomData::ChapterList(atom)
-    }
-}
-
-impl From<SampleGroupDescriptionAtom> for AtomData {
-    fn from(atom: SampleGroupDescriptionAtom) -> Self {
-        AtomData::SampleGroupDescription(atom)
     }
 }
 
@@ -335,8 +321,6 @@ impl ParseAtom for AtomData {
             ilst::{ItemListAtom, ILST},
             mdhd::{MediaHeaderAtom, MDHD},
             mvhd::{MovieHeaderAtom, MVHD},
-            sbgp::{SampleToGroupAtom, SBGP},
-            sgpd::{SampleGroupDescriptionAtom, SGPD},
             smhd::{SoundMediaHeaderAtom, SMHD},
             stco_co64::{ChunkOffsetAtom, CO64, STCO},
             stsc::{SampleToChunkAtom, STSC},
@@ -397,12 +381,6 @@ impl ParseAtom for AtomData {
             CHPL => ChapterListAtom::parse(atom_type, reader)
                 .await
                 .map(AtomData::from),
-            SGPD => SampleGroupDescriptionAtom::parse(atom_type, reader)
-                .await
-                .map(AtomData::from),
-            SBGP => SampleToGroupAtom::parse(atom_type, reader)
-                .await
-                .map(AtomData::from),
             FREE | SKIP => FreeAtom::parse(atom_type, reader).await.map(AtomData::from),
             fourcc => {
                 let mut buffer = Vec::new();
@@ -425,8 +403,7 @@ impl SerializeAtom for AtomData {
         use AtomData::{
             ChapterList, ChunkOffset, DataReference, EditList, FileType, Free, GenericMediaHeader,
             HandlerReference, ItemList, MediaHeader, MovieHeader, RawData, SampleDescriptionTable,
-            SampleGroupDescription, SampleSize, SampleToChunk, SampleToGroup, SoundMediaHeader,
-            TimeToSample, TrackHeader, TrackReference,
+            SampleSize, SampleToChunk, SoundMediaHeader, TimeToSample, TrackHeader, TrackReference,
         };
         match self {
             FileType(atom) => atom.atom_type(),
@@ -445,8 +422,6 @@ impl SerializeAtom for AtomData {
             ChunkOffset(atom) => atom.atom_type(),
             TimeToSample(atom) => atom.atom_type(),
             SampleToChunk(atom) => atom.atom_type(),
-            SampleToGroup(atom) => atom.atom_type(),
-            SampleGroupDescription(atom) => atom.atom_type(),
             ChapterList(atom) => atom.atom_type(),
             Free(atom) => atom.atom_type(),
             RawData(atom) => atom.atom_type(),
@@ -457,8 +432,7 @@ impl SerializeAtom for AtomData {
         use AtomData::{
             ChapterList, ChunkOffset, DataReference, EditList, FileType, Free, GenericMediaHeader,
             HandlerReference, ItemList, MediaHeader, MovieHeader, RawData, SampleDescriptionTable,
-            SampleGroupDescription, SampleSize, SampleToChunk, SampleToGroup, SoundMediaHeader,
-            TimeToSample, TrackHeader, TrackReference,
+            SampleSize, SampleToChunk, SoundMediaHeader, TimeToSample, TrackHeader, TrackReference,
         };
         match self {
             FileType(atom) => atom.into_body_bytes(),
@@ -477,8 +451,6 @@ impl SerializeAtom for AtomData {
             ChunkOffset(atom) => atom.into_body_bytes(),
             TimeToSample(atom) => atom.into_body_bytes(),
             SampleToChunk(atom) => atom.into_body_bytes(),
-            SampleToGroup(atom) => atom.into_body_bytes(),
-            SampleGroupDescription(atom) => atom.into_body_bytes(),
             ChapterList(atom) => atom.into_body_bytes(),
             Free(atom) => atom.into_body_bytes(),
             RawData(data) => data.into_body_bytes(),
