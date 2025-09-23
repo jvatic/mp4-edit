@@ -1,9 +1,7 @@
-use anyhow::Context;
 use futures_io::AsyncRead;
-use std::io::{Cursor, Read};
 
 use crate::{
-    atom::{util::async_to_sync_read, FourCC},
+    atom::{util::read_to_end, FourCC},
     parser::ParseAtom,
     writer::SerializeAtom,
     ParseError,
@@ -44,8 +42,8 @@ impl ParseAtom for SampleToGroupAtom {
         if atom_type != SBGP {
             return Err(ParseError::new_unexpected_atom(atom_type, SBGP));
         }
-        let cursor = async_to_sync_read(reader).await?;
-        parse_sbgp_data(cursor.get_ref()).map_err(ParseError::new_atom_parse)
+        let data = read_to_end(reader).await?;
+        parser::parse_sbgp_data(&data)
     }
 }
 
@@ -55,102 +53,111 @@ impl SerializeAtom for SampleToGroupAtom {
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
+        serializer::serialize_sbgp_atom(self)
+    }
+}
+
+mod serializer {
+    use super::SampleToGroupAtom;
+
+    pub fn serialize_sbgp_atom(sbgp: SampleToGroupAtom) -> Vec<u8> {
         let mut data = Vec::new();
 
-        // Version (1 byte)
-        data.push(self.version);
+        data.push(
+            // Ensure version >= 1 if grouping_type_parameter is set
+            if sbgp.version == 0 && sbgp.grouping_type_parameter.is_some() {
+                1
+            } else {
+                sbgp.version
+            },
+        );
+        data.extend(sbgp.flags);
+        data.extend(sbgp.grouping_type.into_bytes());
 
-        // Flags (3 bytes)
-        data.extend_from_slice(&self.flags);
-
-        // Grouping type (4 bytes)
-        data.extend_from_slice(&self.grouping_type.0);
-
-        // Grouping type parameter (4 bytes) - version >= 1 only
-        if let Some(param) = self.grouping_type_parameter {
-            data.extend_from_slice(&param.to_be_bytes());
+        // Grouping type parameter is version >= 1 only
+        if let Some(param) = sbgp.grouping_type_parameter {
+            data.extend(param.to_be_bytes());
         }
 
-        // Entry count (4 bytes, big-endian)
-        data.extend_from_slice(
-            &(u32::try_from(self.entries.len()).expect("entries len should fit in u32"))
+        data.extend(
+            u32::try_from(sbgp.entries.len())
+                .expect("entries len should fit in u32")
                 .to_be_bytes(),
         );
 
-        // Entries
-        for entry in self.entries {
-            // Sample count (4 bytes, big-endian)
-            data.extend_from_slice(&entry.sample_count.to_be_bytes());
-            // Group description index (4 bytes, big-endian)
-            data.extend_from_slice(&entry.group_description_index.to_be_bytes());
+        for entry in sbgp.entries {
+            data.extend(entry.sample_count.to_be_bytes());
+            data.extend(entry.group_description_index.to_be_bytes());
         }
 
         data
     }
 }
 
-fn parse_sbgp_data(data: &[u8]) -> Result<SampleToGroupAtom, anyhow::Error> {
-    let mut cursor = Cursor::new(data);
-    let mut buffer = [0u8; 4];
-
-    // Read version and flags (4 bytes total)
-    cursor
-        .read_exact(&mut buffer)
-        .context("Failed to read version and flags")?;
-    let version = buffer[0];
-    let flags = [buffer[1], buffer[2], buffer[3]];
-
-    // Read grouping_type (4 bytes)
-    cursor
-        .read_exact(&mut buffer)
-        .context("Failed to read grouping_type")?;
-    let grouping_type = FourCC(buffer);
-
-    // Version-dependent fields
-    let mut grouping_type_parameter = None;
-    if version >= 1 {
-        cursor
-            .read_exact(&mut buffer)
-            .context("Failed to read grouping_type_parameter")?;
-        grouping_type_parameter = Some(u32::from_be_bytes(buffer));
-    }
-
-    // Read entry_count
-    cursor
-        .read_exact(&mut buffer)
-        .context("Failed to read entry_count")?;
-    let entry_count = u32::from_be_bytes(buffer);
-
-    // Read entries
-    let mut entries = Vec::new();
-    for i in 0..entry_count {
-        // Read sample_count
-        cursor
-            .read_exact(&mut buffer)
-            .with_context(|| format!("Failed to read sample_count for entry {i}"))?;
-        let sample_count = u32::from_be_bytes(buffer);
-
-        // Read group_description_index
-        cursor
-            .read_exact(&mut buffer)
-            .with_context(|| format!("Failed to read group_description_index for entry {i}"))?;
-        let group_description_index = u32::from_be_bytes(buffer);
-
-        entries.push(SampleToGroupEntry {
-            sample_count,
-            group_description_index,
-        });
-    }
-
-    let atom = SampleToGroupAtom {
-        version,
-        flags,
-        grouping_type,
-        grouping_type_parameter,
-        entries,
+mod parser {
+    use winnow::{
+        binary::be_u32,
+        combinator::{empty, repeat, seq, trace},
+        error::StrContext,
+        ModalResult, Parser,
     };
 
-    Ok(atom)
+    use super::{SampleToGroupAtom, SampleToGroupEntry};
+    use crate::atom::util::parser::{flags3, fourcc, stream, usize_be_u32, version, Stream};
+
+    pub fn parse_sbgp_data(input: &[u8]) -> Result<SampleToGroupAtom, crate::ParseError> {
+        parse_sbgp_data_inner
+            .parse(stream(input))
+            .map_err(crate::ParseError::from_winnow)
+    }
+
+    fn parse_sbgp_data_inner(input: &mut Stream<'_>) -> ModalResult<SampleToGroupAtom> {
+        let maybe_group_type_parameter = |version: u8| {
+            let with_parameter = |input: &mut Stream<'_>| -> ModalResult<Option<u32>> {
+                be_u32.map(|v| Some(v)).parse_next(input)
+            };
+            let without_parameter = |input: &mut Stream<'_>| -> ModalResult<Option<u32>> {
+                empty.value(None).parse_next(input)
+            };
+
+            if version >= 1 {
+                with_parameter
+            } else {
+                without_parameter
+            }
+        };
+
+        trace(
+            "sbgp",
+            seq!(SampleToGroupAtom {
+                version: version,
+                flags: flags3,
+                grouping_type: fourcc.context(StrContext::Label("grouping_type")),
+                grouping_type_parameter: maybe_group_type_parameter(version)
+                    .context(StrContext::Label("grouping_type_parameter")),
+                entries: entries.context(StrContext::Label("entries")),
+            }),
+        )
+        .parse_next(input)
+    }
+
+    fn entries(input: &mut Stream<'_>) -> ModalResult<Vec<SampleToGroupEntry>> {
+        trace("entries", move |input: &mut Stream<'_>| {
+            let count = usize_be_u32
+                .context(StrContext::Label("entry_count"))
+                .parse_next(input)?;
+            repeat(
+                count,
+                seq!(SampleToGroupEntry {
+                    sample_count: be_u32.context(StrContext::Label("sample_count")),
+                    group_description_index: be_u32
+                        .context(StrContext::Label("group_description_index")),
+                }),
+            )
+            .parse_next(input)
+        })
+        .parse_next(input)
+    }
 }
 
 #[cfg(test)]
