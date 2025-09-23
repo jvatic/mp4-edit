@@ -72,8 +72,8 @@ impl ChapterEntry {
 pub struct ChapterListAtom {
     /// Version of the chpl atom format (1)
     pub version: u8,
-    /// Flags for the chpl atom (usually all zeros)
     pub flags: [u8; 3],
+    pub reserved: [u8; 4],
     /// List of chapter entries
     pub chapters: ChapterEntries,
 }
@@ -83,6 +83,7 @@ impl Default for ChapterListAtom {
         Self {
             version: 1,
             flags: [0u8; 3],
+            reserved: [0u8; 4],
             chapters: Default::default(),
         }
     }
@@ -93,6 +94,7 @@ impl ChapterListAtom {
         Self {
             version: 1,
             flags: [0u8; 3],
+            reserved: [0u8; 4],
             chapters: chapters.into(),
         }
     }
@@ -134,6 +136,7 @@ mod serializer {
         vec![
             version(atom.version),
             flags(atom.flags),
+            reserved(atom.reserved),
             chapters(atom.chapters),
         ]
         .into_iter()
@@ -149,8 +152,19 @@ mod serializer {
         flags.to_vec()
     }
 
+    fn reserved(reserved: [u8; 4]) -> Vec<u8> {
+        reserved.to_vec()
+    }
+
     fn chapters(chapters: ChapterEntries) -> Vec<u8> {
-        chapters.0.into_iter().flat_map(chapter).collect()
+        vec![
+            vec![u8::try_from(chapters.len())
+                .expect("there must be no more than {u8::MAX} chapter entries")],
+            chapters.0.into_iter().flat_map(chapter).collect(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
     }
 
     fn chapter(chapter: ChapterEntry) -> Vec<u8> {
@@ -165,26 +179,30 @@ mod serializer {
     }
 
     fn title(title: String) -> Vec<u8> {
-        vec![title.into_bytes(), vec![0x00]]
-            .into_iter()
-            .flatten()
-            .collect()
+        let title_bytes = title.into_bytes();
+        vec![
+            vec![u8::try_from(title_bytes.len()).expect("title length must not exceed {u8::MAX}")],
+            title_bytes,
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
     }
 }
 
 mod parser {
     use winnow::{
-        binary::be_u64,
+        binary::{be_u64, length_and_then, u8},
         combinator::{repeat, seq, trace},
         error::StrContext,
-        token::{literal, take, take_until},
+        token::rest,
         ModalResult, Parser,
     };
 
     use super::ChapterListAtom;
     use crate::atom::{
         chpl::{ChapterEntries, ChapterEntry},
-        util::parser::{flags3, stream, version, Stream},
+        util::parser::{byte_array, stream, version, Stream},
     };
 
     pub fn parse_chpl_data(input: &[u8]) -> Result<ChapterListAtom, crate::ParseError> {
@@ -198,30 +216,24 @@ mod parser {
             "chpl",
             seq!(ChapterListAtom {
                 version: version.verify(|v| *v == 1),
-                flags: flags3,
-                _: reserved,
-                chapters: chapters,
+                flags: byte_array.context(StrContext::Label("flags")),
+                reserved: byte_array.context(StrContext::Label("reserved")),
+                chapters: chapters.context(StrContext::Label("chapters")),
             })
             .context(StrContext::Label("chpl")),
         )
         .parse_next(input)
     }
 
-    fn reserved(input: &mut Stream<'_>) -> ModalResult<()> {
-        trace(
-            "reserved",
-            take(8usize).void().context(StrContext::Label("reserved")),
-        )
-        .parse_next(input)
-    }
-
     fn chapters(input: &mut Stream<'_>) -> ModalResult<ChapterEntries> {
-        trace(
-            "chapters",
-            repeat(1.., chapter)
+        trace("chapters", move |input: &mut Stream<'_>| {
+            let chapter_count = u8
+                .context(StrContext::Label("chapter_count"))
+                .parse_next(input)?;
+            repeat(chapter_count as usize, chapter)
                 .map(ChapterEntries)
-                .context(StrContext::Label("chapters")),
-        )
+                .parse_next(input)
+        })
         .parse_next(input)
     }
 
@@ -230,10 +242,12 @@ mod parser {
             "chapter",
             seq!(ChapterEntry {
                 start_time: be_u64.context(StrContext::Label("start_time")),
-                title: take_until(1.., 0x00)
-                    .try_map(|buf: &[u8]| String::from_utf8(buf.to_vec()))
-                    .context(StrContext::Label("title")),
-                _: literal(0x00), // discard the literal, TODO: clean this up so above expr consumes this
+                title: length_and_then(
+                    u8,
+                    rest.try_map(|buf: &[u8]| String::from_utf8(buf.to_vec()))
+                )
+                .context(StrContext::Label("title")),
+                // _: null_bytes, // discard trailing null bytes
             })
             .context(StrContext::Label("chapter")),
         )
