@@ -1,9 +1,7 @@
-use anyhow::{anyhow, Context};
 use futures_io::AsyncRead;
-use std::io::Read;
 
 use crate::{
-    atom::{util::async_to_sync_read, FourCC},
+    atom::{util::read_to_end, FourCC},
     parser::ParseAtom,
     writer::SerializeAtom,
     ParseError,
@@ -20,8 +18,8 @@ pub struct SoundMediaHeaderAtom {
     /// Audio balance (fixed-point 8.8 format, 0.0 = center)
     /// Negative values favor left channel, positive favor right
     pub balance: f32,
-    /// Reserved field (must be 0)
-    pub reserved: u16,
+    /// Reserved field
+    pub reserved: [u8; 2],
 }
 
 impl ParseAtom for SoundMediaHeaderAtom {
@@ -32,54 +30,9 @@ impl ParseAtom for SoundMediaHeaderAtom {
         if atom_type != SMHD {
             return Err(ParseError::new_unexpected_atom(atom_type, SMHD));
         }
-        parse_smhd_data(async_to_sync_read(reader).await?).map_err(ParseError::new_atom_parse)
+        let data = read_to_end(reader).await?;
+        parser::parse_smhd_data(&data)
     }
-}
-
-fn parse_smhd_data<R: Read>(mut reader: R) -> Result<SoundMediaHeaderAtom, anyhow::Error> {
-    // Read version and flags (4 bytes)
-    let mut version_flags = [0u8; 4];
-    reader
-        .read_exact(&mut version_flags)
-        .context("read version and flags")?;
-
-    let version = version_flags[0];
-    let flags = [version_flags[1], version_flags[2], version_flags[3]];
-
-    // Validate version
-    if version != 0 {
-        return Err(anyhow!("unsupported version {}", version));
-    }
-
-    // Read balance (2 bytes, fixed-point 8.8 format)
-    let mut balance_buf = [0u8; 2];
-    reader
-        .read_exact(&mut balance_buf)
-        .context("read balance")?;
-    let balance_fixed = i16::from_be_bytes(balance_buf);
-
-    // Convert from fixed-point 8.8 to float
-    // In 8.8 format, the value is multiplied by 256
-    let balance = f32::from(balance_fixed) / 256.0;
-
-    // Read reserved field (2 bytes)
-    let mut reserved_buf = [0u8; 2];
-    reader
-        .read_exact(&mut reserved_buf)
-        .context("read reserved")?;
-    let reserved = u16::from_be_bytes(reserved_buf);
-
-    // Validate that the balance is within reasonable bounds
-    if !(-1.0..=1.0).contains(&balance) {
-        return Err(anyhow!("Invalid balance value: {}", balance));
-    }
-
-    Ok(SoundMediaHeaderAtom {
-        version,
-        flags,
-        balance,
-        reserved,
-    })
 }
 
 impl SerializeAtom for SoundMediaHeaderAtom {
@@ -88,23 +41,55 @@ impl SerializeAtom for SoundMediaHeaderAtom {
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
+        serializer::serialize_smhd_data(self)
+    }
+}
+
+mod serializer {
+    use crate::atom::util::serializer::fixed_point_8x8;
+
+    use super::SoundMediaHeaderAtom;
+
+    pub fn serialize_smhd_data(smhd: SoundMediaHeaderAtom) -> Vec<u8> {
         let mut data = Vec::new();
 
-        // Version and flags (4 bytes)
-        let version_flags = u32::from(self.version) << 24
-            | u32::from(self.flags[0]) << 16
-            | u32::from(self.flags[1]) << 8
-            | u32::from(self.flags[2]);
-        data.extend_from_slice(&version_flags.to_be_bytes());
-
-        // Balance (fixed-point 8.8 format, 2 bytes)
-        let balance_fixed = (self.balance * 256.0) as i16;
-        data.extend_from_slice(&balance_fixed.to_be_bytes());
-
-        // Reserved (2 bytes)
-        data.extend_from_slice(&self.reserved.to_be_bytes());
+        data.push(smhd.version);
+        data.extend(smhd.flags);
+        data.extend(fixed_point_8x8(smhd.balance));
+        data.extend(smhd.reserved);
 
         data
+    }
+}
+
+mod parser {
+    use winnow::{
+        combinator::{seq, trace},
+        error::StrContext,
+        ModalResult, Parser,
+    };
+
+    use super::SoundMediaHeaderAtom;
+    use crate::atom::util::parser::{byte_array, fixed_point_8x8, stream, version, Stream};
+
+    pub fn parse_smhd_data(input: &[u8]) -> Result<SoundMediaHeaderAtom, crate::ParseError> {
+        parse_smhd_data_inner
+            .parse(stream(input))
+            .map_err(crate::ParseError::from_winnow)
+    }
+
+    fn parse_smhd_data_inner(input: &mut Stream<'_>) -> ModalResult<SoundMediaHeaderAtom> {
+        trace(
+            "smhd",
+            seq!(SoundMediaHeaderAtom {
+                version: version,
+                flags: byte_array.context(StrContext::Label("flags")),
+                balance: fixed_point_8x8.context(StrContext::Label("balance")),
+                reserved: byte_array.context(StrContext::Label("reserved")),
+            })
+            .context(StrContext::Label("chpl")),
+        )
+        .parse_next(input)
     }
 }
 
