@@ -1,12 +1,14 @@
-use anyhow::{anyhow, Context};
 use bon::bon;
 use derive_more::{Deref, DerefMut};
 use futures_io::AsyncRead;
-use std::{fmt, io::Read, ops::Range};
+use std::{
+    fmt,
+    ops::{Deref, Range},
+};
 
 use crate::{
     atom::{
-        util::{async_to_sync_read, DebugEllipsis},
+        util::{read_to_end, DebugEllipsis},
         FourCC,
     },
     parser::ParseAtom,
@@ -117,16 +119,12 @@ impl ParseAtom for ChunkOffsetAtom {
         atom_type: FourCC,
         reader: R,
     ) -> Result<Self, ParseError> {
-        let is_64bit = if atom_type == STCO {
-            false
-        } else if atom_type == CO64 {
-            true
-        } else {
-            return Err(ParseError::new_unexpected_atom(atom_type, STCO));
-        };
-
-        let cursor = async_to_sync_read(reader).await?;
-        parse_stco_data(cursor, is_64bit).map_err(ParseError::new_atom_parse)
+        let data = read_to_end(reader).await?;
+        match atom_type.deref() {
+            STCO => parser::parse_stco_data(&data),
+            CO64 => parser::parse_co64_data(&data),
+            _ => return Err(ParseError::new_unexpected_atom(atom_type, STCO)),
+        }
     }
 }
 
@@ -141,92 +139,99 @@ impl SerializeAtom for ChunkOffsetAtom {
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
+        serializer::serialize_stco_co64_data(self)
+    }
+}
+
+mod serializer {
+    use crate::atom::{util::serializer::be_u32, ChunkOffsetAtom};
+
+    pub fn serialize_stco_co64_data(atom: ChunkOffsetAtom) -> Vec<u8> {
         let mut data = Vec::new();
 
-        // Version (1 byte)
-        data.push(self.version);
+        data.push(atom.version);
+        data.extend(atom.flags);
+        data.extend(be_u32(
+            atom.chunk_offsets
+                .len()
+                .try_into()
+                .expect("chunk offsets length must fit in u32"),
+        ));
 
-        // Flags (3 bytes)
-        data.extend_from_slice(&self.flags);
-
-        // Entry count (4 bytes, big-endian)
-        data.extend_from_slice(&(self.chunk_offsets.len() as u32).to_be_bytes());
-
-        // Chunk offsets
-        for offset in self.chunk_offsets.iter() {
-            if self.is_64bit {
-                // 64-bit offsets (co64)
-                data.extend_from_slice(&offset.to_be_bytes());
+        atom.chunk_offsets.0.into_iter().for_each(|offset| {
+            if atom.is_64bit {
+                data.extend(offset.to_be_bytes());
             } else {
-                // 32-bit offsets (stco)
-                data.extend_from_slice(&(*offset as u32).to_be_bytes());
+                data.extend(be_u32(
+                    offset.try_into().expect("chunk offset must fit in u32"),
+                ))
             }
-        }
+        });
 
         data
     }
 }
 
-fn parse_stco_data<R: Read>(
-    mut reader: R,
-    is_64bit: bool,
-) -> Result<ChunkOffsetAtom, anyhow::Error> {
-    // Read version and flags (4 bytes)
-    let mut version_flags = [0u8; 4];
-    reader
-        .read_exact(&mut version_flags)
-        .context("read version and flags")?;
+mod parser {
+    use winnow::{
+        binary::{be_u32, be_u64},
+        combinator::{empty, repeat, seq, trace},
+        error::{ContextError, ErrMode, StrContext},
+        Parser,
+    };
 
-    let version = version_flags[0];
-    let flags = [version_flags[1], version_flags[2], version_flags[3]];
+    use super::{ChunkOffsetAtom, ChunkOffsets};
+    use crate::atom::util::parser::{byte_array, stream, version, Stream};
 
-    // Validate version
-    if version != 0 {
-        return Err(anyhow!("unsupported version {}", version));
+    pub fn parse_stco_data(input: &[u8]) -> Result<ChunkOffsetAtom, crate::ParseError> {
+        parse_stco_co64_data_inner(false)
+            .parse(stream(input))
+            .map_err(crate::ParseError::from_winnow)
     }
 
-    // Read entry count
-    let mut count_buf = [0u8; 4];
-    reader
-        .read_exact(&mut count_buf)
-        .context("read entry count")?;
-    let entry_count = u32::from_be_bytes(count_buf);
-
-    // Validate entry count (reasonable limit to prevent memory exhaustion)
-    if entry_count > 1_000_000 {
-        return Err(anyhow!("Too many chunk offsets: {}", entry_count));
+    pub fn parse_co64_data(input: &[u8]) -> Result<ChunkOffsetAtom, crate::ParseError> {
+        parse_stco_co64_data_inner(true)
+            .parse(stream(input))
+            .map_err(crate::ParseError::from_winnow)
     }
 
-    let mut chunk_offsets = Vec::with_capacity(entry_count as usize);
-
-    if is_64bit {
-        // Read 64-bit offsets (co64)
-        for i in 0..entry_count {
-            let mut offset_buf = [0u8; 8];
-            reader
-                .read_exact(&mut offset_buf)
-                .context(format!("read chunk offset {i}"))?;
-            let offset = u64::from_be_bytes(offset_buf);
-            chunk_offsets.push(offset);
-        }
-    } else {
-        // Read 32-bit offsets (stco)
-        for i in 0..entry_count {
-            let mut offset_buf = [0u8; 4];
-            reader
-                .read_exact(&mut offset_buf)
-                .context(format!("read chunk offset {i}"))?;
-            let offset = u64::from(u32::from_be_bytes(offset_buf));
-            chunk_offsets.push(offset);
-        }
+    fn parse_stco_co64_data_inner<'i>(
+        is_64bit: bool,
+    ) -> impl Parser<Stream<'i>, ChunkOffsetAtom, ErrMode<ContextError>> {
+        trace(
+            if is_64bit { "co64" } else { "stco" },
+            move |input: &mut Stream<'_>| {
+                seq!(ChunkOffsetAtom {
+                    version: version,
+                    flags: byte_array.context(StrContext::Label("flags")),
+                    chunk_offsets: chunk_offsets(is_64bit)
+                        .map(ChunkOffsets)
+                        .context(StrContext::Label("chunk_offsets")),
+                    is_64bit: empty.value(is_64bit),
+                })
+                .parse_next(input)
+            },
+        )
     }
 
-    Ok(ChunkOffsetAtom {
-        version,
-        flags,
-        chunk_offsets: ChunkOffsets(chunk_offsets),
-        is_64bit,
-    })
+    fn chunk_offsets<'i>(
+        is_64bit: bool,
+    ) -> impl Parser<Stream<'i>, Vec<u64>, ErrMode<ContextError>> {
+        trace("chunk_offsets", move |input: &mut Stream<'_>| {
+            let entry_count = be_u32.parse_next(input)?;
+            repeat(entry_count as usize, chunk_offset(is_64bit)).parse_next(input)
+        })
+    }
+
+    fn chunk_offset<'i>(is_64bit: bool) -> impl Parser<Stream<'i>, u64, ErrMode<ContextError>> {
+        trace("chunk_offset", move |input: &mut Stream<'_>| {
+            if is_64bit {
+                be_u64.parse_next(input)
+            } else {
+                be_u32.map(|v| v as u64).parse_next(input)
+            }
+        })
+    }
 }
 
 #[cfg(test)]
