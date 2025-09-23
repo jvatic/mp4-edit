@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{marker::PhantomData, time::Duration};
 
 use bon::bon;
 
@@ -414,23 +414,9 @@ impl ChapterTrack {
                 text_justification: 0,
                 background_color: [0u16; 3], // Black background
                 default_text_box: self.text_config.text_box,
-                default_style: Some({
-                    let mut style = vec![
-                        0,
-                        0,
-                        0,
-                        0, // Start/end character indices
-                        0,
-                        0, // Font ID
-                        self.text_config.font_size,
-                    ];
-                    style.extend_from_slice(&self.text_config.font_name);
-                    style.push(0); // Font face flags
-                    style.extend_from_slice(&self.text_config.text_color);
-                    style
-                }),
-                font_table: None,
+                unknown: None,
                 extensions: Vec::new(),
+                extensions_size: crate::atom::stsd::ExtensionSizeType::U8,
             }),
         };
 
