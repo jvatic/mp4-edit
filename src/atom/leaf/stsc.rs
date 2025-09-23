@@ -1,13 +1,12 @@
-use anyhow::{anyhow, Context};
 use bon::{bon, Builder};
 use derive_more::{Deref, DerefMut};
 
 use futures_io::AsyncRead;
-use std::{fmt, io::Read, ops::Range};
+use std::{fmt, ops::Range};
 
 use crate::{
     atom::{
-        util::{async_to_sync_read, DebugEllipsis, RangeCollection},
+        util::{read_to_end, DebugEllipsis, RangeCollection},
         FourCC,
     },
     parser::ParseAtom,
@@ -301,8 +300,8 @@ impl ParseAtom for SampleToChunkAtom {
         if atom_type != STSC {
             return Err(ParseError::new_unexpected_atom(atom_type, STSC));
         }
-        let mut cursor = async_to_sync_read(reader).await?;
-        parse_stsc_data(&mut cursor).map_err(ParseError::new_atom_parse)
+        let data = read_to_end(reader).await?;
+        parser::parse_stsc_data(&data)
     }
 }
 
@@ -312,111 +311,98 @@ impl SerializeAtom for SampleToChunkAtom {
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
+        serialier::serialize_stsc_atom(self)
+    }
+}
+
+mod serialier {
+    use crate::atom::util::serializer::be_u32;
+
+    use super::SampleToChunkAtom;
+
+    pub fn serialize_stsc_atom(stsc: SampleToChunkAtom) -> Vec<u8> {
         let mut data = Vec::new();
 
-        // Version (1 byte)
-        data.push(self.version);
+        data.push(stsc.version);
+        data.extend(stsc.flags);
 
-        // Flags (3 bytes)
-        data.extend_from_slice(&self.flags);
+        data.extend(be_u32(
+            stsc.entries
+                .len()
+                .try_into()
+                .expect("entries len should fit in u32"),
+        ));
 
-        // Entry count (4 bytes, big-endian)
-        data.extend_from_slice(&(self.entries.len() as u32).to_be_bytes());
-
-        // Entries
-        for entry in self.entries.iter() {
-            // First chunk (4 bytes, big-endian)
-            data.extend_from_slice(&entry.first_chunk.to_be_bytes());
-            // Samples per chunk (4 bytes, big-endian)
-            data.extend_from_slice(&entry.samples_per_chunk.to_be_bytes());
-            // Sample description index (4 bytes, big-endian)
-            data.extend_from_slice(&entry.sample_description_index.to_be_bytes());
+        for entry in stsc.entries.iter() {
+            data.extend(entry.first_chunk.to_be_bytes());
+            data.extend(entry.samples_per_chunk.to_be_bytes());
+            data.extend(entry.sample_description_index.to_be_bytes());
         }
 
         data
     }
 }
 
-fn parse_stsc_data<R: Read>(mut reader: R) -> Result<SampleToChunkAtom, anyhow::Error> {
-    // Read version and flags (4 bytes)
-    let mut version_flags = [0u8; 4];
-    reader
-        .read_exact(&mut version_flags)
-        .context("read version and flags")?;
+mod parser {
+    use winnow::{
+        binary::be_u32,
+        combinator::{seq, trace},
+        error::{StrContext, StrContextValue},
+        ModalResult, Parser,
+    };
 
-    let version = version_flags[0];
-    let flags = [version_flags[1], version_flags[2], version_flags[3]];
+    use super::{SampleToChunkAtom, SampleToChunkEntries, SampleToChunkEntry};
+    use crate::atom::util::parser::{
+        combinators::count_then_repeat, flags3, stream, version, Stream,
+    };
 
-    // Validate version
-    if version != 0 {
-        return Err(anyhow!("unsupported version {}", version));
+    pub fn parse_stsc_data(input: &[u8]) -> Result<SampleToChunkAtom, crate::ParseError> {
+        parse_stsc_data_inner
+            .parse(stream(input))
+            .map_err(crate::ParseError::from_winnow)
     }
 
-    // Read entry count
-    let mut count_buf = [0u8; 4];
-    reader
-        .read_exact(&mut count_buf)
-        .context("read entry count")?;
-    let entry_count = u32::from_be_bytes(count_buf);
-
-    // Validate entry count (reasonable limit to prevent memory exhaustion)
-    if entry_count > 1_000_000 {
-        return Err(anyhow!("Too many sample-to-chunk entries: {}", entry_count));
+    fn parse_stsc_data_inner(input: &mut Stream<'_>) -> ModalResult<SampleToChunkAtom> {
+        trace(
+            "stsc",
+            seq!(SampleToChunkAtom {
+                version: version,
+                flags: flags3,
+                entries: count_then_repeat(be_u32, entry)
+                    .map(SampleToChunkEntries)
+                    .context(StrContext::Label("entries")),
+            })
+            .context(StrContext::Label("stsc")),
+        )
+        .parse_next(input)
     }
 
-    let mut entries = Vec::with_capacity(entry_count as usize);
-
-    for i in 0..entry_count {
-        // Read first chunk (4 bytes)
-        let mut first_chunk_buf = [0u8; 4];
-        reader
-            .read_exact(&mut first_chunk_buf)
-            .context(format!("read first_chunk for entry {i}"))?;
-        let first_chunk = u32::from_be_bytes(first_chunk_buf);
-
-        // Read samples per chunk (4 bytes)
-        let mut samples_per_chunk_buf = [0u8; 4];
-        reader
-            .read_exact(&mut samples_per_chunk_buf)
-            .context(format!("read samples_per_chunk for entry {i}"))?;
-        let samples_per_chunk = u32::from_be_bytes(samples_per_chunk_buf);
-
-        // Read sample description index (4 bytes)
-        let mut sample_description_index_buf = [0u8; 4];
-        reader
-            .read_exact(&mut sample_description_index_buf)
-            .context(format!("read sample_description_index for entry {i}"))?;
-        let sample_description_index = u32::from_be_bytes(sample_description_index_buf);
-
-        // Validate entry
-        if first_chunk == 0 {
-            return Err(anyhow!(
-                "Entry {} has zero first_chunk (should be 1-based)",
-                i
-            ));
-        }
-        if samples_per_chunk == 0 {
-            return Err(anyhow!("Entry {} has zero samples_per_chunk", i));
-        }
-        if sample_description_index == 0 {
-            return Err(anyhow!(
-                "Entry {} has zero sample_description_index (should be 1-based)",
-                i
-            ));
-        }
-
-        entries.push(SampleToChunkEntry {
-            first_chunk,
-            samples_per_chunk,
-            sample_description_index,
-        });
+    fn entry(input: &mut Stream<'_>) -> ModalResult<SampleToChunkEntry> {
+        trace(
+            "entry",
+            seq!(SampleToChunkEntry {
+                first_chunk: be_u32
+                    .verify(|first_chunk| *first_chunk > 0)
+                    .context(StrContext::Label("first_chunk"))
+                    .context(StrContext::Expected(StrContextValue::Description(
+                        "1-based index"
+                    ))),
+                samples_per_chunk: be_u32
+                    .verify(|samples_per_chunk| *samples_per_chunk > 0)
+                    .context(StrContext::Label("samples_per_chunk"))
+                    .context(StrContext::Expected(StrContextValue::Description(
+                        "sample count > 0"
+                    ))),
+                sample_description_index: be_u32
+                    .context(StrContext::Label("sample_description_index"))
+                    .context(StrContext::Expected(StrContextValue::Description(
+                        "1-based index"
+                    ))),
+            })
+            .context(StrContext::Label("entry")),
+        )
+        .parse_next(input)
     }
-
-    Ok(SampleToChunkAtom {
-        version,
-        flags,
-        entries: SampleToChunkEntries(entries),
-    })
 }
 
 #[cfg(test)]

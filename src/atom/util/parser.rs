@@ -116,26 +116,6 @@ where
     })
 }
 
-pub fn maybe_value<'i, Input, Output, Error, ParseNext>(
-    predicate: bool,
-    mut parser: ParseNext,
-) -> impl Parser<Input, Option<Output>, Error> + 'i
-where
-    Input: winnow::stream::Stream + 'i,
-    ParseNext: Parser<Input, Output, Error> + 'i,
-    Error: ParserError<Input> + 'i,
-    Output: Clone + 'i,
-{
-    trace("maybe_value", move |input: &mut Input| {
-        let value = if predicate {
-            Some(parser.parse_next(input)?)
-        } else {
-            None
-        };
-        Ok(value)
-    })
-}
-
 pub const FIXED_POINT_16X16_SCALE: f32 = 65536.0;
 
 pub fn fixed_point_16x16(input: &mut Stream<'_>) -> ModalResult<f32> {
@@ -157,9 +137,31 @@ pub fn fixed_point_8x8(input: &mut Stream<'_>) -> ModalResult<f32> {
 }
 
 pub mod combinators {
+    use winnow::combinator::trace;
     use winnow::error::ParserError;
-    use winnow::stream::{Location, Stream};
+    use winnow::stream::{Location, Stream, StreamIsPartial, ToUsize, UpdateSlice};
     use winnow::Parser;
+
+    pub fn count_then_repeat<Input, Output, Count, Error, CountParser, ParseNext>(
+        mut count: CountParser,
+        mut parser: ParseNext,
+    ) -> impl Parser<Input, Vec<Output>, Error>
+    where
+        Input: StreamIsPartial + Stream + UpdateSlice + Clone,
+        Count: ToUsize,
+        CountParser: Parser<Input, Count, Error>,
+        ParseNext: Parser<Input, Output, Error>,
+        Error: ParserError<Input>,
+    {
+        trace("count_then_repeat", move |input: &mut Input| {
+            let count = count.parse_next(input)?.to_usize();
+            let mut items = Vec::with_capacity(count);
+            for _ in 0..count {
+                items.push(parser.parse_next(input)?);
+            }
+            Ok(items)
+        })
+    }
 
     pub fn with_len<I, O, E, ParseNext>(parser: ParseNext) -> impls::WithLen<ParseNext, I, O, E>
     where
