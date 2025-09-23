@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use winnow::{
     binary::{be_u16, be_u32, u8},
-    combinator::trace,
+    combinator::{empty, trace},
     error::{ParserError, StrContext, StrContextValue},
     token::take,
     Bytes, LocatingSlice, ModalResult, Parser,
@@ -84,6 +84,19 @@ pub fn byte_array<const N: usize>(input: &mut Stream<'_>) -> winnow::ModalResult
     take(N).try_map(|b: &[u8]| b.try_into()).parse_next(input)
 }
 
+pub fn take_vec<'i, UsizeLike, Error>(
+    token_count: UsizeLike,
+) -> impl Parser<Stream<'i>, Vec<u8>, Error> + 'i
+where
+    UsizeLike: winnow::stream::ToUsize + Clone + Copy + 'i,
+    Error: ParserError<Stream<'i>> + 'i,
+{
+    trace("take_vec", move |input: &mut Stream<'i>| {
+        let data = take(token_count).parse_next(input)?;
+        Ok(data.to_vec())
+    })
+}
+
 pub fn fixed_array<'i, const N: usize, Input, Output, Error, ParseNext>(
     mut parser: ParseNext,
 ) -> impl Parser<Input, [Output; N], Error> + 'i
@@ -93,13 +106,33 @@ where
     Error: ParserError<Input> + 'i,
     Output: Debug + 'i,
 {
-    trace("fill", move |input: &mut Input| {
+    trace("fixed_array", move |input: &mut Input| {
         let mut list: Vec<Output> = Vec::with_capacity(N);
         for _ in 0..N {
             list.push(parser.parse_next(input)?);
         }
         let out: [Output; N] = list.try_into().unwrap();
         Ok(out)
+    })
+}
+
+pub fn maybe_value<'i, Input, Output, Error, ParseNext>(
+    predicate: bool,
+    mut parser: ParseNext,
+) -> impl Parser<Input, Option<Output>, Error> + 'i
+where
+    Input: winnow::stream::Stream + 'i,
+    ParseNext: Parser<Input, Output, Error> + 'i,
+    Error: ParserError<Input> + 'i,
+    Output: Clone + 'i,
+{
+    trace("maybe_value", move |input: &mut Input| {
+        let value = if predicate {
+            Some(parser.parse_next(input)?)
+        } else {
+            None
+        };
+        Ok(value)
     })
 }
 

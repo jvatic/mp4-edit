@@ -3,7 +3,7 @@ use futures_io::AsyncRead;
 use std::io::{Cursor, Read};
 
 use crate::{
-    atom::{util::async_to_sync_read, FourCC},
+    atom::{util::read_to_end, FourCC},
     parser::ParseAtom,
     writer::SerializeAtom,
     ParseError,
@@ -46,8 +46,8 @@ impl ParseAtom for SampleGroupDescriptionAtom {
         if atom_type != SGPD {
             return Err(ParseError::new_unexpected_atom(atom_type, SGPD));
         }
-        let cursor = async_to_sync_read(reader).await?;
-        parse_sgpd_data(cursor.get_ref()).map_err(ParseError::new_atom_parse)
+        let data = read_to_end(reader).await?;
+        parser::parse_sgpd_data(&data)
     }
 }
 
@@ -118,6 +118,110 @@ impl SerializeAtom for SampleGroupDescriptionAtom {
         }
 
         data
+    }
+}
+
+mod parser {
+    use winnow::{
+        binary::be_u32,
+        combinator::{fail, repeat, seq, trace},
+        error::{StrContext, StrContextValue},
+        token::rest,
+        ModalResult, Parser,
+    };
+
+    use super::{SampleGroupDescriptionAtom, SampleGroupDescriptionEntry};
+    use crate::atom::util::parser::{
+        flags3, fourcc, maybe_value, stream, take_vec, usize_be_u32, version, Stream,
+    };
+
+    pub fn parse_sgpd_data(input: &[u8]) -> Result<SampleGroupDescriptionAtom, crate::ParseError> {
+        parse_sgpd_data_inner
+            .parse(stream(input))
+            .map_err(crate::ParseError::from_winnow)
+    }
+
+    fn parse_sgpd_data_inner(input: &mut Stream<'_>) -> ModalResult<SampleGroupDescriptionAtom> {
+        trace(
+            "sgpd",
+            seq!(SampleGroupDescriptionAtom {
+                version: version,
+                flags: flags3,
+                grouping_type: fourcc.context(StrContext::Label("grouping_type")),
+                default_length: maybe_value(version == 1, be_u32)
+                    .context(StrContext::Label("default_length")),
+                default_sample_description_index: maybe_value(version > 1, be_u32)
+                    .context(StrContext::Label("default_sample_description_index")),
+                entries: entries(version, default_length),
+            }),
+        )
+        .parse_next(input)
+    }
+
+    fn entries<'i, Error>(
+        version: u8,
+        default_length: Option<u32>,
+    ) -> impl Parser<Stream<'i>, Vec<SampleGroupDescriptionEntry>, Error> + 'i
+    where
+        Error: winnow::error::ParserError<Stream<'i>>
+            + winnow::error::AddContext<
+                winnow::LocatingSlice<&'i winnow::Bytes>,
+                winnow::error::StrContext,
+            > + std::convert::From<winnow::error::ErrMode<winnow::error::ContextError>>
+            + 'i,
+    {
+        trace("entries", move |input: &mut Stream<'i>| {
+            let count = usize_be_u32
+                .context(StrContext::Label("entry_count"))
+                .parse_next(input)?;
+            repeat(
+                count,
+                seq!(SampleGroupDescriptionEntry {
+                    description_length: maybe_value(
+                        version == 1 && matches!(default_length, Some(0)),
+                        be_u32
+                    )
+                    .context(StrContext::Label("description_length")),
+                    description_data: description_data(version, default_length, description_length)
+                        .context(StrContext::Label("description_data")),
+                }),
+            )
+            .parse_next(input)
+        })
+    }
+
+    fn description_data<'i, Error>(
+        version: u8,
+        default_length: Option<u32>,
+        description_length: Option<u32>,
+    ) -> impl Parser<Stream<'i>, Vec<u8>, Error> + 'i
+    where
+        Error: winnow::error::ParserError<Stream<'i>>
+            + winnow::error::AddContext<
+                winnow::LocatingSlice<&'i winnow::Bytes>,
+                winnow::error::StrContext,
+            > + std::convert::From<winnow::error::ErrMode<winnow::error::ContextError>>
+            + 'i,
+    {
+        trace("description_data", move |input: &mut Stream<'i>| {
+            Ok(if version == 1 {
+                let data_size = if let Some(description_length) = description_length {
+                    description_length
+                } else if let Some(default_length) = default_length {
+                    default_length
+                } else {
+                    fail.context(StrContext::Expected(StrContextValue::Description(
+                        "description_length or default_length are required for version 1",
+                    )))
+                    .parse_next(input)?;
+                    unreachable!()
+                };
+                take_vec(data_size as usize).parse_next(input)?
+            } else {
+                // TODO: is this correct?
+                rest.parse_next(input)?.to_vec()
+            })
+        })
     }
 }
 
