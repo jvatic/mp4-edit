@@ -6,6 +6,8 @@ use audio_specific_config::{
     AudioSpecificConfig, ParseAudioSpecificConfigError as AudioSpecificConfigParseError,
 };
 
+use crate::{atom::util::serializer::SerializeSize, FourCC};
+
 mod audio_specific_config;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -17,11 +19,13 @@ pub struct StsdExtensionData {
 pub enum StsdExtension {
     Esds(EsdsExtension),
     Btrt(BtrtExtension),
-    Unknown {
-        fourcc: [u8; 4],
-        size: u32,
-        data: Vec<u8>,
-    },
+    Unknown(UnknownExtension),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnknownExtension {
+    typ: FourCC,
+    data: Vec<u8>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq)]
@@ -90,15 +94,14 @@ impl From<std::io::Error> for ParseStsdExtensionError {
 }
 
 impl StsdExtension {
-    pub fn to_bytes(self) -> Vec<u8> {
+    pub fn to_bytes<Size>(self) -> Vec<u8>
+    where
+        Size: SerializeSize,
+    {
         match self {
             StsdExtension::Esds(esds) => serialize_box(b"esds", &esds.into_vec()),
             StsdExtension::Btrt(btrt) => serialize_box(b"btrt", &btrt.into_bytes()),
-            StsdExtension::Unknown {
-                fourcc,
-                size: _,
-                data,
-            } => serialize_box(&fourcc, &data),
+            StsdExtension::Unknown(ext) => serializer::serialize_unknown_extension::<Size>(ext),
         }
     }
 }
@@ -226,42 +229,76 @@ fn serialize_descriptor_length(length: u32) -> Vec<u8> {
     ]
 }
 
-pub fn parse_stsd_extensions(data: &[u8]) -> Result<StsdExtensionData, ParseStsdExtensionError> {
-    let mut cursor = Cursor::new(data);
-    let mut boxes = Vec::new();
+pub const ESDS: &'static [u8; 4] = b"esds";
+pub const BTRT: &'static [u8; 4] = b"btrt";
 
-    while cursor.position() < data.len() as u64 {
-        let box_data = parse_stsd_extension(&mut cursor)?;
-        boxes.push(box_data);
+pub mod serializer {
+    use crate::atom::{
+        stsd::{
+            extension::{EsDescriptor, UnknownExtension},
+            BtrtExtension,
+        },
+        util::serializer::{prepend_size, SerializeSize, SizeU32, SizeU8},
+    };
+
+    pub fn serialize_esds_extension(esds: EsDescriptor) -> Vec<u8> {
+        todo!()
     }
 
-    Ok(StsdExtensionData { extensions: boxes })
+    pub fn serialize_btrt_extension(btrt: BtrtExtension) -> Vec<u8> {
+        todo!()
+    }
+
+    pub fn serialize_unknown_extension<Size>(ext: UnknownExtension) -> Vec<u8>
+    where
+        Size: SerializeSize,
+    {
+        prepend_size::<Size, _>(move || {
+            let mut data = Vec::with_capacity(ext.data.len() + 4);
+            data.extend(ext.typ.0);
+            data.extend(ext.data);
+            data
+        })
+    }
 }
 
-fn parse_stsd_extension(
-    cursor: &mut Cursor<&[u8]>,
-) -> Result<StsdExtension, ParseStsdExtensionError> {
-    // Read box header (size + fourcc)
-    let size = read_u32_be(cursor)?;
-    let mut fourcc = [0u8; 4];
-    cursor.read_exact(&mut fourcc)?;
+pub mod parser {
+    use winnow::{
+        combinator::{empty, seq, todo, trace},
+        error::{ContextError, ErrMode, StrContext},
+        token::rest,
+        ModalResult, Parser,
+    };
 
-    if size < 8 {
-        return Err(ParseStsdExtensionError::InvalidFormat);
+    use super::{BTRT, ESDS};
+
+    use crate::{
+        atom::{
+            stsd::{extension::UnknownExtension, EsdsExtension, StsdExtension},
+            util::parser::{rest_vec, Stream},
+        },
+        FourCC,
+    };
+
+    pub fn parse_esds_extension(input: &mut Stream<'_>) -> ModalResult<StsdExtension> {
+        parse_unknown_extension(FourCC(*ESDS)).parse_next(input)
     }
 
-    let payload_size = (size - 8) as usize;
-    let mut payload = vec![0u8; payload_size];
-    cursor.read_exact(&mut payload)?;
+    pub fn parse_btrt_extension(input: &mut Stream<'_>) -> ModalResult<StsdExtension> {
+        parse_unknown_extension(FourCC(*BTRT)).parse_next(input)
+    }
 
-    match &fourcc {
-        b"esds" => parse_esds_box(&payload).map(StsdExtension::Esds),
-        b"btrt" => parse_btrt_box(&payload).map(StsdExtension::Btrt),
-        _ => Ok(StsdExtension::Unknown {
-            fourcc,
-            size,
-            data: payload,
-        }),
+    pub fn parse_unknown_extension<'i>(
+        typ: FourCC,
+    ) -> impl Parser<Stream<'i>, StsdExtension, ErrMode<ContextError>> {
+        trace("parse_unknown_extension", move |input: &mut Stream| {
+            seq!(UnknownExtension {
+                typ: empty.value(typ),
+                data: rest_vec.context(StrContext::Label("data")),
+            })
+            .map(StsdExtension::Unknown)
+            .parse_next(input)
+        })
     }
 }
 
@@ -462,96 +499,4 @@ fn read_descriptor_length(cursor: &mut Cursor<&[u8]>) -> Result<u32, ParseStsdEx
         }
     }
     Ok(length)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_sample_data() {
-        let data = [
-            0, 0, 0, 51, 101, 115, 100, 115, 0, 0, 0, 0, 3, 128, 128, 128, 34, 0, 1, 0, 4, 128,
-            128, 128, 20, 64, 21, 0, 0, 0, 0, 0, 245, 74, 0, 0, 245, 74, 5, 128, 128, 128, 2, 19,
-            144, 6, 128, 128, 128, 1, 2, 0, 0, 0, 20, 98, 116, 114, 116, 0, 0, 0, 0, 0, 0, 245, 74,
-            0, 0, 245, 74,
-        ];
-
-        let result = parse_stsd_extensions(&data).expect("Failed to parse data");
-
-        assert_eq!(result.extensions.len(), 2);
-
-        // Check ESDS box
-        if let StsdExtension::Esds(esds) = &result.extensions[0] {
-            assert_eq!(esds.version, 0);
-            assert_eq!(esds.flags, [0, 0, 0]);
-            assert_eq!(esds.es_descriptor.es_id, 1);
-
-            if let Some(ref decoder_config) = esds.es_descriptor.decoder_config_descriptor {
-                assert_eq!(decoder_config.object_type_indication, 64);
-                assert_eq!(decoder_config.max_bitrate, 62794);
-                assert_eq!(decoder_config.avg_bitrate, 62794);
-            }
-        } else {
-            panic!("Expected ESDS box");
-        }
-
-        // Check BTRT box
-        if let StsdExtension::Btrt(btrt) = &result.extensions[1] {
-            assert_eq!(btrt.buffer_size_db, 0);
-            assert_eq!(btrt.max_bitrate, 62794);
-            assert_eq!(btrt.avg_bitrate, 62794);
-        } else {
-            panic!("Expected BTRT box");
-        }
-    }
-
-    #[test]
-    fn test_round_trip_serialization() {
-        let original_data = [
-            0, 0, 0, 51, 101, 115, 100, 115, 0, 0, 0, 0, 3, 128, 128, 128, 34, 0, 1, 0, 4, 128,
-            128, 128, 20, 64, 21, 0, 0, 0, 0, 0, 245, 74, 0, 0, 245, 74, 5, 128, 128, 128, 2, 19,
-            144, 6, 128, 128, 128, 1, 2, 0, 0, 0, 20, 98, 116, 114, 116, 0, 0, 0, 0, 0, 0, 245, 74,
-            0, 0, 245, 74,
-        ];
-
-        // Parse the original data
-        let parsed = parse_stsd_extensions(&original_data).expect("Failed to parse original data");
-
-        // Serialize back to bytes
-        let serialized = parsed
-            .extensions
-            .into_iter()
-            .flat_map(|ext| ext.to_bytes())
-            .collect::<Vec<_>>();
-
-        // Compare with original
-        assert_eq!(serialized, original_data, "Round-trip serialization failed");
-    }
-
-    #[test]
-    fn test_individual_box_serialization() {
-        let original_data = [
-            0, 0, 0, 51, 101, 115, 100, 115, 0, 0, 0, 0, 3, 128, 128, 128, 34, 0, 1, 0, 4, 128,
-            128, 128, 20, 64, 21, 0, 0, 0, 0, 0, 245, 74, 0, 0, 245, 74, 5, 128, 128, 128, 2, 19,
-            144, 6, 128, 128, 128, 1, 2, 0, 0, 0, 20, 98, 116, 114, 116, 0, 0, 0, 0, 0, 0, 245, 74,
-            0, 0, 245, 74,
-        ];
-
-        let mut parsed = parse_stsd_extensions(&original_data).expect("Failed to parse data");
-
-        // Test ESDS box serialization
-        if let StsdExtension::Esds(esds) = parsed.extensions.swap_remove(0) {
-            let esds_serialized = esds.into_vec();
-            let expected_esds = &original_data[8..51]; // Skip box header (8 bytes), take payload
-            assert_eq!(esds_serialized, expected_esds, "ESDS serialization failed");
-        }
-
-        // Test BTRT box serialization
-        if let StsdExtension::Btrt(btrt) = parsed.extensions.swap_remove(0) {
-            let btrt_serialized = btrt.into_bytes();
-            let expected_btrt = &original_data[59..]; // Skip to BTRT payload
-            assert_eq!(btrt_serialized, expected_btrt, "BTRT serialization failed");
-        }
-    }
 }

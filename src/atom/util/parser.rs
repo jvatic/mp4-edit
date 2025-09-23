@@ -4,7 +4,7 @@ use winnow::{
     binary::{be_u16, be_u32, u8},
     combinator::trace,
     error::{ParserError, StrContext, StrContextValue},
-    token::take,
+    token::{rest, take},
     Bytes, LocatingSlice, ModalResult, Parser,
 };
 
@@ -97,6 +97,14 @@ where
     })
 }
 
+pub fn rest_vec<'i>(input: &mut Stream<'i>) -> ModalResult<Vec<u8>> {
+    trace("rest_vec", move |input: &mut Stream<'i>| {
+        let data = rest.parse_next(input)?;
+        Ok(data.to_vec())
+    })
+    .parse_next(input)
+}
+
 pub fn fixed_array<'i, const N: usize, Input, Output, Error, ParseNext>(
     mut parser: ParseNext,
 ) -> impl Parser<Input, [Output; N], Error> + 'i
@@ -140,6 +148,7 @@ pub mod combinators {
     use winnow::combinator::trace;
     use winnow::error::ParserError;
     use winnow::stream::{Location, Stream, StreamIsPartial, ToUsize, UpdateSlice};
+    use winnow::token::take;
     use winnow::Parser;
 
     pub fn count_then_repeat<Input, Output, Count, Error, CountParser, ParseNext>(
@@ -160,6 +169,30 @@ pub mod combinators {
                 items.push(parser.parse_next(input)?);
             }
             Ok(items)
+        })
+    }
+
+    pub fn inclusive_length_and_then<Input, Output, Count, Error, CountParser, ParseNext>(
+        mut count: CountParser,
+        mut parser: ParseNext,
+    ) -> impl Parser<Input, Output, Error>
+    where
+        Input: StreamIsPartial + Stream + Location + UpdateSlice + Clone,
+        Count: ToUsize,
+        CountParser: Parser<Input, Count, Error>,
+        ParseNext: Parser<Input, Output, Error>,
+        Error: ParserError<Input>,
+    {
+        trace("inclusive_length_and_then", move |i: &mut Input| {
+            let size = with_len(count.by_ref().map(|c| c.to_usize()))
+                .map(|(a, b)| a.saturating_sub(b))
+                .complete_err()
+                .parse_next(i)?;
+            let data = take(size).parse_next(i)?;
+            let mut data = Input::update_slice(i.clone(), data);
+            let _ = data.complete();
+            let o = parser.by_ref().complete_err().parse_next(&mut data)?;
+            Ok(o)
         })
     }
 

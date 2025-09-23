@@ -22,6 +22,12 @@ impl PartialEq<&[u8; 4]> for FourCC {
     }
 }
 
+impl PartialEq<[u8; 4]> for FourCC {
+    fn eq(&self, other: &[u8; 4]) -> bool {
+        &self.0 == other
+    }
+}
+
 impl fmt::Display for FourCC {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(

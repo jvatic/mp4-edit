@@ -1,15 +1,21 @@
 use anyhow::{anyhow, Context};
 use derive_more::Display;
 use futures_io::AsyncRead;
-use std::io::{Cursor, Read};
+use std::{
+    io::{Cursor, Read},
+    marker::PhantomData,
+};
 
 pub use crate::atom::stsd::extension::{
     BtrtExtension, DecoderSpecificInfo, EsdsExtension, StsdExtension,
 };
 use crate::{
     atom::{
-        stsd::extension::parse_stsd_extensions,
-        {util::async_to_sync_read, FourCC},
+        util::{
+            read_to_end,
+            serializer::{SizeU32, SizeU8},
+        },
+        FourCC,
     },
     parser::ParseAtom,
     writer::SerializeAtom,
@@ -196,12 +202,16 @@ pub struct TextSampleEntry {
     pub background_color: [u16; 3],
     /// Default text box (top, left, bottom, right)
     pub default_text_box: [u16; 4],
-    /// Default style record
-    pub default_style: Option<Vec<u8>>,
-    /// Font table
-    pub font_table: Option<Vec<u8>>,
+    pub unknown: Option<[u8; 3]>,
     /// Extension data (codec-specific atoms)
     pub extensions: Vec<StsdExtension>,
+    pub extensions_size: ExtensionSizeType,
+}
+
+#[derive(Debug, Clone)]
+pub enum ExtensionSizeType {
+    U8,
+    U32,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -246,7 +256,8 @@ impl ParseAtom for SampleDescriptionTableAtom {
         if atom_type != STSD {
             return Err(ParseError::new_unexpected_atom(atom_type, STSD));
         }
-        parse_stsd_data(async_to_sync_read(reader).await?).map_err(ParseError::new_atom_parse)
+        let data = read_to_end(reader).await?;
+        parser::parse_stsd_data(&data)
     }
 }
 
@@ -308,7 +319,7 @@ impl SerializeAtom for SampleDescriptionTableAtom {
                     entry_data.extend_from_slice(&video.depth.to_be_bytes());
                     entry_data.extend_from_slice(&video.color_table_id.to_be_bytes());
                     video.extensions.into_iter().for_each(|ext| {
-                        let ext_data: Vec<u8> = ext.to_bytes();
+                        let ext_data: Vec<u8> = ext.to_bytes::<SizeU32>();
                         entry_data.extend_from_slice(&ext_data);
                     });
                 }
@@ -324,7 +335,7 @@ impl SerializeAtom for SampleDescriptionTableAtom {
                     entry_data
                         .extend_from_slice(&((audio.sample_rate * 65536.0) as u32).to_be_bytes());
                     audio.extensions.into_iter().for_each(|ext| {
-                        let ext_data = ext.to_bytes();
+                        let ext_data = ext.to_bytes::<SizeU32>();
                         entry_data.extend_from_slice(&ext_data);
                     });
                 }
@@ -346,19 +357,17 @@ impl SerializeAtom for SampleDescriptionTableAtom {
                         entry_data.extend_from_slice(&coord.to_be_bytes());
                     }
 
-                    // Add default style if present
-                    if let Some(ref style_data) = text.default_style {
-                        entry_data.extend_from_slice(style_data);
-                    }
-
-                    // Add font table if present
-                    if let Some(ref font_data) = text.font_table {
-                        entry_data.extend_from_slice(font_data);
+                    if let Some(unknown) = text.unknown {
+                        entry_data.extend(unknown);
                     }
 
                     // Add extensions
+                    let ext_size = text.extensions_size;
                     text.extensions.into_iter().for_each(|ext| {
-                        let ext_data: Vec<u8> = ext.to_bytes();
+                        let ext_data = match ext_size {
+                            ExtensionSizeType::U8 => ext.to_bytes::<SizeU8>(),
+                            ExtensionSizeType::U32 => ext.to_bytes::<SizeU32>(),
+                        };
                         entry_data.extend_from_slice(&ext_data);
                     });
                 }
@@ -385,428 +394,298 @@ impl SerializeAtom for SampleDescriptionTableAtom {
     }
 }
 
-fn parse_stsd_data<R: Read>(mut reader: R) -> Result<SampleDescriptionTableAtom, anyhow::Error> {
-    // Read version and flags (4 bytes)
-    let mut version_flags = [0u8; 4];
-    reader
-        .read_exact(&mut version_flags)
-        .context("read version and flags")?;
+mod parser {
+    use std::marker::PhantomData;
 
-    let version = version_flags[0];
-    let flags = [version_flags[1], version_flags[2], version_flags[3]];
-
-    // Validate version
-    if version != 0 {
-        return Err(anyhow!("unsupported version {}", version));
-    }
-
-    // Read entry count
-    let mut count_buf = [0u8; 4];
-    reader
-        .read_exact(&mut count_buf)
-        .context("read entry count")?;
-    let entry_count = u32::from_be_bytes(count_buf);
-
-    // Validate entry count
-    if entry_count > 1000 {
-        return Err(anyhow!("Too many sample entries: {}", entry_count));
-    }
-
-    let mut entries = Vec::with_capacity(entry_count as usize);
-
-    for i in 0..entry_count {
-        let entry = parse_sample_entry(&mut reader).context(format!("parse sample entry {i}"))?;
-        entries.push(entry);
-    }
-
-    Ok(SampleDescriptionTableAtom {
-        version,
-        flags,
-        entries,
-    })
-}
-
-fn parse_sample_entry<R: Read>(mut reader: R) -> Result<SampleEntry, anyhow::Error> {
-    // Read sample entry size (4 bytes)
-    let mut size_buf = [0u8; 4];
-    reader
-        .read_exact(&mut size_buf)
-        .context("read sample entry size")?;
-    let size = u32::from_be_bytes(size_buf);
-
-    if size < 16 {
-        return Err(anyhow!("Invalid sample entry size: {}", size));
-    }
-
-    // Read sample entry type (4 bytes)
-    let mut type_buf = [0u8; 4];
-    reader
-        .read_exact(&mut type_buf)
-        .context("read sample entry type")?;
-    let entry_type = SampleEntryType::from_bytes(&type_buf);
-
-    // Read reserved (6 bytes)
-    let mut reserved = [0u8; 6];
-    reader.read_exact(&mut reserved).context("read reserved")?;
-    if reserved != [0u8; 6] {
-        return Err(anyhow!("Invalid reserved bytes: {:?}", reserved));
-    }
-
-    // Read data reference index (2 bytes)
-    let mut dref_buf = [0u8; 2];
-    reader
-        .read_exact(&mut dref_buf)
-        .context("read data reference index")?;
-    let data_reference_index = u16::from_be_bytes(dref_buf);
-
-    // Read remaining data
-    let remaining_size = size - 16; // 4 + 4 + 6 + 2 = 16 bytes already read
-    let mut data = vec![0u8; remaining_size as usize];
-    reader
-        .read_exact(&mut data)
-        .context("read sample entry data")?;
-
-    let data = match entry_type {
-        SampleEntryType::Avc1 | SampleEntryType::Hvc1 | SampleEntryType::Mp4v => {
-            SampleEntryData::Video(parse_video_sample_entry(&data)?)
-        }
-        SampleEntryType::Mp4a | SampleEntryType::Aavd => {
-            SampleEntryData::Audio(parse_audio_sample_entry(&data)?)
-        }
-        SampleEntryType::Tx3g
-        | SampleEntryType::Wvtt
-        | SampleEntryType::Stpp
-        | SampleEntryType::Text => SampleEntryData::Text(parse_text_sample_entry(&data)?),
-        _ => SampleEntryData::Other(data),
+    use winnow::{
+        binary::{be_i16, be_u16, be_u32, i8, length_and_then, u8},
+        combinator::{alt, dispatch, empty, fail, opt, repeat, seq, todo, trace},
+        error::{ContextError, ErrMode, Needed, ParserError, StrContext, StrContextValue},
+        stream::ToUsize,
+        token::rest,
+        ModalResult, Parser,
     };
 
-    Ok(SampleEntry {
-        entry_type,
-        data_reference_index,
-        data,
-    })
-}
+    use super::{
+        AudioSampleEntry, SampleDescriptionTableAtom, SampleEntry, SampleEntryData,
+        SampleEntryType, TextSampleEntry, VideoSampleEntry,
+    };
+    use crate::atom::{
+        stsd::{
+            extension::{
+                parser::{parse_btrt_extension, parse_esds_extension, parse_unknown_extension},
+                BTRT, ESDS,
+            },
+            ExtensionSizeType, StsdExtension,
+        },
+        util::{
+            parser::{
+                byte_array,
+                combinators::{count_then_repeat, inclusive_length_and_then},
+                fixed_array, fixed_point_16x16, flags3, fourcc, stream, version, Stream,
+            },
+            serializer::{SerializeSize, SizeU32},
+        },
+    };
 
-fn parse_video_sample_entry(data: &[u8]) -> Result<VideoSampleEntry, anyhow::Error> {
-    let mut cursor = Cursor::new(data);
-
-    // Read version (2 bytes)
-    let mut buf2 = [0u8; 2];
-    cursor.read_exact(&mut buf2).context("read version")?;
-    let version = u16::from_be_bytes(buf2);
-
-    // Read revision level (2 bytes)
-    cursor
-        .read_exact(&mut buf2)
-        .context("read revision level")?;
-    let revision_level = u16::from_be_bytes(buf2);
-
-    // Read vendor (4 bytes)
-    let mut vendor = [0u8; 4];
-    cursor.read_exact(&mut vendor).context("read vendor")?;
-
-    // Read temporal quality (4 bytes)
-    let mut buf4 = [0u8; 4];
-    cursor
-        .read_exact(&mut buf4)
-        .context("read temporal quality")?;
-    let temporal_quality = u32::from_be_bytes(buf4);
-
-    // Read spatial quality (4 bytes)
-    cursor
-        .read_exact(&mut buf4)
-        .context("read spatial quality")?;
-    let spatial_quality = u32::from_be_bytes(buf4);
-
-    // Read width (2 bytes)
-    cursor.read_exact(&mut buf2).context("read width")?;
-    let width = u16::from_be_bytes(buf2);
-
-    // Read height (2 bytes)
-    cursor.read_exact(&mut buf2).context("read height")?;
-    let height = u16::from_be_bytes(buf2);
-
-    // Read horizontal resolution (4 bytes, 16.16 fixed point)
-    cursor
-        .read_exact(&mut buf4)
-        .context("read horizontal resolution")?;
-    let horizresolution = u32::from_be_bytes(buf4) as f32 / 65536.0;
-
-    // Read vertical resolution (4 bytes, 16.16 fixed point)
-    cursor
-        .read_exact(&mut buf4)
-        .context("read vertical resolution")?;
-    let vertresolution = u32::from_be_bytes(buf4) as f32 / 65536.0;
-
-    // Read entry data size (4 bytes)
-    cursor
-        .read_exact(&mut buf4)
-        .context("read entry data size")?;
-    let entry_data_size = u32::from_be_bytes(buf4);
-
-    // Read frame count (2 bytes)
-    cursor.read_exact(&mut buf2).context("read frame count")?;
-    let frame_count = u16::from_be_bytes(buf2);
-
-    // Read compressor name (32 bytes, Pascal string)
-    let mut compressor_bytes = [0u8; 32];
-    cursor
-        .read_exact(&mut compressor_bytes)
-        .context("read compressor name")?;
-    let compressor_name = parse_pascal_string(&compressor_bytes);
-
-    // Read depth (2 bytes)
-    cursor.read_exact(&mut buf2).context("read depth")?;
-    let depth = u16::from_be_bytes(buf2);
-
-    // Read color table ID (2 bytes, signed)
-    cursor
-        .read_exact(&mut buf2)
-        .context("read color table ID")?;
-    let color_table_id = i16::from_be_bytes(buf2);
-
-    // Read remaining extension data
-    let mut extension_data = Vec::new();
-    cursor
-        .read_to_end(&mut extension_data)
-        .context("read extensions")?;
-
-    let extensions = parse_stsd_extensions(&extension_data)
-        .context("parse extensions")?
-        .extensions;
-
-    Ok(VideoSampleEntry {
-        version,
-        revision_level,
-        vendor,
-        temporal_quality,
-        spatial_quality,
-        width,
-        height,
-        horizresolution,
-        vertresolution,
-        entry_data_size,
-        frame_count,
-        compressor_name,
-        depth,
-        color_table_id,
-        extensions,
-    })
-}
-
-fn parse_audio_sample_entry(data: &[u8]) -> Result<AudioSampleEntry, anyhow::Error> {
-    let mut cursor = Cursor::new(data);
-
-    // Read version (2 bytes)
-    let mut buf2 = [0u8; 2];
-    cursor.read_exact(&mut buf2).context("read version")?;
-    let version = u16::from_be_bytes(buf2);
-
-    // Read revision level (2 bytes)
-    cursor
-        .read_exact(&mut buf2)
-        .context("read revision level")?;
-    let revision_level = u16::from_be_bytes(buf2);
-
-    // Read vendor (4 bytes)
-    let mut vendor = [0u8; 4];
-    cursor.read_exact(&mut vendor).context("read vendor")?;
-
-    // Read channel count (2 bytes)
-    cursor.read_exact(&mut buf2).context("read channel count")?;
-    let channel_count = u16::from_be_bytes(buf2);
-
-    // Read sample size (2 bytes)
-    cursor.read_exact(&mut buf2).context("read sample size")?;
-    let sample_size = u16::from_be_bytes(buf2);
-
-    // Read compression ID (2 bytes)
-    cursor
-        .read_exact(&mut buf2)
-        .context("read compression ID")?;
-    let compression_id = u16::from_be_bytes(buf2);
-
-    // Read packet size (2 bytes)
-    cursor.read_exact(&mut buf2).context("read packet size")?;
-    let packet_size = u16::from_be_bytes(buf2);
-
-    // Read sample rate (4 bytes, 16.16 fixed point)
-    let mut buf4 = [0u8; 4];
-    cursor.read_exact(&mut buf4).context("read sample rate")?;
-    let sample_rate = u32::from_be_bytes(buf4) as f32 / 65536.0;
-
-    // Read remaining extension data
-    let mut extension_data = Vec::new();
-    cursor
-        .read_to_end(&mut extension_data)
-        .context("read extensions")?;
-
-    let extensions = parse_stsd_extensions(&extension_data)
-        .context("parse extensions")?
-        .extensions;
-
-    Ok(AudioSampleEntry {
-        version,
-        revision_level,
-        vendor,
-        channel_count,
-        sample_size,
-        compression_id,
-        packet_size,
-        sample_rate,
-        extensions,
-    })
-}
-
-fn parse_text_sample_entry(data: &[u8]) -> Result<TextSampleEntry, anyhow::Error> {
-    let mut cursor = Cursor::new(data);
-
-    // Read version (2 bytes)
-    let mut buf2 = [0u8; 2];
-    cursor.read_exact(&mut buf2).context("read version")?;
-    let version = u16::from_be_bytes(buf2);
-
-    // Read revision level (2 bytes)
-    cursor
-        .read_exact(&mut buf2)
-        .context("read revision level")?;
-    let revision_level = u16::from_be_bytes(buf2);
-
-    // Read vendor (4 bytes)
-    let mut vendor = [0u8; 4];
-    cursor.read_exact(&mut vendor).context("read vendor")?;
-
-    // Read display flags (4 bytes)
-    let mut buf4 = [0u8; 4];
-    cursor.read_exact(&mut buf4).context("read display flags")?;
-    let display_flags = u32::from_be_bytes(buf4);
-
-    // Read text justification (1 byte)
-    let mut buf1 = [0u8; 1];
-    cursor
-        .read_exact(&mut buf1)
-        .context("read text justification")?;
-    let text_justification = buf1[0] as i8;
-
-    // Read background color (3 * 2 bytes = 6 bytes)
-    let mut background_color = [0u16; 3];
-    for item in &mut background_color {
-        cursor
-            .read_exact(&mut buf2)
-            .context("read background color")?;
-        *item = u16::from_be_bytes(buf2);
+    pub fn parse_stsd_data(input: &[u8]) -> Result<SampleDescriptionTableAtom, crate::ParseError> {
+        parse_stsd_data_inner
+            .parse(stream(input))
+            .map_err(crate::ParseError::from_winnow)
     }
 
-    // Read default text box (4 * 2 bytes = 8 bytes)
-    let mut default_text_box = [0u16; 4];
-    for item in &mut default_text_box {
-        cursor
-            .read_exact(&mut buf2)
-            .context("read default text box")?;
-        *item = u16::from_be_bytes(buf2);
+    fn parse_stsd_data_inner(input: &mut Stream<'_>) -> ModalResult<SampleDescriptionTableAtom> {
+        trace(
+            "stsd",
+            seq!(SampleDescriptionTableAtom {
+                version: version,
+                flags: flags3,
+                entries: count_then_repeat(be_u32, inclusive_length_and_then(be_u32, entry))
+                    .context(StrContext::Label("entries")),
+            })
+            .context(StrContext::Label("stsd")),
+        )
+        .parse_next(input)
     }
 
-    // For simplicity, we'll store any remaining data as raw bytes
-    // In a full implementation, you'd parse the default style and font table
-    let mut remaining_data = Vec::new();
-    cursor
-        .read_to_end(&mut remaining_data)
-        .context("read remaining text entry data")?;
+    fn entry(input: &mut Stream<'_>) -> ModalResult<SampleEntry> {
+        trace(
+            "entry",
+            seq!(SampleEntry {
+                entry_type: byte_array
+                    .map(|buf: [u8; 4]| SampleEntryType::from_bytes(&buf))
+                    .context(StrContext::Label("entry_type")),
+                _: reserved,
+                data_reference_index: be_u16.context(StrContext::Label("data_reference_index")),
+                data: match entry_type {
+                    SampleEntryType::Avc1 | SampleEntryType::Hvc1 | SampleEntryType::Mp4v => {
+                        video_sample_entry
+                    }
+                    SampleEntryType::Mp4a | SampleEntryType::Aavd => {
+                        audio_sample_entry
+                    }
+                    SampleEntryType::Tx3g
+                    | SampleEntryType::Wvtt
+                    | SampleEntryType::Stpp
+                    | SampleEntryType::Text => text_sample_entry,
+                    _ => other_sample_entry,
+                },
+            }),
+        )
+        .parse_next(input)
+    }
 
-    // Try to parse extensions from remaining data, but handle gracefully if it fails
-    let (default_style, font_table, extensions) = if remaining_data.is_empty() {
-        (None, None, Vec::new())
-    } else {
-        // Try to parse as extensions first
-        match parse_stsd_extensions(&remaining_data) {
-            Ok(parsed) => (None, None, parsed.extensions),
-            Err(_) => {
-                // If extension parsing fails, treat as raw style/font data
-                (Some(remaining_data), None, Vec::new())
+    fn reserved(input: &mut Stream<'_>) -> ModalResult<[u8; 6]> {
+        trace("reserved", byte_array).parse_next(input)
+    }
+
+    fn video_sample_entry(input: &mut Stream<'_>) -> ModalResult<SampleEntryData> {
+        trace(
+            "video_sample_entry",
+            seq!(VideoSampleEntry {
+                version: be_u16.context(StrContext::Label("version")),
+                revision_level: be_u16.context(StrContext::Label("revision_level")),
+                // TODO: is this a fourcc?
+                vendor: byte_array.context(StrContext::Label("vendor")),
+                temporal_quality: be_u32.context(StrContext::Label("temporal_quality")),
+                spatial_quality: be_u32.context(StrContext::Label("spatial_quality")),
+                width: be_u16.context(StrContext::Label("width")),
+                height: be_u16.context(StrContext::Label("height")),
+                horizresolution: fixed_point_16x16.context(StrContext::Label("horizresolution")),
+                vertresolution: fixed_point_16x16.context(StrContext::Label("vertresolution")),
+                entry_data_size: be_u32.context(StrContext::Label("entry_data_size")),
+                frame_count: be_u16.context(StrContext::Label("frame_count")),
+                compressor_name: pascal_string.context(StrContext::Label("compressor_name")),
+                depth: be_u16.context(StrContext::Label("depth")),
+                color_table_id: be_i16.context(StrContext::Label("color_table_id")),
+                extensions: extensions(be_u32).context(StrContext::Label("extensions")),
+            })
+            .map(SampleEntryData::Video),
+        )
+        .context(StrContext::Label("video"))
+        .parse_next(input)
+    }
+
+    fn audio_sample_entry(input: &mut Stream<'_>) -> ModalResult<SampleEntryData> {
+        trace(
+            "audio_sample_entry",
+            seq!(AudioSampleEntry {
+                version: be_u16.context(StrContext::Label("version")),
+                revision_level: be_u16.context(StrContext::Label("revision_level")),
+                // TODO: is this a fourcc?
+                vendor: byte_array.context(StrContext::Label("vendor")),
+                channel_count: be_u16.context(StrContext::Label("channel_count")),
+                sample_size: be_u16.context(StrContext::Label("sample_size")),
+                compression_id: be_u16.context(StrContext::Label("compression_id")),
+                packet_size: be_u16.context(StrContext::Label("packet_size")),
+                sample_rate: fixed_point_16x16.context(StrContext::Label("sample_rate")),
+                extensions: extensions(be_u32).context(StrContext::Label("extensions")),
+            })
+            .map(SampleEntryData::Audio),
+        )
+        .context(StrContext::Label("audio"))
+        .parse_next(input)
+    }
+
+    fn text_sample_entry(input: &mut Stream<'_>) -> ModalResult<SampleEntryData> {
+        #[derive(Clone, Copy)]
+        struct TextSampleEntryBase {
+            pub version: u16,
+            pub revision_level: u16,
+            pub vendor: [u8; 4],
+            pub display_flags: u32,
+            pub text_justification: i8,
+            pub background_color: [u16; 3],
+            pub default_text_box: [u16; 4],
+        }
+
+        trace("text_sample_entry", move |input: &mut Stream<'_>| {
+            let base = seq!(TextSampleEntryBase {
+                version: be_u16.context(StrContext::Label("version")),
+                revision_level: be_u16.context(StrContext::Label("revision_level")),
+                // TODO: is this a fourcc?
+                vendor: byte_array.context(StrContext::Label("vendor")),
+                display_flags: be_u32.context(StrContext::Label("display_flags")),
+                text_justification: i8.context(StrContext::Label("text_justification")),
+                background_color: fixed_array(be_u16)
+                    .context(StrContext::Label("background_color")),
+                default_text_box: fixed_array(be_u16)
+                    .context(StrContext::Label("default_text_box")),
+            })
+            .parse_next(input)?;
+
+            fn finally(
+                base: TextSampleEntryBase,
+                unknown: Option<[u8; 3]>,
+                extensions: Vec<StsdExtension>,
+                extensions_size: ExtensionSizeType,
+            ) -> TextSampleEntry {
+                let TextSampleEntryBase {
+                    version,
+                    revision_level,
+                    vendor,
+                    display_flags,
+                    text_justification,
+                    background_color,
+                    default_text_box,
+                } = base;
+
+                TextSampleEntry {
+                    version,
+                    revision_level,
+                    vendor,
+                    display_flags,
+                    text_justification,
+                    background_color,
+                    default_text_box,
+                    unknown,
+                    extensions,
+                    extensions_size,
+                }
             }
-        }
-    };
 
-    Ok(TextSampleEntry {
-        version,
-        revision_level,
-        vendor,
-        display_flags,
-        text_justification,
-        background_color,
-        default_text_box,
-        default_style,
-        font_table,
-        extensions,
-    })
-}
-
-fn parse_pascal_string(bytes: &[u8; 32]) -> String {
-    if bytes[0] == 0 {
-        return String::new();
+            alt((
+                (empty.value(None), extensions(u8))
+                    .map(move |(unknown, extensions)| {
+                        SampleEntryData::Text(finally(
+                            base,
+                            unknown,
+                            extensions,
+                            ExtensionSizeType::U8,
+                        ))
+                    })
+                    .context(StrContext::Label("u8 sized extensions")),
+                (empty.value(None), extensions(be_u32))
+                    .map(move |(unknown, extensions)| {
+                        SampleEntryData::Text(finally(
+                            base,
+                            unknown,
+                            extensions,
+                            ExtensionSizeType::U32,
+                        ))
+                    })
+                    .context(StrContext::Label("be_u32 sized extensions")),
+                (byte_array::<3>.map(|v| Some(v)), extensions(be_u32))
+                    .map(move |(unknown, extensions)| {
+                        SampleEntryData::Text(finally(
+                            base,
+                            unknown,
+                            extensions,
+                            ExtensionSizeType::U32,
+                        ))
+                    })
+                    .context(StrContext::Label(
+                        "3 bytes and then be_u32 sized extensions",
+                    )),
+                fail.context(StrContext::Expected(StrContextValue::Description(
+                    "u8 sized extensions",
+                )))
+                .context(StrContext::Expected(StrContextValue::Description(
+                    "be_u32 sized extensions",
+                )))
+                .context(StrContext::Expected(StrContextValue::Description(
+                    "3 bytes and then be_u32 sized extensions",
+                ))),
+            ))
+            .parse_next(input)
+        })
+        .context(StrContext::Label("text"))
+        .parse_next(input)
     }
 
-    let length = bytes[0] as usize;
-    if length >= 32 {
-        return String::new();
+    fn other_sample_entry(input: &mut Stream<'_>) -> ModalResult<SampleEntryData> {
+        trace(
+            "other_sample_entry",
+            rest.map(|buf: &[u8]| buf.to_vec())
+                .map(SampleEntryData::Other),
+        )
+        .context(StrContext::Label("unknown"))
+        .parse_next(input)
     }
 
-    std::str::from_utf8(&bytes[1..=length])
-        .unwrap_or("")
-        .to_string()
+    fn extensions<'i, ParseSize, UsizeLike>(
+        mut size_parser: ParseSize,
+    ) -> impl Parser<Stream<'i>, Vec<StsdExtension>, ErrMode<ContextError>>
+    where
+        UsizeLike: ToUsize,
+        ParseSize: Parser<Stream<'i>, UsizeLike, ErrMode<ContextError>>,
+    {
+        trace("extensions", move |input: &mut Stream<'i>| {
+            repeat(
+                1..,
+                inclusive_length_and_then(
+                    size_parser.by_ref(),
+                    dispatch! {fourcc;
+                        typ if typ == ESDS => parse_esds_extension,
+                        typ if typ == BTRT => parse_btrt_extension,
+                        typ => parse_unknown_extension(typ),
+                    },
+                ),
+            )
+            .parse_next(input)
+        })
+    }
+
+    fn pascal_string(input: &mut Stream<'_>) -> ModalResult<String> {
+        trace(
+            "pascal_string",
+            length_and_then(
+                u8,
+                rest.try_map(|buf: &[u8]| String::from_utf8(buf.to_vec()))
+                    .context(StrContext::Expected(StrContextValue::Description(
+                        "UTF8 string",
+                    ))),
+            ),
+        )
+        .parse_next(input)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::atom::stsd::extension::parse_stsd_extensions;
     use crate::atom::test_utils::test_atom_roundtrip_sync;
 
     use super::*;
-
-    #[test]
-    fn test_pascal_string_parsing() {
-        let mut bytes = [0u8; 32];
-        bytes[0] = 5; // length
-        bytes[1..6].copy_from_slice(b"H.264");
-
-        let result = parse_pascal_string(&bytes);
-        assert_eq!(result, "H.264");
-
-        // Test empty string
-        let empty_bytes = [0u8; 32];
-        let empty_result = parse_pascal_string(&empty_bytes);
-        assert_eq!(empty_result, "");
-    }
-
-    #[test]
-    fn test_parse_extensions_round_trip() {
-        let extension_data: Vec<u8> = vec![
-            0, 0, 0, 51, 101, 115, 100, 115, 0, 0, 0, 0, 3, 128, 128, 128, 34, 0, 1, 0, 4, 128,
-            128, 128, 20, 64, 21, 0, 0, 0, 0, 0, 245, 74, 0, 0, 245, 74, 5, 128, 128, 128, 2, 19,
-            144, 6, 128, 128, 128, 1, 2, 0, 0, 0, 20, 98, 116, 114, 116, 0, 0, 0, 0, 0, 0, 245, 74,
-            0, 0, 245, 74,
-        ];
-        let result = parse_stsd_extensions(&extension_data);
-        assert!(result.is_ok(), "extensions should parse");
-        let result = result.unwrap().extensions;
-
-        let round_trip_data: Vec<u8> = result
-            .clone()
-            .into_iter()
-            .flat_map(|ext| ext.to_bytes())
-            .collect();
-
-        assert_eq!(
-            round_trip_data, extension_data,
-            "expected round trip data to equal input data ({result:?})"
-        );
-    }
-
-    /// Test round-trip for all available stsd test data files
-    #[test]
-    fn test_stsd_roundtrip() {
-        test_atom_roundtrip_sync::<SampleDescriptionTableAtom>(STSD);
-    }
 
     #[test]
     fn test_text_sample_entry_type_recognition() {
@@ -823,33 +702,9 @@ mod tests {
         assert_eq!(entry_type.as_str(), "text");
     }
 
+    /// Test round-trip for all available stsd test data files
     #[test]
-    fn test_text_sample_entry_parsing() {
-        // Test that a "text" sample entry gets parsed as Text variant, not Other
-        // This simulates the user's example data
-        let sample_data = vec![
-            0, 0, 0, 1, // version + revision_level
-            0, 0, 0, 0, // vendor
-            0, 0, 0, 0, // display_flags
-            0, // text_justification
-            0, 0, 0, 0, 0, 0, // background_color (3 * u16)
-            0, 0, 0, 1, // default_text_box (4 * u16) - partial
-            0, 0, 0, 0, // default_text_box continued
-            0, 13, // some extension data
-            102, 116, 97, 98, 0, 1, 0, 1, 0, // remaining data
-        ];
-
-        let result = parse_text_sample_entry(&sample_data);
-        assert!(
-            result.is_ok(),
-            "text sample entry should parse successfully: {:?}",
-            result.err()
-        );
-
-        let text_entry = result.unwrap();
-        assert_eq!(text_entry.version, 0);
-        assert_eq!(text_entry.revision_level, 1);
-        assert_eq!(text_entry.display_flags, 0);
-        assert_eq!(text_entry.text_justification, 0);
+    fn test_stsd_roundtrip() {
+        test_atom_roundtrip_sync::<SampleDescriptionTableAtom>(STSD);
     }
 }
