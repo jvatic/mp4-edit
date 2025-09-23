@@ -105,7 +105,7 @@ impl SerializeAtom for MovieHeaderAtom {
 }
 
 mod serializer {
-    use crate::atom::util::parser::{FIXED_POINT_16X16_SCALE, FIXED_POINT_8X8_SCALE};
+    use crate::atom::util::serializer::{fixed_point_16x16, fixed_point_8x8};
 
     use super::MovieHeaderAtom;
 
@@ -148,16 +148,6 @@ mod serializer {
         data.extend_from_slice(&mvhd.next_track_id.to_be_bytes());
 
         data
-    }
-
-    fn fixed_point_16x16(val: f32) -> Vec<u8> {
-        let fixed = (val * FIXED_POINT_16X16_SCALE) as u32;
-        fixed.to_be_bytes().to_vec()
-    }
-
-    fn fixed_point_8x8(val: f32) -> Vec<u8> {
-        let fixed = (val * FIXED_POINT_8X8_SCALE) as u16;
-        fixed.to_be_bytes().to_vec()
     }
 }
 
