@@ -224,14 +224,13 @@ mod parser {
         binary::length_repeat,
         combinator::{seq, trace},
         error::StrContext,
-        token::take,
         Parser,
     };
 
     use super::{DataReferenceAtom, DataReferenceEntry, DataReferenceEntryInner};
     use crate::{
         atom::util::parser::{
-            combinators::with_len, flags3, fourcc, stream, usize_be_u32, version, Stream,
+            combinators::with_len, flags3, fourcc, stream, take_vec, usize_be_u32, version, Stream,
         },
         FourCC,
     };
@@ -299,12 +298,9 @@ mod parser {
             header_size,
         ) = with_len(entry_header).parse_next(input)?;
 
-        let data: Vec<u8> = trace(
-            "entry_data",
-            take(size - header_size).map(|data: &[u8]| data.to_vec()),
-        )
-        .context(StrContext::Label("entry_data"))
-        .parse_next(input)?;
+        let data: Vec<u8> = trace("entry_data", take_vec(size - header_size))
+            .context(StrContext::Label("entry_data"))
+            .parse_next(input)?;
 
         Ok(DataReferenceEntry {
             inner: DataReferenceEntryInner::new(typ, data),
