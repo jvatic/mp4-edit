@@ -19,13 +19,8 @@ pub fn stream(b: &[u8]) -> Stream<'_> {
 pub fn fourcc(input: &mut Stream<'_>) -> winnow::ModalResult<FourCC> {
     trace(
         "fourcc",
-        (
-            u8.context(StrContext::Label("[0]")),
-            u8.context(StrContext::Label("[1]")),
-            u8.context(StrContext::Label("[2]")),
-            u8.context(StrContext::Label("[3]")),
-        )
-            .map(|(a, b, c, d)| FourCC([a, b, c, d]))
+        (byte_array)
+            .map(|buf| FourCC(buf))
             .context(StrContext::Label("fourcc")),
     )
     .parse_next(input)
@@ -38,15 +33,18 @@ pub fn version(input: &mut Stream<'_>) -> winnow::ModalResult<u8> {
 }
 
 pub fn version_0_or_1(input: &mut Stream<'_>) -> ModalResult<u8> {
-    version
-        .verify(|version| *version <= 1)
-        .context(StrContext::Expected(StrContextValue::Description(
-            "expected version 0 or 1",
-        )))
-        .parse_next(input)
+    trace(
+        "version_0_or_1",
+        version
+            .verify(|version| *version <= 1)
+            .context(StrContext::Expected(StrContextValue::Description(
+                "expected version 0 or 1",
+            ))),
+    )
+    .parse_next(input)
 }
 
-pub fn usize_be_u32(input: &mut Stream<'_>) -> winnow::ModalResult<usize> {
+pub fn be_u32_as_usize(input: &mut Stream<'_>) -> winnow::ModalResult<usize> {
     trace(
         "usize_be_u32",
         be_u32
@@ -66,6 +64,14 @@ pub fn be_u32_as_u64(input: &mut Stream<'_>) -> ModalResult<u64> {
     .parse_next(input)
 }
 
+pub fn be_u24(input: &mut Stream<'_>) -> ModalResult<u32> {
+    trace(
+        "be_u24",
+        byte_array::<3>.map(|buf| u32::from_be_bytes([0, buf[0], buf[1], buf[2]])),
+    )
+    .parse_next(input)
+}
+
 pub fn atom_size(input: &mut Stream<'_>) -> ModalResult<usize> {
     trace("atom_size", move |input: &mut Stream| {
         let mut size = be_u32_as_u64.parse_next(input)?;
@@ -78,17 +84,9 @@ pub fn atom_size(input: &mut Stream<'_>) -> ModalResult<usize> {
 }
 
 pub fn flags3(input: &mut Stream<'_>) -> winnow::ModalResult<[u8; 3]> {
-    trace(
-        "flags",
-        (
-            u8.context(StrContext::Label("[0]")),
-            u8.context(StrContext::Label("[1]")),
-            u8.context(StrContext::Label("[2]")),
-        ),
-    )
-    .map(|(a, b, c)| [a, b, c])
-    .context(StrContext::Label("flags"))
-    .parse_next(input)
+    trace("flags", byte_array)
+        .context(StrContext::Label("flags"))
+        .parse_next(input)
 }
 
 /// Parses a u8 len, and then a UTF8 string with that len
@@ -108,14 +106,8 @@ pub fn utf8_string(input: &mut Stream<'_>) -> ModalResult<String> {
     .parse_next(input)
 }
 
-pub fn be_u24(input: &mut Stream<'_>) -> ModalResult<u32> {
-    byte_array::<3>
-        .map(|buf| u32::from_be_bytes([0, buf[0], buf[1], buf[2]]))
-        .parse_next(input)
-}
-
 pub fn byte_array<const N: usize>(input: &mut Stream<'_>) -> winnow::ModalResult<[u8; N]> {
-    take(N).try_map(|b: &[u8]| b.try_into()).parse_next(input)
+    trace("byte_array", fixed_array(u8)).parse_next(input)
 }
 
 pub fn take_vec<'i, UsizeLike, Error>(
@@ -151,7 +143,7 @@ where
     trace("fixed_array", move |input: &mut Input| {
         let mut list: Vec<Output> = Vec::with_capacity(N);
         for _ in 0..N {
-            list.push(parser.parse_next(input)?);
+            list.push(parser.by_ref().complete_err().parse_next(input)?);
         }
         let out: [Output; N] = list.try_into().unwrap();
         Ok(out)
@@ -230,48 +222,18 @@ pub mod combinators {
         })
     }
 
-    pub fn with_len<I, O, E, ParseNext>(parser: ParseNext) -> impls::WithLen<ParseNext, I, O, E>
+    pub fn with_len<I, O, E, ParseNext>(mut parser: ParseNext) -> impl Parser<I, (O, usize), E>
     where
         I: Stream + Location,
         E: ParserError<I>,
         ParseNext: Parser<I, O, E>,
     {
-        impls::WithLen {
-            parser,
-            i: Default::default(),
-            o: Default::default(),
-            e: Default::default(),
-        }
-    }
-
-    mod impls {
-        use winnow::stream::{Location, Stream};
-        use winnow::*;
-
-        pub struct WithLen<F, I, O, E>
-        where
-            F: Parser<I, O, E>,
-            I: Stream + Location,
-        {
-            pub(crate) parser: F,
-            pub(crate) i: core::marker::PhantomData<I>,
-            pub(crate) o: core::marker::PhantomData<O>,
-            pub(crate) e: core::marker::PhantomData<E>,
-        }
-
-        impl<F, I, O, E> Parser<I, (O, usize), E> for WithLen<F, I, O, E>
-        where
-            F: Parser<I, O, E>,
-            I: Stream + Location,
-        {
-            #[inline]
-            fn parse_next(&mut self, input: &mut I) -> Result<(O, usize), E> {
-                let start = input.current_token_start();
-                self.parser.parse_next(input).map(move |output| {
-                    let end = input.previous_token_end();
-                    (output, end - start)
-                })
-            }
-        }
+        trace("with_len", move |input: &mut I| {
+            let start = input.current_token_start();
+            parser.by_ref().parse_next(input).map(move |output| {
+                let end = input.previous_token_end();
+                (output, end - start)
+            })
+        })
     }
 }
