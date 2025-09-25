@@ -345,16 +345,14 @@ mod serialier {
 
 mod parser {
     use winnow::{
-        binary::be_u32,
+        binary::{be_u32, length_repeat},
         combinator::{seq, trace},
         error::{StrContext, StrContextValue},
         ModalResult, Parser,
     };
 
     use super::{SampleToChunkAtom, SampleToChunkEntries, SampleToChunkEntry};
-    use crate::atom::util::parser::{
-        combinators::count_then_repeat, flags3, stream, version, Stream,
-    };
+    use crate::atom::util::parser::{flags3, stream, version, Stream};
 
     pub fn parse_stsc_data(input: &[u8]) -> Result<SampleToChunkAtom, crate::ParseError> {
         parse_stsc_data_inner
@@ -368,7 +366,7 @@ mod parser {
             seq!(SampleToChunkAtom {
                 version: version,
                 flags: flags3,
-                entries: count_then_repeat(be_u32, entry)
+                entries: length_repeat(be_u32, entry)
                     .map(SampleToChunkEntries)
                     .context(StrContext::Label("entries")),
             })

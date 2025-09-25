@@ -1,3 +1,5 @@
+use std::string::FromUtf8Error;
+
 use bon::Builder;
 use futures_io::AsyncRead;
 
@@ -35,13 +37,13 @@ pub enum DataReferenceEntryInner {
 }
 
 impl DataReferenceEntryInner {
-    fn new(entry_type: FourCC, data: Vec<u8>) -> Self {
-        match &entry_type.0 {
-            entry_types::URL => DataReferenceEntryInner::Url(String::from_utf8(data).unwrap()),
-            entry_types::URN => DataReferenceEntryInner::Urn(String::from_utf8(data).unwrap()),
+    fn new(entry_type: FourCC, data: Vec<u8>) -> Result<Self, FromUtf8Error> {
+        Ok(match &entry_type.0 {
+            entry_types::URL => DataReferenceEntryInner::Url(String::from_utf8(data)?),
+            entry_types::URN => DataReferenceEntryInner::Urn(String::from_utf8(data)?),
             entry_types::ALIS => DataReferenceEntryInner::Alias(data),
             _ => DataReferenceEntryInner::Unknown(entry_type, data),
-        }
+        })
     }
 }
 
@@ -228,12 +230,9 @@ mod parser {
     };
 
     use super::{DataReferenceAtom, DataReferenceEntry, DataReferenceEntryInner};
-    use crate::{
-        atom::util::parser::{
-            be_u32_as_usize, combinators::with_len, flags3, fourcc, stream, take_vec, version,
-            Stream,
-        },
-        FourCC,
+    use crate::atom::util::parser::{
+        atom_size, be_u32_as_usize, combinators::inclusive_length_and_then, flags3, fourcc,
+        rest_vec, stream, version, Stream,
     };
 
     pub fn parse_dref_data(input: &[u8]) -> Result<DataReferenceAtom, crate::ParseError> {
@@ -261,53 +260,28 @@ mod parser {
             "entries",
             length_repeat(
                 be_u32_as_usize.context(StrContext::Label("entry_count")),
-                trace("entry", entry.context(StrContext::Label("entry"))),
+                entry.context(StrContext::Label("entry")),
             ),
         )
         .parse_next(input)
     }
 
     fn entry(input: &mut Stream<'_>) -> winnow::ModalResult<DataReferenceEntry> {
-        struct EntryHeader {
-            size: usize,
-            typ: FourCC,
-            version: u8,
-            flags: [u8; 3],
-        }
-
-        fn entry_header(input: &mut Stream<'_>) -> winnow::ModalResult<EntryHeader> {
-            trace(
-                "entry_header",
-                seq!(EntryHeader {
-                    size: be_u32_as_usize,
-                    typ: fourcc,
+        trace(
+            "entry",
+            inclusive_length_and_then(atom_size, move |input: &mut Stream<'_>| {
+                let typ = fourcc.parse_next(input)?;
+                seq!(DataReferenceEntry {
                     version: version,
-                    flags: flags3
+                    flags: flags3,
+                    inner: rest_vec
+                        .try_map(|data| DataReferenceEntryInner::new(typ, data))
+                        .context(StrContext::Label("data")),
                 })
-                .context(StrContext::Label("entry_header")),
-            )
-            .parse_next(input)
-        }
-
-        let (
-            EntryHeader {
-                size,
-                typ,
-                version,
-                flags,
-            },
-            header_size,
-        ) = with_len(entry_header).parse_next(input)?;
-
-        let data: Vec<u8> = trace("entry_data", take_vec(size - header_size))
-            .context(StrContext::Label("entry_data"))
-            .parse_next(input)?;
-
-        Ok(DataReferenceEntry {
-            inner: DataReferenceEntryInner::new(typ, data),
-            version,
-            flags,
-        })
+                .parse_next(input)
+            }),
+        )
+        .parse_next(input)
     }
 }
 

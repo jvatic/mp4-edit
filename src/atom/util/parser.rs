@@ -4,7 +4,7 @@ use winnow::{
     binary::{be_u16, be_u32, be_u64, length_and_then, u8},
     combinator::trace,
     error::{ParserError, StrContext, StrContextValue},
-    token::{rest, take},
+    token::rest,
     Bytes, LocatingSlice, ModalResult, Parser,
 };
 
@@ -110,19 +110,6 @@ pub fn byte_array<const N: usize>(input: &mut Stream<'_>) -> winnow::ModalResult
     trace("byte_array", fixed_array(u8)).parse_next(input)
 }
 
-pub fn take_vec<'i, UsizeLike, Error>(
-    token_count: UsizeLike,
-) -> impl Parser<Stream<'i>, Vec<u8>, Error> + 'i
-where
-    UsizeLike: winnow::stream::ToUsize + Clone + Copy + 'i,
-    Error: ParserError<Stream<'i>> + 'i,
-{
-    trace("take_vec", move |input: &mut Stream<'i>| {
-        let data = take(token_count).parse_next(input)?;
-        Ok(data.to_vec())
-    })
-}
-
 pub fn rest_vec<'i>(input: &mut Stream<'i>) -> ModalResult<Vec<u8>> {
     trace("rest_vec", move |input: &mut Stream<'i>| {
         let data = rest.parse_next(input)?;
@@ -177,27 +164,6 @@ pub mod combinators {
     use winnow::token::take;
     use winnow::Parser;
 
-    pub fn count_then_repeat<Input, Output, Count, Error, CountParser, ParseNext>(
-        mut count: CountParser,
-        mut parser: ParseNext,
-    ) -> impl Parser<Input, Vec<Output>, Error>
-    where
-        Input: StreamIsPartial + Stream + UpdateSlice + Clone,
-        Count: ToUsize,
-        CountParser: Parser<Input, Count, Error>,
-        ParseNext: Parser<Input, Output, Error>,
-        Error: ParserError<Input>,
-    {
-        trace("count_then_repeat", move |input: &mut Input| {
-            let count = count.parse_next(input)?.to_usize();
-            let mut items = Vec::with_capacity(count);
-            for _ in 0..count {
-                items.push(parser.parse_next(input)?);
-            }
-            Ok(items)
-        })
-    }
-
     pub fn inclusive_length_and_then<Input, Output, Count, Error, CountParser, ParseNext>(
         mut count: CountParser,
         mut parser: ParseNext,
@@ -222,7 +188,7 @@ pub mod combinators {
         })
     }
 
-    pub fn with_len<I, O, E, ParseNext>(mut parser: ParseNext) -> impl Parser<I, (O, usize), E>
+    fn with_len<I, O, E, ParseNext>(mut parser: ParseNext) -> impl Parser<I, (O, usize), E>
     where
         I: Stream + Location,
         E: ParserError<I>,
