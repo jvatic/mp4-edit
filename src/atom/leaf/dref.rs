@@ -230,7 +230,8 @@ mod parser {
     use super::{DataReferenceAtom, DataReferenceEntry, DataReferenceEntryInner};
     use crate::{
         atom::util::parser::{
-            combinators::with_len, flags3, fourcc, stream, take_vec, usize_be_u32, version, Stream,
+            be_u32_as_usize, combinators::with_len, flags3, fourcc, stream, take_vec, version,
+            Stream,
         },
         FourCC,
     };
@@ -259,7 +260,7 @@ mod parser {
         trace(
             "entries",
             length_repeat(
-                usize_be_u32.context(StrContext::Label("entry_count")),
+                be_u32_as_usize.context(StrContext::Label("entry_count")),
                 trace("entry", entry.context(StrContext::Label("entry"))),
             ),
         )
@@ -278,7 +279,7 @@ mod parser {
             trace(
                 "entry_header",
                 seq!(EntryHeader {
-                    size: usize_be_u32,
+                    size: be_u32_as_usize,
                     typ: fourcc,
                     version: version,
                     flags: flags3
