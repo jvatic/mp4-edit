@@ -61,8 +61,9 @@ pub mod serializer {
 
 pub mod parser {
     use winnow::{
-        combinator::{empty, seq, trace},
+        combinator::{empty, repeat, seq, trace},
         error::{ContextError, ErrMode, StrContext},
+        stream::ToUsize,
         Parser,
     };
 
@@ -76,7 +77,7 @@ pub mod parser {
                 },
                 StsdExtension,
             },
-            util::parser::{rest_vec, Stream},
+            util::parser::{combinators::inclusive_length_and_then, fourcc, rest_vec, Stream},
         },
         FourCC,
     };
@@ -103,6 +104,25 @@ pub mod parser {
                 data: rest_vec.context(StrContext::Label("data")),
             })
             .map(StsdExtension::Unknown)
+            .parse_next(input)
+        })
+    }
+
+    pub fn extensions<'i, ParseSize, UsizeLike>(
+        mut size_parser: ParseSize,
+    ) -> impl Parser<Stream<'i>, Vec<StsdExtension>, ErrMode<ContextError>>
+    where
+        UsizeLike: ToUsize,
+        ParseSize: Parser<Stream<'i>, UsizeLike, ErrMode<ContextError>>,
+    {
+        trace("extensions", move |input: &mut Stream<'i>| {
+            repeat(
+                1..,
+                inclusive_length_and_then(size_parser.by_ref(), |input: &mut Stream<'i>| {
+                    let typ = fourcc.parse_next(input)?;
+                    parse_stsd_extension(typ).parse_next(input)
+                }),
+            )
             .parse_next(input)
         })
     }
