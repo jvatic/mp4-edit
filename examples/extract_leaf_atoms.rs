@@ -3,11 +3,21 @@
  */
 
 use anyhow::{anyhow, Context, Result};
-use std::{env, path::Path};
+use std::{
+    env,
+    path::{Path, PathBuf},
+};
 use tokio::fs;
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
-use mp4_edit::{atom::container, Atom, Parser};
+use mp4_edit::{
+    atom::{
+        container,
+        stsd::{self, StsdExtension},
+        SampleDescriptionTableAtom,
+    },
+    Atom, AtomData, Parser,
+};
 
 /// Check if an atom type is a container atom
 fn is_container_atom(atom_type: &[u8; 4]) -> bool {
@@ -85,10 +95,10 @@ async fn extract_leaf_atoms(input_path: &str, output_dir: &str) -> Result<()> {
     Ok(())
 }
 
-/// Extract a single leaf atom and write it to a file
-async fn extract_single_atom(atom: &Atom, original_data: &[u8], output_dir: &str) -> Result<()> {
-    let atom_type_str = atom.header.atom_type.to_string();
-
+async fn choose_output_filename(
+    atom_type_str: String,
+    output_dir: &str,
+) -> Result<(String, PathBuf)> {
     let mut output_path = None;
     for filename in std::iter::repeat_n(0, 1_00)
         .enumerate()
@@ -100,8 +110,16 @@ async fn extract_single_atom(atom: &Atom, original_data: &[u8], output_dir: &str
             break;
         }
     }
-    let (filename, output_path) = output_path
-        .ok_or_else(|| anyhow!("failed to find suitable filename for {atom_type_str}"))?;
+    let (filename, output_path) = output_path.ok_or_else(|| {
+        anyhow!("failed to find suitable filename for {atom_type_str} in {output_dir}")
+    })?;
+    Ok((filename, output_path))
+}
+
+/// Extract a single leaf atom and write it to a file
+async fn extract_single_atom(atom: &Atom, original_data: &[u8], output_dir: &str) -> Result<()> {
+    let atom_type_str = atom.header.atom_type.to_string();
+    let (filename, output_path) = choose_output_filename(atom_type_str.clone(), output_dir).await?;
 
     // Extract the complete atom data (header + body) from the original file
     let atom_start = atom.header.offset;
@@ -130,6 +148,70 @@ async fn extract_single_atom(atom: &Atom, original_data: &[u8], output_dir: &str
         filename,
         atom_data.len()
     );
+
+    if let Some(data) = atom.data.as_ref() {
+        match data {
+            AtomData::SampleDescriptionTable(stsd) => {
+                extract_stsd_extensions(
+                    stsd,
+                    Path::new(output_dir).join(atom_type_str).to_str().unwrap(),
+                )
+                .await?;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+async fn extract_stsd_extensions(
+    stsd: &SampleDescriptionTableAtom,
+    output_dir: &str,
+) -> Result<()> {
+    fs::create_dir_all(output_dir)
+        .await
+        .with_context(|| format!("Failed to create output directory: {}", output_dir))?;
+
+    let empty_list: Vec<StsdExtension> = Vec::new();
+    for entry in stsd.entries.iter() {
+        let extensions = match &entry.data {
+            stsd::SampleEntryData::Mp4a(entry) => entry.extensions.iter(),
+            _ => empty_list.iter(),
+        };
+
+        for extension in extensions {
+            extract_stsd_extension(&extension, output_dir).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn extract_stsd_extension(ext: &StsdExtension, output_dir: &str) -> Result<()> {
+    // We'll only extract the unknown extensions to be sure we're getting the correct bytes
+    let ext = match ext {
+        StsdExtension::Unknown(ext) => ext,
+        _ => return Ok(()),
+    };
+
+    let mut type_str = ext.typ.to_string();
+
+    if type_str.contains('\0') {
+        type_str = "unknown".to_string();
+    }
+
+    let (filename, output_path) = choose_output_filename(type_str.clone(), output_dir).await?;
+
+    let data = ext.data.clone();
+
+    fs::write(&output_path, &data).await.with_context(|| {
+        format!(
+            "Failed to write stsd extension file: {} ({type_str:#?})",
+            output_path.display()
+        )
+    })?;
+
+    println!("   💾 {} → {} ({} bytes)", type_str, filename, data.len());
 
     Ok(())
 }
