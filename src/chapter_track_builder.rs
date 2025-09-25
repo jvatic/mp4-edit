@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, time::Duration};
+use std::time::Duration;
 
 use bon::bon;
 
@@ -11,9 +11,7 @@ use crate::atom::{
     mdhd::{LanguageCode, MediaHeaderAtom},
     stco_co64::ChunkOffsetAtom,
     stsc::{SampleToChunkAtom, SampleToChunkEntry},
-    stsd::{
-        SampleDescriptionTableAtom, SampleEntry, SampleEntryData, SampleEntryType, TextSampleEntry,
-    },
+    stsd::{SampleDescriptionTableAtom, SampleEntry, SampleEntryData, Tx3gEntryData},
     stsz::SampleSizeAtom,
     stts::{TimeToSampleAtom, TimeToSampleEntry},
     tkhd::TrackHeaderAtom,
@@ -404,19 +402,16 @@ impl ChapterTrack {
     fn create_sample_description(&self) -> Atom {
         // Text sample entry with configurable parameters
         let text_sample_entry = SampleEntry {
-            entry_type: SampleEntryType::Text,
             data_reference_index: 1,
-            data: SampleEntryData::Text(TextSampleEntry {
-                version: 0,
-                revision_level: 1,
-                vendor: [0u8; 4],
+            // TODO: should this be a `text` sample entry instead? that's what it was
+            data: SampleEntryData::Tx3g(Tx3gEntryData {
                 display_flags: 0,
-                text_justification: 0,
-                background_color: [0u16; 3], // Black background
-                default_text_box: self.text_config.text_box,
-                unknown: None,
-                extensions: Vec::new(),
-                extensions_size: crate::atom::stsd::ExtensionSizeType::U8,
+                horizontal_justification: 0,
+                vertical_justification: 0,
+                background_color: Default::default(),
+                default_text_box: Default::default(),
+                default_style_record: Default::default(),
+                font_table: None,
             }),
         };
 

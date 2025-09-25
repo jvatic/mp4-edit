@@ -1,157 +1,63 @@
-use anyhow::{anyhow, Context};
-use derive_more::Display;
 use futures_io::AsyncRead;
-use std::{
-    io::{Cursor, Read},
-    marker::PhantomData,
-};
 
 pub use crate::atom::stsd::extension::{
-    BtrtExtension, DecoderSpecificInfo, EsdsExtension, StsdExtension,
+    btrt::BtrtExtension,
+    esds::{DecoderSpecificInfo, EsdsExtension},
+    StsdExtension,
 };
 use crate::{
-    atom::{
-        util::{
-            read_to_end,
-            serializer::{SizeU32, SizeU8},
-        },
-        FourCC,
-    },
+    atom::{util::read_to_end, FourCC},
     parser::ParseAtom,
     writer::SerializeAtom,
     ParseError,
 };
 
-mod extension;
+pub mod extension;
 
 pub const STSD: &[u8; 4] = b"stsd";
 
-// Common sample entry types
-pub const SAMPLE_ENTRY_AVC1: &[u8; 4] = b"avc1"; // H.264 video
-pub const SAMPLE_ENTRY_HVC1: &[u8; 4] = b"hvc1"; // H.265/HEVC video
-pub const SAMPLE_ENTRY_MP4A: &[u8; 4] = b"mp4a"; // AAC audio
-pub const SAMPLE_ENTRY_MP4V: &[u8; 4] = b"mp4v"; // MPEG-4 video
-pub const SAMPLE_ENTRY_TX3G: &[u8; 4] = b"tx3g"; // 3GPP text
-pub const SAMPLE_ENTRY_WVTT: &[u8; 4] = b"wvtt"; // WebVTT text
-pub const SAMPLE_ENTRY_STPP: &[u8; 4] = b"stpp"; // Subtitle
-pub const SAMPLE_ENTRY_AAVD: &[u8; 4] = b"aavd"; // Apple Audio Video Data
-pub const SAMPLE_ENTRY_TEXT: &[u8; 4] = b"text"; // Plain text
-
-#[derive(Debug, Clone, Display, PartialEq)]
-#[display("{}", self.as_str())]
-pub enum SampleEntryType {
-    /// H.264/AVC video
-    Avc1,
-    /// H.265/HEVC video
-    Hvc1,
-    /// AAC audio
-    Mp4a,
-    /// MPEG-4 video
-    Mp4v,
-    /// 3GPP text
-    Tx3g,
-    /// WebVTT text
-    Wvtt,
-    /// Subtitle
-    Stpp,
-    /// Apple Audio Video Data
-    Aavd,
-    /// Plain text
-    Text,
-    /// Unknown sample entry type
-    Unknown(FourCC),
-}
-
-impl SampleEntryType {
-    pub fn from_bytes(bytes: &[u8; 4]) -> Self {
-        match bytes {
-            SAMPLE_ENTRY_AVC1 => SampleEntryType::Avc1,
-            SAMPLE_ENTRY_HVC1 => SampleEntryType::Hvc1,
-            SAMPLE_ENTRY_MP4A => SampleEntryType::Mp4a,
-            SAMPLE_ENTRY_MP4V => SampleEntryType::Mp4v,
-            SAMPLE_ENTRY_TX3G => SampleEntryType::Tx3g,
-            SAMPLE_ENTRY_WVTT => SampleEntryType::Wvtt,
-            SAMPLE_ENTRY_STPP => SampleEntryType::Stpp,
-            SAMPLE_ENTRY_AAVD => SampleEntryType::Aavd,
-            SAMPLE_ENTRY_TEXT => SampleEntryType::Text,
-            _ => SampleEntryType::Unknown(FourCC(*bytes)),
-        }
-    }
-
-    pub fn as_bytes(&self) -> &[u8; 4] {
-        match self {
-            SampleEntryType::Avc1 => SAMPLE_ENTRY_AVC1,
-            SampleEntryType::Hvc1 => SAMPLE_ENTRY_HVC1,
-            SampleEntryType::Mp4a => SAMPLE_ENTRY_MP4A,
-            SampleEntryType::Mp4v => SAMPLE_ENTRY_MP4V,
-            SampleEntryType::Tx3g => SAMPLE_ENTRY_TX3G,
-            SampleEntryType::Wvtt => SAMPLE_ENTRY_WVTT,
-            SampleEntryType::Stpp => SAMPLE_ENTRY_STPP,
-            SampleEntryType::Aavd => SAMPLE_ENTRY_AAVD,
-            SampleEntryType::Text => SAMPLE_ENTRY_TEXT,
-            SampleEntryType::Unknown(bytes) => &bytes.0,
-        }
-    }
-
-    pub fn as_str(&self) -> &str {
-        std::str::from_utf8(self.as_bytes()).unwrap_or("????")
-    }
-}
-
 #[derive(Debug, Clone)]
 pub enum SampleEntryData {
-    Video(VideoSampleEntry),
-    Audio(AudioSampleEntry),
-    Text(TextSampleEntry),
-    Other(Vec<u8>),
+    Mp4a(Mp4aEntryData),
+    Tx3g(Tx3gEntryData),
+    Unknown(FourCC, Vec<u8>),
 }
 
 #[derive(Debug, Clone)]
 pub struct SampleEntry {
-    /// Sample entry type (4CC code)
-    pub entry_type: SampleEntryType,
     /// Data reference index
     pub data_reference_index: u16,
     /// Raw sample entry data (codec-specific)
     pub data: SampleEntryData,
 }
 
-#[derive(Debug, Clone)]
-pub struct VideoSampleEntry {
-    /// Version (usually 0)
-    pub version: u16,
-    /// Revision level (usually 0)
-    pub revision_level: u16,
-    /// Vendor identifier
-    pub vendor: [u8; 4],
-    /// Temporal quality (0-1023)
-    pub temporal_quality: u32,
-    /// Spatial quality (0-1024)
-    pub spatial_quality: u32,
-    /// Width in pixels
-    pub width: u16,
-    /// Height in pixels
-    pub height: u16,
-    /// Horizontal resolution (pixels per inch, 16.16 fixed point)
-    pub horizresolution: f32,
-    /// Vertical resolution (pixels per inch, 16.16 fixed point)
-    pub vertresolution: f32,
-    /// Reserved (should be 0)
-    pub entry_data_size: u32,
-    /// Frame count (usually 1)
-    pub frame_count: u16,
-    /// Compressor name (32 bytes, Pascal string)
-    pub compressor_name: String,
-    /// Bit depth (usually 24)
-    pub depth: u16,
-    /// Color table ID (usually -1)
-    pub color_table_id: i16,
-    /// Extension data (codec-specific atoms)
-    pub extensions: Vec<StsdExtension>,
+impl SampleEntry {
+    fn entry_type(&self) -> &FourCC {
+        match &self.data {
+            SampleEntryData::Mp4a(_) => &Mp4aEntryData::TYPE,
+            SampleEntryData::Tx3g(_) => &Tx3gEntryData::TYPE,
+            SampleEntryData::Unknown(typ, _) => typ,
+        }
+    }
+
+    pub fn is_audio(&self) -> bool {
+        match &self.data {
+            SampleEntryData::Mp4a(_) => true,
+            SampleEntryData::Unknown(typ, _)
+                if match &typ.0 {
+                    b"aavd" => true,
+                    _ => false,
+                } =>
+            {
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 #[derive(Default, Debug, Clone)]
-pub struct AudioSampleEntry {
+pub struct Mp4aEntryData {
     /// Version (usually 0)
     pub version: u16,
     /// Revision level (usually 0)
@@ -172,7 +78,9 @@ pub struct AudioSampleEntry {
     pub extensions: Vec<StsdExtension>,
 }
 
-impl AudioSampleEntry {
+impl Mp4aEntryData {
+    const TYPE: FourCC = FourCC::new(b"mp4a");
+
     pub fn find_or_create_extension<P, D>(&mut self, pred: P, default_fn: D) -> &mut StsdExtension
     where
         P: Fn(&StsdExtension) -> bool,
@@ -186,32 +94,59 @@ impl AudioSampleEntry {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct TextSampleEntry {
-    /// Version (usually 0)
-    pub version: u16,
-    /// Revision level (usually 0)
-    pub revision_level: u16,
-    /// Vendor identifier
-    pub vendor: [u8; 4],
-    /// Display flags
+#[derive(Default, Debug, Clone)]
+pub struct Tx3gEntryData {
     pub display_flags: u32,
-    /// Text justification (0 = left, 1 = center, -1 = right)
-    pub text_justification: i8,
-    /// Background color (RGB)
-    pub background_color: [u16; 3],
-    /// Default text box (top, left, bottom, right)
-    pub default_text_box: [u16; 4],
-    pub unknown: Option<[u8; 3]>,
-    /// Extension data (codec-specific atoms)
-    pub extensions: Vec<StsdExtension>,
-    pub extensions_size: ExtensionSizeType,
+    pub horizontal_justification: i8,
+    pub vertical_justification: i8,
+    pub background_color: ColorRgba,
+    pub default_text_box: TextBox,
+    pub default_style_record: StyleRecord,
+    pub font_table: Option<Vec<FontTableEntry>>,
 }
 
-#[derive(Debug, Clone)]
-pub enum ExtensionSizeType {
-    U8,
-    U32,
+#[derive(Default, Debug, Clone)]
+pub struct ColorRgba {
+    pub red: u8,
+    pub green: u8,
+    pub blue: u8,
+    pub alpha: u8,
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct TextBox {
+    pub top: i16,
+    pub left: i16,
+    pub bottom: i16,
+    pub right: i16,
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct StyleRecord {
+    pub start_char: u16,
+    pub end_char: u16,
+    pub font_id: u16,
+    pub font_style_flags: FontStyle,
+    pub font_size: u8,
+    pub text_color: ColorRgba,
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct FontStyle {
+    pub bold: bool,   // 1 bit
+    pub italic: bool, // 1 bit
+    pub underline: bool, // 1 bit
+                      // 5 reserved bits
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct FontTableEntry {
+    pub font_id: u16,
+    pub font_name: String,
+}
+
+impl Tx3gEntryData {
+    const TYPE: FourCC = FourCC::new(b"tx3g");
 }
 
 #[derive(Default, Debug, Clone)]
@@ -246,6 +181,41 @@ impl SampleDescriptionTableAtom {
         self.entries.push(default_fn());
         self.entries.last_mut().unwrap()
     }
+
+    /// Finds an audio sample entry matching `pred` or inserts a new one with `default_fn`
+    ///
+    /// NOTE: audio sample entries that don't match `pred` will be removed.
+    pub fn find_or_create_audio_entry<P, D>(&mut self, pred: P, default_fn: D) -> &mut SampleEntry
+    where
+        P: Fn(&SampleEntry) -> bool,
+        D: FnOnce() -> SampleEntry,
+    {
+        let mut index = None;
+        let mut remove_indices: Vec<usize> = Vec::new();
+        for (i, entry) in self.entries.iter_mut().enumerate() {
+            if !entry.is_audio() {
+                continue;
+            }
+            if pred(entry) {
+                index = Some(i);
+            } else {
+                remove_indices.push(i);
+            }
+        }
+        for i in remove_indices.into_iter() {
+            if let Some(index) = index.as_mut() {
+                if *index < i {
+                    *index -= 1;
+                }
+            }
+            self.entries.remove(i);
+        }
+        if let Some(index) = index {
+            return &mut self.entries[index];
+        }
+        self.entries.push(default_fn());
+        self.entries.last_mut().unwrap()
+    }
 }
 
 impl ParseAtom for SampleDescriptionTableAtom {
@@ -267,165 +237,189 @@ impl SerializeAtom for SampleDescriptionTableAtom {
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
+        serializer::serialize_stsd_data(self)
+    }
+}
+
+const FTAB: &[u8; 4] = b"ftab";
+
+mod serializer {
+    use crate::atom::{
+        stsd::{
+            ColorRgba, FontStyle, FontTableEntry, Mp4aEntryData, StyleRecord, TextBox,
+            Tx3gEntryData, FTAB,
+        },
+        util::serializer::{be_u32, pascal_string, prepend_size, SizeU32, SizeU32OrU64},
+    };
+
+    use super::{SampleDescriptionTableAtom, SampleEntry, SampleEntryData};
+
+    pub fn serialize_stsd_data(stsd: SampleDescriptionTableAtom) -> Vec<u8> {
         let mut data = Vec::new();
 
-        // Version (1 byte)
-        data.push(self.version);
+        data.push(stsd.version);
+        data.extend(stsd.flags);
 
-        // Flags (3 bytes)
-        data.extend_from_slice(&self.flags);
+        data.extend(be_u32(
+            stsd.entries
+                .len()
+                .try_into()
+                .expect("stsd entries len should fit in u32"),
+        ));
 
-        // Entry count (4 bytes, big-endian)
-        data.extend_from_slice(&(self.entries.len() as u32).to_be_bytes());
-
-        // Sample entries
-        for entry in self.entries {
-            let mut entry_data = Vec::new();
-
-            // Reserved (6 bytes) - must be zero
-            entry_data.extend_from_slice(&[0u8; 6]);
-
-            // Data reference index (2 bytes, big-endian)
-            entry_data.extend_from_slice(&entry.data_reference_index.to_be_bytes());
-
-            // Entry-specific data based on type
-            match entry.data {
-                SampleEntryData::Video(video) => {
-                    // Video sample entry structure
-                    entry_data.extend_from_slice(&video.version.to_be_bytes());
-                    entry_data.extend_from_slice(&video.revision_level.to_be_bytes());
-                    entry_data.extend_from_slice(&video.vendor);
-                    entry_data.extend_from_slice(&video.temporal_quality.to_be_bytes());
-                    entry_data.extend_from_slice(&video.spatial_quality.to_be_bytes());
-                    entry_data.extend_from_slice(&video.width.to_be_bytes());
-                    entry_data.extend_from_slice(&video.height.to_be_bytes());
-                    entry_data.extend_from_slice(
-                        &((video.horizresolution * 65536.0) as u32).to_be_bytes(),
-                    );
-                    entry_data.extend_from_slice(
-                        &((video.vertresolution * 65536.0) as u32).to_be_bytes(),
-                    );
-                    entry_data.extend_from_slice(&video.entry_data_size.to_be_bytes());
-                    entry_data.extend_from_slice(&video.frame_count.to_be_bytes());
-
-                    // Compressor name (32 bytes, Pascal string)
-                    let mut compressor_bytes = [0u8; 32];
-                    let name_bytes = video.compressor_name.as_bytes();
-                    let len = name_bytes.len().min(31);
-                    compressor_bytes[0] = len as u8;
-                    compressor_bytes[1..=len].copy_from_slice(&name_bytes[..len]);
-                    entry_data.extend_from_slice(&compressor_bytes);
-
-                    entry_data.extend_from_slice(&video.depth.to_be_bytes());
-                    entry_data.extend_from_slice(&video.color_table_id.to_be_bytes());
-                    video.extensions.into_iter().for_each(|ext| {
-                        let ext_data: Vec<u8> = ext.to_bytes::<SizeU32>();
-                        entry_data.extend_from_slice(&ext_data);
-                    });
-                }
-                SampleEntryData::Audio(audio) => {
-                    // Audio sample entry structure
-                    entry_data.extend_from_slice(&audio.version.to_be_bytes());
-                    entry_data.extend_from_slice(&audio.revision_level.to_be_bytes());
-                    entry_data.extend_from_slice(&audio.vendor);
-                    entry_data.extend_from_slice(&audio.channel_count.to_be_bytes());
-                    entry_data.extend_from_slice(&audio.sample_size.to_be_bytes());
-                    entry_data.extend_from_slice(&audio.compression_id.to_be_bytes());
-                    entry_data.extend_from_slice(&audio.packet_size.to_be_bytes());
-                    entry_data
-                        .extend_from_slice(&((audio.sample_rate * 65536.0) as u32).to_be_bytes());
-                    audio.extensions.into_iter().for_each(|ext| {
-                        let ext_data = ext.to_bytes::<SizeU32>();
-                        entry_data.extend_from_slice(&ext_data);
-                    });
-                }
-                SampleEntryData::Text(text) => {
-                    // Text sample entry structure
-                    entry_data.extend_from_slice(&text.version.to_be_bytes());
-                    entry_data.extend_from_slice(&text.revision_level.to_be_bytes());
-                    entry_data.extend_from_slice(&text.vendor);
-                    entry_data.extend_from_slice(&text.display_flags.to_be_bytes());
-                    entry_data.push(text.text_justification as u8);
-
-                    // Background color (3 * 2 bytes)
-                    for &color in &text.background_color {
-                        entry_data.extend_from_slice(&color.to_be_bytes());
-                    }
-
-                    // Default text box (4 * 2 bytes)
-                    for &coord in &text.default_text_box {
-                        entry_data.extend_from_slice(&coord.to_be_bytes());
-                    }
-
-                    if let Some(unknown) = text.unknown {
-                        entry_data.extend(unknown);
-                    }
-
-                    // Add extensions
-                    let ext_size = text.extensions_size;
-                    text.extensions.into_iter().for_each(|ext| {
-                        let ext_data = match ext_size {
-                            ExtensionSizeType::U8 => ext.to_bytes::<SizeU8>(),
-                            ExtensionSizeType::U32 => ext.to_bytes::<SizeU32>(),
-                        };
-                        entry_data.extend_from_slice(&ext_data);
-                    });
-                }
-                SampleEntryData::Other(other_data) => {
-                    // Other sample entry data
-                    entry_data.extend_from_slice(&other_data);
-                }
-            }
-
-            // Calculate total entry size (4 + 4 + entry_data.len())
-            let entry_size = 8 + entry_data.len();
-
-            // Write entry size (4 bytes, big-endian)
-            data.extend_from_slice(&(entry_size as u32).to_be_bytes());
-
-            // Write entry type (4 bytes)
-            data.extend_from_slice(entry.entry_type.as_bytes());
-
-            // Write entry data
-            data.extend_from_slice(&entry_data);
+        for entry in stsd.entries {
+            data.extend(serialize_stsd_entry(entry))
         }
 
+        data
+    }
+
+    fn serialize_stsd_entry(entry: SampleEntry) -> Vec<u8> {
+        prepend_size::<SizeU32OrU64, _>(move || {
+            let mut data = Vec::new();
+
+            data.extend(entry.entry_type().as_bytes());
+
+            // Reserved (6 bytes)
+            data.extend(&[0u8; 6]);
+
+            data.extend(entry.data_reference_index.to_be_bytes());
+
+            data.extend(serialize_entry_data(entry.data));
+
+            data
+        })
+    }
+
+    fn serialize_entry_data(entry_data: SampleEntryData) -> Vec<u8> {
+        match entry_data {
+            SampleEntryData::Mp4a(mp4a) => serialize_mp4a_entry_data(mp4a),
+            SampleEntryData::Tx3g(tx3g) => serialize_tx3g_entry_data(tx3g),
+            SampleEntryData::Unknown(_, raw) => {
+                let mut data = Vec::new();
+                data.extend(raw);
+                data
+            }
+        }
+    }
+
+    fn serialize_mp4a_entry_data(mp4a: Mp4aEntryData) -> Vec<u8> {
+        let mut data = Vec::new();
+
+        data.extend(mp4a.version.to_be_bytes());
+        data.extend(mp4a.revision_level.to_be_bytes());
+        data.extend(mp4a.vendor);
+        data.extend(mp4a.channel_count.to_be_bytes());
+        data.extend(mp4a.sample_size.to_be_bytes());
+        data.extend(mp4a.compression_id.to_be_bytes());
+        data.extend(mp4a.packet_size.to_be_bytes());
+        data.extend(((mp4a.sample_rate * 65536.0) as u32).to_be_bytes());
+        mp4a.extensions.into_iter().for_each(|ext| {
+            let ext_data = ext.to_bytes::<SizeU32>();
+            data.extend(ext_data);
+        });
+
+        data
+    }
+
+    fn serialize_tx3g_entry_data(tx3g: Tx3gEntryData) -> Vec<u8> {
+        let mut data = Vec::new();
+
+        data.extend(tx3g.display_flags.to_be_bytes());
+        data.extend(tx3g.horizontal_justification.to_be_bytes());
+        data.extend(tx3g.vertical_justification.to_be_bytes());
+        data.extend(serialize_color_rbga(tx3g.background_color));
+        data.extend(serialize_text_box(tx3g.default_text_box));
+        data.extend(serialize_style_record(tx3g.default_style_record));
+
+        if let Some(font_table) = tx3g.font_table {
+            data.extend(prepend_size::<SizeU32OrU64, _>(move || {
+                let mut data = Vec::new();
+                data.extend(FTAB);
+                data.extend(
+                    u16::try_from(font_table.len())
+                        .expect("font table len must fit in u16")
+                        .to_be_bytes(),
+                );
+                data.extend(font_table.into_iter().flat_map(serialize_font_table_entry));
+                data
+            }));
+        }
+
+        data
+    }
+
+    fn serialize_color_rbga(rgba: ColorRgba) -> Vec<u8> {
+        vec![rgba.red, rgba.green, rgba.blue, rgba.alpha]
+    }
+
+    fn serialize_text_box(text: TextBox) -> Vec<u8> {
+        let mut data = Vec::new();
+
+        data.extend(text.top.to_be_bytes());
+        data.extend(text.left.to_be_bytes());
+        data.extend(text.bottom.to_be_bytes());
+        data.extend(text.right.to_be_bytes());
+
+        data
+    }
+
+    fn serialize_style_record(style: StyleRecord) -> Vec<u8> {
+        let mut data = Vec::new();
+
+        data.extend(style.start_char.to_be_bytes());
+        data.extend(style.end_char.to_be_bytes());
+        data.extend(style.font_id.to_be_bytes());
+        data.push(serialize_font_style_flags(style.font_style_flags));
+        data.push(style.font_size);
+        data.extend(serialize_color_rbga(style.text_color));
+
+        data
+    }
+
+    fn serialize_font_style_flags(flags: FontStyle) -> u8 {
+        let bold = (flags.bold as u8) << 7;
+        let italic = (flags.italic as u8) << 6;
+        let underline = (flags.underline as u8) << 5;
+        bold & italic & underline
+    }
+
+    fn serialize_font_table_entry(entry: FontTableEntry) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend(entry.font_id.to_be_bytes());
+        data.extend(pascal_string(entry.font_name));
         data
     }
 }
 
 mod parser {
-    use std::marker::PhantomData;
-
     use winnow::{
-        binary::{be_i16, be_u16, be_u32, i8, length_and_then, u8},
-        combinator::{alt, dispatch, empty, fail, opt, repeat, seq, todo, trace},
-        error::{ContextError, ErrMode, Needed, ParserError, StrContext, StrContextValue},
+        binary::{
+            be_i16, be_u16, be_u32,
+            bits::{bits, bool},
+            i8, u8,
+        },
+        combinator::{opt, repeat, seq, trace},
+        error::{ContextError, ErrMode, StrContext, StrContextValue},
         stream::ToUsize,
-        token::rest,
+        token::{literal, rest},
         ModalResult, Parser,
     };
 
-    use super::{
-        AudioSampleEntry, SampleDescriptionTableAtom, SampleEntry, SampleEntryData,
-        SampleEntryType, TextSampleEntry, VideoSampleEntry,
-    };
-    use crate::atom::{
-        stsd::{
-            extension::{
-                parser::{parse_btrt_extension, parse_esds_extension, parse_unknown_extension},
-                BTRT, ESDS,
+    use super::{Mp4aEntryData, SampleDescriptionTableAtom, SampleEntry, SampleEntryData};
+    use crate::{
+        atom::{
+            stsd::{
+                extension::parser::parse_stsd_extension, ColorRgba, FontStyle, FontTableEntry,
+                StsdExtension, StyleRecord, TextBox, Tx3gEntryData, FTAB,
             },
-            ExtensionSizeType, StsdExtension,
-        },
-        util::{
-            parser::{
-                byte_array,
+            util::parser::{
+                atom_size, byte_array,
                 combinators::{count_then_repeat, inclusive_length_and_then},
-                fixed_array, fixed_point_16x16, flags3, fourcc, stream, version, Stream,
+                fixed_point_16x16, flags3, fourcc, pascal_string, stream, version, Stream,
             },
-            serializer::{SerializeSize, SizeU32},
         },
+        FourCC,
     };
 
     pub fn parse_stsd_data(input: &[u8]) -> Result<SampleDescriptionTableAtom, crate::ParseError> {
@@ -440,7 +434,7 @@ mod parser {
             seq!(SampleDescriptionTableAtom {
                 version: version,
                 flags: flags3,
-                entries: count_then_repeat(be_u32, inclusive_length_and_then(be_u32, entry))
+                entries: count_then_repeat(be_u32, inclusive_length_and_then(atom_size, entry))
                     .context(StrContext::Label("entries")),
             })
             .context(StrContext::Label("stsd")),
@@ -449,29 +443,22 @@ mod parser {
     }
 
     fn entry(input: &mut Stream<'_>) -> ModalResult<SampleEntry> {
-        trace(
-            "entry",
-            seq!(SampleEntry {
-                entry_type: byte_array
-                    .map(|buf: [u8; 4]| SampleEntryType::from_bytes(&buf))
-                    .context(StrContext::Label("entry_type")),
-                _: reserved,
-                data_reference_index: be_u16.context(StrContext::Label("data_reference_index")),
-                data: match entry_type {
-                    SampleEntryType::Avc1 | SampleEntryType::Hvc1 | SampleEntryType::Mp4v => {
-                        video_sample_entry
-                    }
-                    SampleEntryType::Mp4a | SampleEntryType::Aavd => {
-                        audio_sample_entry
-                    }
-                    SampleEntryType::Tx3g
-                    | SampleEntryType::Wvtt
-                    | SampleEntryType::Stpp
-                    | SampleEntryType::Text => text_sample_entry,
-                    _ => other_sample_entry,
-                },
-            }),
-        )
+        trace("entry", move |input: &mut Stream| {
+            let typ = fourcc.parse_next(input)?;
+            let _ = reserved.parse_next(input)?;
+            let data_reference_index = be_u16
+                .context(StrContext::Label("data_reference_index"))
+                .parse_next(input)?;
+            let data = match typ {
+                Mp4aEntryData::TYPE => mp4a_sample_entry.parse_next(input)?,
+                Tx3gEntryData::TYPE => tx3g_sample_entry.parse_next(input)?,
+                _ => unknown_sample_entry(typ).parse_next(input)?,
+            };
+            Ok(SampleEntry {
+                data_reference_index,
+                data,
+            })
+        })
         .parse_next(input)
     }
 
@@ -479,37 +466,10 @@ mod parser {
         trace("reserved", byte_array).parse_next(input)
     }
 
-    fn video_sample_entry(input: &mut Stream<'_>) -> ModalResult<SampleEntryData> {
+    fn mp4a_sample_entry(input: &mut Stream<'_>) -> ModalResult<SampleEntryData> {
         trace(
-            "video_sample_entry",
-            seq!(VideoSampleEntry {
-                version: be_u16.context(StrContext::Label("version")),
-                revision_level: be_u16.context(StrContext::Label("revision_level")),
-                // TODO: is this a fourcc?
-                vendor: byte_array.context(StrContext::Label("vendor")),
-                temporal_quality: be_u32.context(StrContext::Label("temporal_quality")),
-                spatial_quality: be_u32.context(StrContext::Label("spatial_quality")),
-                width: be_u16.context(StrContext::Label("width")),
-                height: be_u16.context(StrContext::Label("height")),
-                horizresolution: fixed_point_16x16.context(StrContext::Label("horizresolution")),
-                vertresolution: fixed_point_16x16.context(StrContext::Label("vertresolution")),
-                entry_data_size: be_u32.context(StrContext::Label("entry_data_size")),
-                frame_count: be_u16.context(StrContext::Label("frame_count")),
-                compressor_name: pascal_string.context(StrContext::Label("compressor_name")),
-                depth: be_u16.context(StrContext::Label("depth")),
-                color_table_id: be_i16.context(StrContext::Label("color_table_id")),
-                extensions: extensions(be_u32).context(StrContext::Label("extensions")),
-            })
-            .map(SampleEntryData::Video),
-        )
-        .context(StrContext::Label("video"))
-        .parse_next(input)
-    }
-
-    fn audio_sample_entry(input: &mut Stream<'_>) -> ModalResult<SampleEntryData> {
-        trace(
-            "audio_sample_entry",
-            seq!(AudioSampleEntry {
+            "mp4a_sample_entry",
+            seq!(Mp4aEntryData {
                 version: be_u16.context(StrContext::Label("version")),
                 revision_level: be_u16.context(StrContext::Label("revision_level")),
                 // TODO: is this a fourcc?
@@ -521,126 +481,123 @@ mod parser {
                 sample_rate: fixed_point_16x16.context(StrContext::Label("sample_rate")),
                 extensions: extensions(be_u32).context(StrContext::Label("extensions")),
             })
-            .map(SampleEntryData::Audio),
+            .map(SampleEntryData::Mp4a),
         )
-        .context(StrContext::Label("audio"))
+        .context(StrContext::Label("mp4a"))
         .parse_next(input)
     }
 
-    fn text_sample_entry(input: &mut Stream<'_>) -> ModalResult<SampleEntryData> {
-        #[derive(Clone, Copy)]
-        struct TextSampleEntryBase {
-            pub version: u16,
-            pub revision_level: u16,
-            pub vendor: [u8; 4],
-            pub display_flags: u32,
-            pub text_justification: i8,
-            pub background_color: [u16; 3],
-            pub default_text_box: [u16; 4],
-        }
-
-        trace("text_sample_entry", move |input: &mut Stream<'_>| {
-            let base = seq!(TextSampleEntryBase {
-                version: be_u16.context(StrContext::Label("version")),
-                revision_level: be_u16.context(StrContext::Label("revision_level")),
-                // TODO: is this a fourcc?
-                vendor: byte_array.context(StrContext::Label("vendor")),
-                display_flags: be_u32.context(StrContext::Label("display_flags")),
-                text_justification: i8.context(StrContext::Label("text_justification")),
-                background_color: fixed_array(be_u16)
-                    .context(StrContext::Label("background_color")),
-                default_text_box: fixed_array(be_u16)
-                    .context(StrContext::Label("default_text_box")),
-            })
-            .parse_next(input)?;
-
-            fn finally(
-                base: TextSampleEntryBase,
-                unknown: Option<[u8; 3]>,
-                extensions: Vec<StsdExtension>,
-                extensions_size: ExtensionSizeType,
-            ) -> TextSampleEntry {
-                let TextSampleEntryBase {
-                    version,
-                    revision_level,
-                    vendor,
-                    display_flags,
-                    text_justification,
-                    background_color,
-                    default_text_box,
-                } = base;
-
-                TextSampleEntry {
-                    version,
-                    revision_level,
-                    vendor,
-                    display_flags,
-                    text_justification,
-                    background_color,
-                    default_text_box,
-                    unknown,
-                    extensions,
-                    extensions_size,
-                }
-            }
-
-            alt((
-                (empty.value(None), extensions(u8))
-                    .map(move |(unknown, extensions)| {
-                        SampleEntryData::Text(finally(
-                            base,
-                            unknown,
-                            extensions,
-                            ExtensionSizeType::U8,
-                        ))
-                    })
-                    .context(StrContext::Label("u8 sized extensions")),
-                (empty.value(None), extensions(be_u32))
-                    .map(move |(unknown, extensions)| {
-                        SampleEntryData::Text(finally(
-                            base,
-                            unknown,
-                            extensions,
-                            ExtensionSizeType::U32,
-                        ))
-                    })
-                    .context(StrContext::Label("be_u32 sized extensions")),
-                (byte_array::<3>.map(|v| Some(v)), extensions(be_u32))
-                    .map(move |(unknown, extensions)| {
-                        SampleEntryData::Text(finally(
-                            base,
-                            unknown,
-                            extensions,
-                            ExtensionSizeType::U32,
-                        ))
-                    })
-                    .context(StrContext::Label(
-                        "3 bytes and then be_u32 sized extensions",
-                    )),
-                fail.context(StrContext::Expected(StrContextValue::Description(
-                    "u8 sized extensions",
-                )))
-                .context(StrContext::Expected(StrContextValue::Description(
-                    "be_u32 sized extensions",
-                )))
-                .context(StrContext::Expected(StrContextValue::Description(
-                    "3 bytes and then be_u32 sized extensions",
-                ))),
-            ))
-            .parse_next(input)
-        })
-        .context(StrContext::Label("text"))
-        .parse_next(input)
-    }
-
-    fn other_sample_entry(input: &mut Stream<'_>) -> ModalResult<SampleEntryData> {
+    fn tx3g_sample_entry(input: &mut Stream<'_>) -> ModalResult<SampleEntryData> {
         trace(
-            "other_sample_entry",
-            rest.map(|buf: &[u8]| buf.to_vec())
-                .map(SampleEntryData::Other),
+            "tx3g_sample_entry",
+            seq!(Tx3gEntryData {
+                display_flags: be_u32.context(StrContext::Label("display_flags")),
+                horizontal_justification: i8.context(StrContext::Label("horizontal_justification")),
+                vertical_justification: i8.context(StrContext::Label("vertical_justification")),
+                background_color: color_rgba.context(StrContext::Label("background_color")),
+                default_text_box: text_box.context(StrContext::Label("default_text_box")),
+                default_style_record: style_record
+                    .context(StrContext::Label("default_style_record")),
+                font_table: opt(inclusive_length_and_then(
+                    atom_size,
+                    |input: &mut Stream<'_>| {
+                        literal(FTAB).parse_next(input)?;
+                        count_then_repeat(be_u16, font_table_entry).parse_next(input)
+                    }
+                ))
+                .context(StrContext::Label("font_table")),
+            })
+            .map(SampleEntryData::Tx3g),
         )
-        .context(StrContext::Label("unknown"))
+        .context(StrContext::Label("mp4a"))
         .parse_next(input)
+    }
+
+    fn color_rgba(input: &mut Stream<'_>) -> ModalResult<ColorRgba> {
+        trace(
+            "color_rbga",
+            seq!(ColorRgba {
+                red: u8.context(StrContext::Label("red")),
+                green: u8.context(StrContext::Label("green")),
+                blue: u8.context(StrContext::Label("blue")),
+                alpha: u8.context(StrContext::Label("alpha")),
+            }),
+        )
+        .context(StrContext::Expected(StrContextValue::Description(
+            "red, green, blue, alpha",
+        )))
+        .parse_next(input)
+    }
+
+    fn text_box(input: &mut Stream<'_>) -> ModalResult<TextBox> {
+        trace(
+            "text_box",
+            seq!(TextBox {
+                top: be_i16.context(StrContext::Label("top")),
+                left: be_i16.context(StrContext::Label("left")),
+                bottom: be_i16.context(StrContext::Label("bottom")),
+                right: be_i16.context(StrContext::Label("right")),
+            }),
+        )
+        .context(StrContext::Expected(StrContextValue::Description(
+            "top, left, bottom, right",
+        )))
+        .parse_next(input)
+    }
+
+    fn style_record(input: &mut Stream<'_>) -> ModalResult<StyleRecord> {
+        trace(
+            "style_record",
+            seq!(StyleRecord {
+                start_char: be_u16.context(StrContext::Label("start_char")),
+                end_char: be_u16.context(StrContext::Label("end_char")),
+                font_id: be_u16.context(StrContext::Label("font_id")),
+                font_style_flags: font_style_flags.context(StrContext::Label("font_style_flags")),
+                font_size: u8.context(StrContext::Label("font_size")),
+                text_color: color_rgba.context(StrContext::Label("text_color")),
+            }),
+        )
+        .parse_next(input)
+    }
+
+    fn font_style_flags(input: &mut Stream<'_>) -> ModalResult<FontStyle> {
+        trace(
+            "font_style_flags",
+            bits(
+                move |input: &mut (Stream<'_>, usize)| -> ModalResult<FontStyle> {
+                    seq!(FontStyle {
+                        bold: bool.context(StrContext::Label("bold")),
+                        italic: bool.context(StrContext::Label("italic")),
+                        underline: bool.context(StrContext::Label("underline")),
+                        // remaining 5 bits are discarded
+                    })
+                    .parse_next(input)
+                },
+            ),
+        )
+        .parse_next(input)
+    }
+
+    fn font_table_entry(input: &mut Stream<'_>) -> ModalResult<FontTableEntry> {
+        trace(
+            "font_table_entry",
+            seq!(FontTableEntry {
+                font_id: be_u16.context(StrContext::Label("font_id")),
+                font_name: pascal_string.context(StrContext::Label("font_name")),
+            }),
+        )
+        .parse_next(input)
+    }
+
+    fn unknown_sample_entry<'i>(
+        typ: FourCC,
+    ) -> impl Parser<Stream<'i>, SampleEntryData, ErrMode<ContextError>> {
+        trace("other_sample_entry", move |input: &mut Stream<'_>| {
+            rest.map(|buf: &[u8]| buf.to_vec())
+                .map(|data| SampleEntryData::Unknown(typ, data))
+                .parse_next(input)
+        })
+        .context(StrContext::Label("unknown"))
     }
 
     fn extensions<'i, ParseSize, UsizeLike>(
@@ -653,31 +610,13 @@ mod parser {
         trace("extensions", move |input: &mut Stream<'i>| {
             repeat(
                 1..,
-                inclusive_length_and_then(
-                    size_parser.by_ref(),
-                    dispatch! {fourcc;
-                        typ if typ == ESDS => parse_esds_extension,
-                        typ if typ == BTRT => parse_btrt_extension,
-                        typ => parse_unknown_extension(typ),
-                    },
-                ),
+                inclusive_length_and_then(size_parser.by_ref(), |input: &mut Stream<'i>| {
+                    let typ = fourcc.parse_next(input)?;
+                    parse_stsd_extension(typ).parse_next(input)
+                }),
             )
             .parse_next(input)
         })
-    }
-
-    fn pascal_string(input: &mut Stream<'_>) -> ModalResult<String> {
-        trace(
-            "pascal_string",
-            length_and_then(
-                u8,
-                rest.try_map(|buf: &[u8]| String::from_utf8(buf.to_vec()))
-                    .context(StrContext::Expected(StrContextValue::Description(
-                        "UTF8 string",
-                    ))),
-            ),
-        )
-        .parse_next(input)
     }
 }
 
@@ -686,21 +625,6 @@ mod tests {
     use crate::atom::test_utils::test_atom_roundtrip_sync;
 
     use super::*;
-
-    #[test]
-    fn test_text_sample_entry_type_recognition() {
-        // Test that "text" sample entry type is recognized correctly
-        let text_bytes = b"text";
-        let entry_type = SampleEntryType::from_bytes(text_bytes);
-        assert_eq!(entry_type, SampleEntryType::Text);
-
-        // Test round-trip
-        let bytes_back = entry_type.as_bytes();
-        assert_eq!(bytes_back, text_bytes);
-
-        // Test string representation
-        assert_eq!(entry_type.as_str(), "text");
-    }
 
     /// Test round-trip for all available stsd test data files
     #[test]

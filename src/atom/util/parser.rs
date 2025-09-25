@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
 use winnow::{
-    binary::{be_u16, be_u32, u8},
+    binary::{be_u16, be_u32, be_u64, length_and_then, u8},
     combinator::trace,
     error::{ParserError, StrContext, StrContextValue},
     token::{rest, take},
@@ -66,6 +66,17 @@ pub fn be_u32_as_u64(input: &mut Stream<'_>) -> ModalResult<u64> {
     .parse_next(input)
 }
 
+pub fn atom_size(input: &mut Stream<'_>) -> ModalResult<usize> {
+    trace("atom_size", move |input: &mut Stream| {
+        let mut size = be_u32_as_u64.parse_next(input)?;
+        if size == 1 {
+            size = be_u64.parse_next(input)?;
+        }
+        Ok(size as usize)
+    })
+    .parse_next(input)
+}
+
 pub fn flags3(input: &mut Stream<'_>) -> winnow::ModalResult<[u8; 3]> {
     trace(
         "flags",
@@ -78,6 +89,29 @@ pub fn flags3(input: &mut Stream<'_>) -> winnow::ModalResult<[u8; 3]> {
     .map(|(a, b, c)| [a, b, c])
     .context(StrContext::Label("flags"))
     .parse_next(input)
+}
+
+/// Parses a u8 len, and then a UTF8 string with that len
+pub fn pascal_string(input: &mut Stream<'_>) -> ModalResult<String> {
+    trace("pascal_string", length_and_then(u8, utf8_string)).parse_next(input)
+}
+
+/// Parses a UTF8 string from the remainder of the buffer
+pub fn utf8_string(input: &mut Stream<'_>) -> ModalResult<String> {
+    trace(
+        "utf8_string",
+        rest.try_map(|data: &[u8]| String::from_utf8(data.to_vec()))
+            .context(StrContext::Expected(StrContextValue::Description(
+                "UTF8 string",
+            ))),
+    )
+    .parse_next(input)
+}
+
+pub fn be_u24(input: &mut Stream<'_>) -> ModalResult<u32> {
+    byte_array::<3>
+        .map(|buf| u32::from_be_bytes([0, buf[0], buf[1], buf[2]]))
+        .parse_next(input)
 }
 
 pub fn byte_array<const N: usize>(input: &mut Stream<'_>) -> winnow::ModalResult<[u8; N]> {

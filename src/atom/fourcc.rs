@@ -5,8 +5,16 @@ use std::fmt;
 pub struct FourCC(pub(crate) [u8; 4]);
 
 impl FourCC {
+    pub const fn new(typ: &[u8; 4]) -> Self {
+        Self(*typ)
+    }
+
     pub fn into_bytes(self) -> [u8; 4] {
         self.0
+    }
+
+    pub fn as_bytes(&self) -> &[u8; 4] {
+        &self.0
     }
 }
 

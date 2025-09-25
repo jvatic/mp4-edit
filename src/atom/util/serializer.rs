@@ -25,15 +25,26 @@ where
     size
 }
 
+pub fn pascal_string(s: String) -> Vec<u8> {
+    let mut data = s.into_bytes();
+    let len = u8::try_from(data.len()).expect("string byte len must fit in u8");
+    data.insert(0, len);
+    data
+}
+
+/// Serialize u8(size)
 #[derive(Debug, Clone)]
 pub struct SizeU8;
 
+/// Serialize be_u32(size)
 #[derive(Debug, Clone)]
 pub struct SizeU32;
 
+/// Serialize be_u64(size)
 #[derive(Debug, Clone)]
 pub struct SizeU64;
 
+/// Serialize be_u32(size), or be_u32(1) + be_u64(size)
 #[derive(Debug, Clone)]
 pub struct SizeU32OrU64;
 
@@ -58,9 +69,7 @@ impl SerializeSize for SizeU32 {
 const U64_BYTE_SIZE: usize = 8;
 impl SerializeSize for SizeU64 {
     fn serialize_size(size: usize) -> Vec<u8> {
-        let mut output = vec![1];
-        output.extend(((size + U64_BYTE_SIZE + 1) as u64).to_be_bytes());
-        output
+        ((size + U64_BYTE_SIZE) as u64).to_be_bytes().to_vec()
     }
 }
 
@@ -69,7 +78,9 @@ impl SerializeSize for SizeU32OrU64 {
         if size + U32_BYTE_SIZE <= u32::MAX as usize {
             SizeU32::serialize_size(size)
         } else {
-            SizeU64::serialize_size(size)
+            let mut output = vec![1];
+            output.extend(SizeU64::serialize_size(size + 1));
+            output
         }
     }
 }
