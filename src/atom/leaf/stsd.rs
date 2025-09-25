@@ -397,7 +397,7 @@ mod parser {
         binary::{
             be_i16, be_u16, be_u32,
             bits::{bits, bool},
-            i8, u8,
+            i8, length_repeat, u8,
         },
         combinator::{opt, repeat, seq, trace},
         error::{ContextError, ErrMode, StrContext, StrContextValue},
@@ -414,9 +414,8 @@ mod parser {
                 StsdExtension, StyleRecord, TextBox, Tx3gEntryData, FTAB,
             },
             util::parser::{
-                atom_size, byte_array,
-                combinators::{count_then_repeat, inclusive_length_and_then},
-                fixed_point_16x16, flags3, fourcc, pascal_string, stream, version, Stream,
+                atom_size, byte_array, combinators::inclusive_length_and_then, fixed_point_16x16,
+                flags3, fourcc, pascal_string, stream, version, Stream,
             },
         },
         FourCC,
@@ -434,7 +433,7 @@ mod parser {
             seq!(SampleDescriptionTableAtom {
                 version: version,
                 flags: flags3,
-                entries: count_then_repeat(be_u32, inclusive_length_and_then(atom_size, entry))
+                entries: length_repeat(be_u32, inclusive_length_and_then(atom_size, entry))
                     .context(StrContext::Label("entries")),
             })
             .context(StrContext::Label("stsd")),
@@ -502,7 +501,7 @@ mod parser {
                     atom_size,
                     |input: &mut Stream<'_>| {
                         literal(FTAB).parse_next(input)?;
-                        count_then_repeat(be_u16, font_table_entry).parse_next(input)
+                        length_repeat(be_u16, font_table_entry).parse_next(input)
                     }
                 ))
                 .context(StrContext::Label("font_table")),

@@ -198,7 +198,7 @@ mod serializer {
 
 mod parser {
     use winnow::{
-        binary::{be_u32, be_u64, length_and_then},
+        binary::be_u32,
         combinator::{opt, preceded, repeat, seq, trace},
         error::StrContext,
         token::{literal, rest},
@@ -206,7 +206,9 @@ mod parser {
     };
 
     use super::{DataAtom, ItemListAtom, ListItemData, MetadataItem};
-    use crate::atom::util::parser::{combinators::with_len, fourcc, stream, Stream};
+    use crate::atom::util::parser::{
+        atom_size, combinators::inclusive_length_and_then, fourcc, rest_vec, stream, Stream,
+    };
 
     pub fn parse_ilst_data(input: &[u8]) -> Result<ItemListAtom, crate::ParseError> {
         parse_ilst_data_inner
@@ -228,7 +230,7 @@ mod parser {
     fn item(input: &mut Stream<'_>) -> ModalResult<MetadataItem> {
         trace(
             "item",
-            length_and_then(size, item_inner).context(StrContext::Label("item")),
+            inclusive_length_and_then(atom_size, item_inner).context(StrContext::Label("item")),
         )
         .parse_next(input)
     }
@@ -236,19 +238,19 @@ mod parser {
     fn item_inner(input: &mut Stream<'_>) -> ModalResult<MetadataItem> {
         seq!(MetadataItem {
             item_type: fourcc,
-            mean: opt(length_and_then(
-                size,
-                preceded(literal(b"mean"), rest_vec_u8)
+            mean: opt(inclusive_length_and_then(
+                atom_size,
+                preceded(literal(b"mean"), rest_vec)
             ))
             .context(StrContext::Label("mean")),
-            name: opt(length_and_then(
-                size,
-                preceded(literal(b"name"), rest_vec_u8)
+            name: opt(inclusive_length_and_then(
+                atom_size,
+                preceded(literal(b"name"), rest_vec)
             ))
             .context(StrContext::Label("name")),
             data_atoms: repeat(
                 0..,
-                length_and_then(size, preceded(literal(b"data"), data_atom))
+                inclusive_length_and_then(atom_size, preceded(literal(b"data"), data_atom))
             ),
         })
         .parse_next(input)
@@ -264,28 +266,6 @@ mod parser {
             })
             .context(StrContext::Label("data_atom")),
         )
-        .parse_next(input)
-    }
-
-    fn rest_vec_u8(input: &mut Stream<'_>) -> ModalResult<Vec<u8>> {
-        trace("rest_vec_u8", rest.map(|data: &[u8]| data.to_vec())).parse_next(input)
-    }
-
-    fn size(input: &mut Stream<'_>) -> ModalResult<u64> {
-        trace(
-            "size",
-            with_len(size_inner).map(|(size, header_size)| size - header_size as u64),
-        )
-        .parse_next(input)
-    }
-
-    fn size_inner(input: &mut Stream<'_>) -> ModalResult<u64> {
-        trace("size_inner", move |input: &mut Stream<'_>| {
-            Ok(match be_u32.parse_next(input)? {
-                1 => be_u64.parse_next(input)?,
-                size => size as u64,
-            })
-        })
         .parse_next(input)
     }
 }
