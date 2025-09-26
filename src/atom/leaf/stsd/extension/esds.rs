@@ -42,7 +42,8 @@ impl Descriptor for DecoderConfigDescriptor {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DecoderSpecificInfo {
-    Audio(AudioSpecificConfig, Vec<u8>), // AudioSpecificConfig + extra bytes
+    Audio(AudioSpecificConfig),
+    // TODO: extract tag
     Unknown(Vec<u8>),
 }
 
@@ -60,7 +61,10 @@ impl Descriptor for SlConfigDescriptor {
 }
 
 pub(crate) mod serializer {
-    use crate::atom::stsd::extension::esds::SlConfigDescriptor;
+    use crate::atom::stsd::extension::{
+        audio_specific_config::serializer::serialize_audio_specific_config,
+        esds::SlConfigDescriptor,
+    };
 
     use super::{
         DecoderConfigDescriptor, DecoderSpecificInfo, Descriptor, EsDescriptor, EsdsExtension,
@@ -148,7 +152,9 @@ pub(crate) mod serializer {
         serialize_descriptor(DecoderSpecificInfo::TAG, move || {
             let mut data = Vec::new();
             match dsi {
-                DecoderSpecificInfo::Audio(asc, d) => data.extend(d),
+                DecoderSpecificInfo::Audio(asc) => {
+                    data.extend(serialize_audio_specific_config(asc))
+                }
                 DecoderSpecificInfo::Unknown(d) => data.extend(d),
             }
             data
@@ -173,7 +179,10 @@ pub(crate) mod parser {
     };
 
     use crate::atom::{
-        stsd::{DecoderSpecificInfo, StsdExtension},
+        stsd::{
+            extension::audio_specific_config::parser::parse_audio_specific_config,
+            DecoderSpecificInfo, StsdExtension,
+        },
         util::parser::{be_u24, flags3, rest_vec, version, Stream},
     };
 
@@ -272,7 +281,7 @@ pub(crate) mod parser {
                         .context(StrContext::Label("avg_bitrate"))
                         .parse_next(input)?;
 
-                    let decoder_specific_info = opt(decoder_specific_info)
+                    let decoder_specific_info = opt(decoder_specific_info(object_type_indication))
                         .context(StrContext::Label("decoder_specific_info"))
                         .parse_next(input)?;
 
@@ -292,17 +301,25 @@ pub(crate) mod parser {
         .parse_next(input)
     }
 
-    fn decoder_specific_info(input: &mut Stream<'_>) -> ModalResult<DecoderSpecificInfo> {
+    fn decoder_specific_info<'i>(
+        object_type_indication: u8,
+    ) -> impl Parser<Stream<'i>, DecoderSpecificInfo, ErrMode<ContextError>> {
         trace("decoder_specific_info", move |input: &mut Stream<'_>| {
             descriptor_tag(DecoderSpecificInfo::TAG).parse_next(input)?;
             length_and_then(descriptor_size, move |input: &mut Stream<'_>| {
-                // TODO: audio specific config
-                let data = rest_vec.parse_next(input)?;
-                Ok(DecoderSpecificInfo::Unknown(data))
+                let decoder_specific_info = match object_type_indication {
+                    0x40 | 0x66 | 0x67 | 0x68 => parse_audio_specific_config
+                        .map(DecoderSpecificInfo::Audio)
+                        .parse_next(input)?,
+                    _ => {
+                        let data = rest_vec.parse_next(input)?;
+                        DecoderSpecificInfo::Unknown(data)
+                    }
+                };
+                Ok(decoder_specific_info)
             })
             .parse_next(input)
         })
-        .parse_next(input)
     }
 
     fn sl_config_descriptor(input: &mut Stream<'_>) -> ModalResult<SlConfigDescriptor> {
