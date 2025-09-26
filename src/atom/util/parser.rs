@@ -118,6 +118,16 @@ pub fn rest_vec<'i>(input: &mut Stream<'i>) -> ModalResult<Vec<u8>> {
     .parse_next(input)
 }
 
+pub fn rest_vec1<'i>(input: &mut Stream<'i>) -> ModalResult<Vec<u8>> {
+    trace("rest_vec1", move |input: &mut Stream<'i>| {
+        let data = rest
+            .verify(|data: &[u8]| !data.is_empty())
+            .parse_next(input)?;
+        Ok(data.to_vec())
+    })
+    .parse_next(input)
+}
+
 pub fn fixed_array<'i, const N: usize, Input, Output, Error, ParseNext>(
     mut parser: ParseNext,
 ) -> impl Parser<Input, [Output; N], Error> + 'i

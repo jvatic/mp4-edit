@@ -221,7 +221,7 @@ pub(crate) mod parser {
 
     use crate::atom::{
         stsd::extension::audio_specific_config::{GeneralAudioSpecificConfig, SbrPsSpecificConfig},
-        util::parser::{rest_vec, Stream},
+        util::parser::{rest_vec, rest_vec1, Stream},
     };
 
     pub fn parse_audio_specific_config(input: &mut Stream<'_>) -> ModalResult<AudioSpecificConfig> {
@@ -242,7 +242,7 @@ pub(crate) mod parser {
                             _ => general_audio_specific_config, // 3 bits + extensions
                         }
                         .context(StrContext::Label("extension")),
-                        extra: bits::bytes(opt(rest_vec)).context(StrContext::Label("extra")),
+                        extra: bits::bytes(opt(rest_vec1)).context(StrContext::Label("extra")),
                     })
                     .parse_next(input)
                 },
@@ -387,7 +387,7 @@ pub(crate) mod parser {
                     .parse_next(input)?
                 {
                     false => None,
-                    _ => Some((
+                    true => Some((
                         bits::take(1usize)
                             .context(StrContext::Label("first ext bit"))
                             .parse_next(input)?,
@@ -420,13 +420,7 @@ mod tests {
         let asc = parse_audio_specific_config
             .parse(stream(&input))
             .expect("error parsing audio specific config");
-        eprintln!("{asc:#?}");
         let re_encoded = serialize_audio_specific_config(asc.clone());
-        let asc2 = parse_audio_specific_config
-            .parse(stream(&re_encoded))
-            .expect("error parsing audio specific config");
-        eprintln!("{asc:#?}");
-        // assert_eq!(asc, asc2);
         assert_bytes_equal(&re_encoded, &input);
     }
 }
