@@ -19,43 +19,22 @@ macro_rules! define_language_code_enum {
         $(#[$meta])*
         pub enum $name {
             $( $( #[$tag] )* $variant ),+,
-            Other([char; 3]),
-        }
-
-        impl From<[u8; 3]> for $name {
-            fn from(value: [u8; 3]) -> Self {
-                // Decode the packed language format
-                let packed = u16::from_be_bytes([value[0], value[1]]);
-                let char1 = (((packed >> 10) & 0x1F) + 0x60) as u8;
-                let char2 = (((packed >> 5) & 0x1F) + 0x60) as u8;
-                let char3 = ((packed & 0x1F) + 0x60) as u8;
-
-                let lang: [u8; 3] = [char1, char2, char3];
-                let lang_chars: [char; 3] = [char1 as char, char2 as char, char3 as char];
-
-                match &lang {
-                    $( $chars => Self::$variant ),+,
-                    _ => Self::Other(lang_chars),
-                }
-            }
+            Other([u8; 3]),
         }
 
         impl $name {
-            /// Convert the language code to packed bytes format
-            fn serialize(&self) -> [u8; 2] {
-                let chars = match self {
+            fn from_chars(chars: &[u8; 3]) -> Self {
+                match chars {
+                    $( $chars => Self::$variant ),+,
+                    _ => Self::Other(*chars),
+                }
+            }
+
+            fn as_chars(&self) -> &[u8; 3] {
+                match self {
                     $( Self::$variant => $chars ),+,
-                    Self::Other(chars) => &[chars[0] as u8, chars[1] as u8, chars[2] as u8],
-                };
-
-                // Pack into 16-bit format (3 x 5-bit values)
-                let char1_bits = (chars[0] - 0x60) & 0x1F;
-                let char2_bits = (chars[1] - 0x60) & 0x1F;
-                let char3_bits = (chars[2] - 0x60) & 0x1F;
-
-                let packed =
-                    (u16::from(char1_bits) << 10) | (u16::from(char2_bits) << 5) | u16::from(char3_bits);
-                packed.to_be_bytes()
+                    Self::Other(chars) => chars,
+                }
             }
         }
 
@@ -91,6 +70,30 @@ define_language_code_enum!(
         Undetermined => b"und",
     }
 );
+
+impl From<u16> for LanguageCode {
+    fn from(packed: u16) -> Self {
+        let char1 = (((packed >> 10) & 0x1F) + 0x60) as u8;
+        let char2 = (((packed >> 5) & 0x1F) + 0x60) as u8;
+        let char3 = ((packed & 0x1F) + 0x60) as u8;
+
+        let lang: [u8; 3] = [char1, char2, char3];
+
+        Self::from_chars(&lang)
+    }
+}
+
+impl From<LanguageCode> for u16 {
+    fn from(value: LanguageCode) -> Self {
+        let chars = value.as_chars();
+
+        let char1_bits = (chars[0] - 0x60) & 0x1F;
+        let char2_bits = (chars[1] - 0x60) & 0x1F;
+        let char3_bits = (chars[2] - 0x60) & 0x1F;
+
+        (u16::from(char1_bits) << 10) | (u16::from(char2_bits) << 5) | u16::from(char3_bits)
+    }
+}
 
 #[derive(Default, Debug, Clone, Builder)]
 pub struct MediaHeaderAtom {
@@ -183,7 +186,7 @@ mod serializer {
         data.extend(be_u32_or_u64(mdhd.modification_time));
         data.extend(mdhd.timescale.to_be_bytes());
         data.extend(be_u32_or_u64(mdhd.duration));
-        data.extend(mdhd.language.serialize());
+        data.extend(u16::from(mdhd.language).to_be_bytes());
         data.extend(mdhd.pre_defined.to_be_bytes());
 
         data
@@ -195,7 +198,6 @@ mod parser {
         binary::{be_u16, be_u32, be_u64},
         combinator::{seq, trace},
         error::{StrContext, StrContextValue},
-        token::take,
         ModalResult, Parser,
     };
 
@@ -232,8 +234,7 @@ mod parser {
                 modification_time: be_u32_or_u64(version),
                 timescale: be_u32,
                 duration: be_u32_or_u64(version),
-                language: take(2usize)
-                    .map(|packed: &[u8]| LanguageCode::from([packed[0], packed[1], 0])),
+                language: be_u16.map(LanguageCode::from),
                 pre_defined: be_u16,
             })
             .context(StrContext::Label("mdhd")),
