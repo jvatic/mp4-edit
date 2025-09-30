@@ -1,17 +1,15 @@
-use anyhow::{anyhow, Context};
 use bon::bon;
 use derive_more::{Deref, DerefMut};
 use either::Either;
 use futures_io::AsyncRead;
 use std::{
     fmt::{self},
-    io::Read,
     ops::Range,
 };
 
 use crate::{
     atom::{
-        util::{async_to_sync_read, DebugEllipsis},
+        util::{read_to_end, DebugEllipsis},
         FourCC,
     },
     parser::ParseAtom,
@@ -70,10 +68,8 @@ impl SampleEntrySizes {
 /// Samples within the media may have different sizes, up to the limit of a 32-bit integer.
 #[derive(Default, Debug, Clone)]
 pub struct SampleSizeAtom {
-    /// Version of this atom (0 or 1)
     pub version: u8,
-    /// Flags (24 bits)
-    pub flags: u32,
+    pub flags: [u8; 3],
     /// If this field is set to some value other than 0, then it gives the (constant) size
     /// of every sample in the track. If this field is set to 0, then the samples have
     /// different sizes, and those sizes are stored in the sample size table.
@@ -129,7 +125,7 @@ impl SampleSizeAtom {
         };
         Self {
             version: 0,
-            flags: 0,
+            flags: [0u8; 3],
             sample_size,
             sample_count,
             entry_sizes,
@@ -194,70 +190,9 @@ impl ParseAtom for SampleSizeAtom {
         if atom_type != STSZ {
             return Err(ParseError::new_unexpected_atom(atom_type, STSZ));
         }
-        parse_stsz_data(async_to_sync_read(reader).await?).map_err(ParseError::new_atom_parse)
+        let data = read_to_end(reader).await?;
+        parser::parse_stsz_data(&data)
     }
-}
-
-fn parse_stsz_data<R: Read>(mut reader: R) -> Result<SampleSizeAtom, anyhow::Error> {
-    // Read all data into buffer for easier parsing
-    let mut buf = Vec::new();
-    reader.read_to_end(&mut buf).context("reading stsz data")?;
-
-    // Minimum size check: version/flags (4) + sample_size (4) + sample_count (4) = 12 bytes
-    if buf.len() < 12 {
-        return Err(anyhow!("stsz atom too small: {} bytes", buf.len()));
-    }
-
-    // Version and flags (4 bytes total)
-    let version_flags = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]);
-    let version = (version_flags >> 24) as u8;
-    let flags = version_flags & 0x00FFFFFF;
-
-    // Validate version
-    if version != 0 {
-        return Err(anyhow!("Unsupported stsz version: {}", version));
-    }
-
-    // Sample size (4 bytes)
-    let sample_size = u32::from_be_bytes([buf[4], buf[5], buf[6], buf[7]]);
-
-    // Sample count (4 bytes)
-    let sample_count = u32::from_be_bytes([buf[8], buf[9], buf[10], buf[11]]);
-
-    let mut entry_sizes = Vec::new();
-
-    if sample_size == 0 {
-        // Variable sample sizes - read the table
-        let remaining_bytes = &buf[12..];
-
-        if remaining_bytes.len() % 4 > 0 {
-            return Err(anyhow!(
-                "Invalid stsz atom: {} is not aligned to 4 bytes",
-                remaining_bytes.len()
-            ));
-        }
-
-        entry_sizes.reserve(sample_count as usize);
-        for chunk in remaining_bytes.chunks_exact(4) {
-            let size = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-            entry_sizes.push(size);
-        }
-    } else {
-        // Constant sample size - no table needed
-        if buf.len() != 12 {
-            return Err(anyhow!(
-                "Invalid stsz atom: constant sample size specified but extra data present"
-            ));
-        }
-    }
-
-    Ok(SampleSizeAtom {
-        version,
-        flags,
-        sample_size,
-        sample_count,
-        entry_sizes: SampleEntrySizes(entry_sizes),
-    })
 }
 
 impl fmt::Display for SampleSizeAtom {
@@ -278,26 +213,64 @@ impl SerializeAtom for SampleSizeAtom {
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
+        serializer::serialize_stsz_data(self)
+    }
+}
+
+mod serializer {
+    use super::SampleSizeAtom;
+
+    pub fn serialize_stsz_data(stsz: SampleSizeAtom) -> Vec<u8> {
         let mut data = Vec::new();
 
-        // Version and flags (4 bytes total)
-        let version_flags = u32::from(self.version) << 24 | (self.flags & 0x00FFFFFF);
-        data.extend_from_slice(&version_flags.to_be_bytes());
-
-        // Sample size (4 bytes)
-        data.extend_from_slice(&self.sample_size.to_be_bytes());
-
-        // Sample count (4 bytes)
-        data.extend_from_slice(&self.sample_count.to_be_bytes());
+        data.push(stsz.version);
+        data.extend(stsz.flags);
+        data.extend(stsz.sample_size.to_be_bytes());
+        data.extend(stsz.sample_count.to_be_bytes());
 
         // If sample_size is 0, write the sample size table
-        if self.sample_size == 0 {
-            for size in self.entry_sizes.iter() {
-                data.extend_from_slice(&size.to_be_bytes());
+        if stsz.sample_size == 0 {
+            for size in stsz.entry_sizes.0.into_iter() {
+                data.extend(size.to_be_bytes());
             }
         }
 
         data
+    }
+}
+
+mod parser {
+    use winnow::{
+        binary::be_u32,
+        combinator::{repeat, seq, trace},
+        error::StrContext,
+        ModalResult, Parser,
+    };
+
+    use super::{SampleEntrySizes, SampleSizeAtom};
+    use crate::atom::util::parser::{flags3, stream, version, Stream};
+
+    pub fn parse_stsz_data(input: &[u8]) -> Result<SampleSizeAtom, crate::ParseError> {
+        parse_stsz_data_inner
+            .parse(stream(input))
+            .map_err(crate::ParseError::from_winnow)
+    }
+
+    fn parse_stsz_data_inner(input: &mut Stream<'_>) -> ModalResult<SampleSizeAtom> {
+        trace(
+            "stsz",
+            seq!(SampleSizeAtom {
+                version: version,
+                flags: flags3,
+                sample_size: be_u32.context(StrContext::Label("sample_size")),
+                sample_count: be_u32.context(StrContext::Label("sample_count")),
+                entry_sizes: repeat(0.., be_u32.context(StrContext::Label("entry_size")))
+                    .map(SampleEntrySizes)
+                    .context(StrContext::Label("entry_sizes")),
+            })
+            .context(StrContext::Label("stsz")),
+        )
+        .parse_next(input)
     }
 }
 
