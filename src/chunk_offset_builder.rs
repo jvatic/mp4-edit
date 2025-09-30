@@ -237,7 +237,7 @@ mod tests {
 
         let stsz = SampleSizeAtom {
             version: 0,
-            flags: 0,
+            flags: [0u8; 3],
             sample_size: 0,
             sample_count: 7,
             entry_sizes: vec![100, 200, 150, 250, 300, 400, 500].into(),
@@ -282,7 +282,7 @@ mod tests {
 
         let stsz = SampleSizeAtom {
             version: 0,
-            flags: 0,
+            flags: [0u8; 3],
             sample_size: 0,
             sample_count: 5,
             entry_sizes: vec![100, 200, 300, 400, 500].into(),
@@ -326,7 +326,7 @@ mod tests {
 
         let stsz = SampleSizeAtom {
             version: 0,
-            flags: 0,
+            flags: [0u8; 3],
             sample_size: 0,
             sample_count: 0,
             entry_sizes: vec![].into(),
@@ -356,7 +356,7 @@ mod tests {
 
         let stsz_1 = SampleSizeAtom {
             version: 0,
-            flags: 0,
+            flags: [0u8; 3],
             sample_size: 0,
             sample_count: 4,
             entry_sizes: vec![100, 200, 150, 250].into(),
@@ -377,7 +377,7 @@ mod tests {
 
         let stsz_2 = SampleSizeAtom {
             version: 0,
-            flags: 0,
+            flags: [0u8; 3],
             sample_size: 0,
             sample_count: 3,
             entry_sizes: vec![300, 400, 500].into(),
@@ -449,7 +449,7 @@ mod tests {
 
         let stsz_1 = SampleSizeAtom {
             version: 0,
-            flags: 0,
+            flags: [0u8; 3],
             sample_size: 0,
             sample_count: 4,
             entry_sizes: vec![100, 200, 150, 250].into(),
@@ -470,7 +470,7 @@ mod tests {
 
         let stsz_2 = SampleSizeAtom {
             version: 0,
-            flags: 0,
+            flags: [0u8; 3],
             sample_size: 0,
             sample_count: 2,
             entry_sizes: vec![300, 400].into(),
@@ -522,7 +522,7 @@ mod tests {
 
         let stsz = SampleSizeAtom {
             version: 0,
-            flags: 0,
+            flags: [0u8; 3],
             sample_size: 0,
             sample_count: 6,
             entry_sizes: vec![100, 200, 300, 150, 250, 350].into(),
@@ -559,7 +559,7 @@ mod tests {
 
         let stsz = SampleSizeAtom {
             version: 0,
-            flags: 0,
+            flags: [0u8; 3],
             sample_size: 0,
             sample_count: 3,
             entry_sizes: vec![100, 200, 300].into(),
@@ -602,7 +602,7 @@ mod tests {
 
         let stsz_1 = SampleSizeAtom {
             version: 0,
-            flags: 0,
+            flags: [0u8; 3],
             sample_size: 0,
             sample_count: 5,
             entry_sizes: vec![100, 150, 200, 250, 300].into(),
@@ -623,7 +623,7 @@ mod tests {
 
         let stsz_2 = SampleSizeAtom {
             version: 0,
-            flags: 0,
+            flags: [0u8; 3],
             sample_size: 0,
             sample_count: 4,
             entry_sizes: vec![80, 120, 160, 240].into(),
@@ -677,7 +677,7 @@ mod tests {
 
         let stsz_1 = SampleSizeAtom {
             version: 0,
-            flags: 0,
+            flags: [0u8; 3],
             sample_size: 0,
             sample_count: 8,
             entry_sizes: vec![1000; 8].into(), // All samples are 1000 bytes
@@ -698,7 +698,7 @@ mod tests {
 
         let stsz_2 = SampleSizeAtom {
             version: 0,
-            flags: 0,
+            flags: [0u8; 3],
             sample_size: 0,
             sample_count: 4,
             entry_sizes: vec![50; 4].into(), // All samples are 50 bytes
@@ -744,7 +744,7 @@ mod tests {
 
         let stsz_1 = SampleSizeAtom {
             version: 0,
-            flags: 0,
+            flags: [0u8; 3],
             sample_size: 0,
             sample_count: 4,
             entry_sizes: vec![100, 200, 300, 400].into(),
@@ -765,7 +765,7 @@ mod tests {
 
         let stsz_2 = SampleSizeAtom {
             version: 0,
-            flags: 0,
+            flags: [0u8; 3],
             sample_size: 0,
             sample_count: 0,
             entry_sizes: vec![].into(),
@@ -806,7 +806,7 @@ mod tests {
 
         let stsz_1 = SampleSizeAtom {
             version: 0,
-            flags: 0,
+            flags: [0u8; 3],
             sample_size: 0,
             sample_count: 5,
             entry_sizes: vec![100, 150, 200, 250, 300].into(),
@@ -827,7 +827,7 @@ mod tests {
 
         let stsz_2 = SampleSizeAtom {
             version: 0,
-            flags: 0,
+            flags: [0u8; 3],
             sample_size: 0,
             sample_count: 8,
             entry_sizes: vec![80, 120, 90, 110, 70, 130, 60, 140].into(),
