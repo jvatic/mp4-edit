@@ -1,12 +1,8 @@
-use anyhow::{anyhow, Context};
 use futures_io::AsyncRead;
-use std::{fmt, io::Read};
+use std::fmt;
 
 use crate::{
-    atom::{
-        util::{async_to_sync_read, read_to_end},
-        FourCC,
-    },
+    atom::{util::read_to_end, FourCC},
     parser::ParseAtom,
     writer::SerializeAtom,
     ParseError,
