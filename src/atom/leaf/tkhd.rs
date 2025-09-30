@@ -1,12 +1,10 @@
-use anyhow::{anyhow, Context};
-
 use bon::Builder;
 use futures_io::AsyncRead;
-use std::{io::Read, time::Duration};
+use std::time::Duration;
 
 use crate::{
     atom::{
-        util::{async_to_sync_read, mp4_timestamp_now, scaled_duration, unscaled_duration},
+        util::{mp4_timestamp_now, read_to_end, scaled_duration, unscaled_duration},
         FourCC,
     },
     parser::ParseAtom,
@@ -15,6 +13,8 @@ use crate::{
 };
 
 pub const TKHD: &[u8; 4] = b"tkhd";
+
+const IDENTITY_MATRIX: [i32; 9] = [0x00010000, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000];
 
 #[derive(Default, Debug, Clone, Builder)]
 pub struct TrackHeaderAtom {
@@ -44,6 +44,8 @@ pub struct TrackHeaderAtom {
     #[builder(default = 1.0)]
     pub volume: f32,
     /// 3x3 transformation matrix for video display positioning/rotation
+    ///
+    /// `None` if matrix is empty or is the identity matrix
     pub matrix: Option<[i32; 9]>,
     /// Track width in pixels (fixed-point 16.16)
     #[builder(default = 0.0)]
@@ -75,200 +77,9 @@ impl ParseAtom for TrackHeaderAtom {
         if atom_type != TKHD {
             return Err(ParseError::new_unexpected_atom(atom_type, TKHD));
         }
-        parse_tkhd_data(async_to_sync_read(reader).await?).map_err(ParseError::new_atom_parse)
+        let data = read_to_end(reader).await?;
+        parser::parse_tkhd_data(&data)
     }
-}
-
-fn parse_tkhd_data<R: Read>(mut reader: R) -> Result<TrackHeaderAtom, anyhow::Error> {
-    // Read version and flags (4 bytes)
-    let mut version_flags = [0u8; 4];
-    reader
-        .read_exact(&mut version_flags)
-        .context("read version and flags")?;
-
-    let version = version_flags[0];
-    let flags = [version_flags[1], version_flags[2], version_flags[3]];
-
-    match version {
-        0 => parse_tkhd_v0(reader, flags),
-        1 => parse_tkhd_v1(reader, flags),
-        v => Err(anyhow!("unsupported version {v}")),
-    }
-}
-
-fn parse_tkhd_v0<R: Read>(mut reader: R, flags: [u8; 3]) -> Result<TrackHeaderAtom, anyhow::Error> {
-    let mut buf = [0u8; 4];
-
-    // Creation time (32-bit)
-    reader.read_exact(&mut buf).context("creation_time")?;
-    let creation_time = u64::from(u32::from_be_bytes(buf));
-
-    // Modification time (32-bit)
-    reader.read_exact(&mut buf).context("modification_time")?;
-    let modification_time = u64::from(u32::from_be_bytes(buf));
-
-    // Track ID
-    reader.read_exact(&mut buf).context("track_id")?;
-    let track_id = u32::from_be_bytes(buf);
-
-    // Reserved (4 bytes)
-    reader.read_exact(&mut buf).context("reserved1")?;
-
-    // Duration (32-bit)
-    reader.read_exact(&mut buf).context("duration")?;
-    let duration = u64::from(u32::from_be_bytes(buf));
-
-    // Reserved (8 bytes)
-    let mut reserved = [0u8; 8];
-    reader.read_exact(&mut reserved).context("reserved2")?;
-
-    // Layer (16-bit signed)
-    let mut layer_buf = [0u8; 2];
-    reader.read_exact(&mut layer_buf).context("layer")?;
-    let layer = i16::from_be_bytes(layer_buf);
-
-    // Alternate group (16-bit signed)
-    let mut alt_buf = [0u8; 2];
-    reader.read_exact(&mut alt_buf).context("alternate_group")?;
-    let alternate_group = i16::from_be_bytes(alt_buf);
-
-    // Volume (fixed-point 8.8) - stored in 16 bits
-    let mut vol_buf = [0u8; 2];
-    reader.read_exact(&mut vol_buf).context("volume")?;
-    let volume_fixed = u16::from_be_bytes(vol_buf);
-    let volume = f32::from(volume_fixed) / 256.0;
-
-    // Reserved (2 bytes)
-    let mut reserved2 = [0u8; 2];
-    reader.read_exact(&mut reserved2).context("reserved3")?;
-
-    // Matrix (9 x 32-bit values)
-    let mut matrix = [0i32; 9];
-    for item in &mut matrix {
-        reader.read_exact(&mut buf).context("matrix")?;
-        *item = i32::from_be_bytes(buf);
-    }
-    let matrix = if is_empty_matrix(&matrix) {
-        None
-    } else {
-        Some(matrix)
-    };
-
-    // Width (fixed-point 16.16)
-    reader.read_exact(&mut buf).context("width")?;
-    let width_fixed = u32::from_be_bytes(buf);
-    let width = (width_fixed as f32) / 65536.0;
-
-    // Height (fixed-point 16.16)
-    reader.read_exact(&mut buf).context("height")?;
-    let height_fixed = u32::from_be_bytes(buf);
-    let height = (height_fixed as f32) / 65536.0;
-
-    Ok(TrackHeaderAtom {
-        version: 0,
-        flags,
-        creation_time,
-        modification_time,
-        track_id,
-        duration,
-        layer,
-        alternate_group,
-        volume,
-        matrix,
-        width,
-        height,
-    })
-}
-
-fn parse_tkhd_v1<R: Read>(mut reader: R, flags: [u8; 3]) -> Result<TrackHeaderAtom, anyhow::Error> {
-    let mut buf4 = [0u8; 4];
-    let mut buf8 = [0u8; 8];
-
-    // Creation time (64-bit)
-    reader.read_exact(&mut buf8).context("creation_time")?;
-    let creation_time = u64::from_be_bytes(buf8);
-
-    // Modification time (64-bit)
-    reader.read_exact(&mut buf8).context("modification_time")?;
-    let modification_time = u64::from_be_bytes(buf8);
-
-    // Track ID
-    reader.read_exact(&mut buf4).context("track_id")?;
-    let track_id = u32::from_be_bytes(buf4);
-
-    // Reserved (4 bytes)
-    reader.read_exact(&mut buf4).context("reserved1")?;
-
-    // Duration (64-bit)
-    reader.read_exact(&mut buf8).context("duration")?;
-    let duration = u64::from_be_bytes(buf8);
-
-    // Reserved (8 bytes)
-    let mut reserved = [0u8; 8];
-    reader.read_exact(&mut reserved).context("reserved2")?;
-
-    // Layer (16-bit signed)
-    let mut layer_buf = [0u8; 2];
-    reader.read_exact(&mut layer_buf).context("layer")?;
-    let layer = i16::from_be_bytes(layer_buf);
-
-    // Alternate group (16-bit signed)
-    let mut alt_buf = [0u8; 2];
-    reader.read_exact(&mut alt_buf).context("alternate_group")?;
-    let alternate_group = i16::from_be_bytes(alt_buf);
-
-    // Volume (fixed-point 8.8) - stored in 16 bits
-    let mut vol_buf = [0u8; 2];
-    reader.read_exact(&mut vol_buf).context("volume")?;
-    let volume_fixed = u16::from_be_bytes(vol_buf);
-    let volume = f32::from(volume_fixed) / 256.0;
-
-    // Reserved (2 bytes)
-    let mut reserved2 = [0u8; 2];
-    reader.read_exact(&mut reserved2).context("reserved3")?;
-
-    // Matrix (9 x 32-bit values)
-    let mut matrix = [0i32; 9];
-    for item in &mut matrix {
-        reader.read_exact(&mut buf4).context("matrix")?;
-        *item = i32::from_be_bytes(buf4);
-    }
-    let matrix = if is_empty_matrix(&matrix) {
-        None
-    } else {
-        Some(matrix)
-    };
-
-    // Width (fixed-point 16.16)
-    reader.read_exact(&mut buf4).context("width")?;
-    let width_fixed = u32::from_be_bytes(buf4);
-    let width = (width_fixed as f32) / 65536.0;
-
-    // Height (fixed-point 16.16)
-    reader.read_exact(&mut buf4).context("height")?;
-    let height_fixed = u32::from_be_bytes(buf4);
-    let height = (height_fixed as f32) / 65536.0;
-
-    Ok(TrackHeaderAtom {
-        version: 1,
-        flags,
-        creation_time,
-        modification_time,
-        track_id,
-        duration,
-        layer,
-        alternate_group,
-        volume,
-        matrix,
-        width,
-        height,
-    })
-}
-
-fn is_empty_matrix(matrix: &[i32; 9]) -> bool {
-    let empty = [0; 9];
-    let identity = [0x00010000, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000];
-    matrix == &empty || matrix == &identity
 }
 
 impl SerializeAtom for TrackHeaderAtom {
@@ -277,83 +88,142 @@ impl SerializeAtom for TrackHeaderAtom {
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
+        serializer::serialize_tkhd_data(self)
+    }
+}
+
+mod serializer {
+    use crate::atom::{
+        tkhd::IDENTITY_MATRIX,
+        util::serializer::{fixed_point_16x16, fixed_point_8x8},
+    };
+
+    use super::TrackHeaderAtom;
+
+    pub fn serialize_tkhd_data(tkhd: TrackHeaderAtom) -> Vec<u8> {
         let mut data = Vec::new();
 
-        // Determine version based on whether values fit in 32-bit
-        let needs_64_bit = self.creation_time > u64::from(u32::MAX)
-            || self.modification_time > u64::from(u32::MAX)
-            || self.duration > u64::from(u32::MAX);
+        let version: u8 = if tkhd.version == 1
+            || tkhd.creation_time > u64::from(u32::MAX)
+            || tkhd.modification_time > u64::from(u32::MAX)
+            || tkhd.duration > u64::from(u32::MAX)
+        {
+            1
+        } else {
+            0
+        };
 
-        let version = i32::from(needs_64_bit);
+        let be_u32_or_u64 = |v: u64| match version {
+            0 => u32::try_from(v).unwrap().to_be_bytes().to_vec(),
+            1 => v.to_be_bytes().to_vec(),
+            _ => unreachable!(),
+        };
 
-        // Version and flags (4 bytes)
-        let version_flags = (version as u32) << 24
-            | u32::from(self.flags[0]) << 16
-            | u32::from(self.flags[1]) << 8
-            | u32::from(self.flags[2]);
-        data.extend_from_slice(&version_flags.to_be_bytes());
-
-        match version {
-            0 => {
-                // Creation time (32-bit)
-                data.extend_from_slice(&(self.creation_time as u32).to_be_bytes());
-                // Modification time (32-bit)
-                data.extend_from_slice(&(self.modification_time as u32).to_be_bytes());
-                // Track ID
-                data.extend_from_slice(&self.track_id.to_be_bytes());
-                // Reserved (4 bytes)
-                data.extend_from_slice(&[0u8; 4]);
-                // Duration (32-bit)
-                data.extend_from_slice(&(self.duration as u32).to_be_bytes());
-            }
-            1 => {
-                // Creation time (64-bit)
-                data.extend_from_slice(&self.creation_time.to_be_bytes());
-                // Modification time (64-bit)
-                data.extend_from_slice(&self.modification_time.to_be_bytes());
-                // Track ID
-                data.extend_from_slice(&self.track_id.to_be_bytes());
-                // Reserved (4 bytes)
-                data.extend_from_slice(&[0u8; 4]);
-                // Duration (64-bit)
-                data.extend_from_slice(&self.duration.to_be_bytes());
-            }
-            _ => {} // Should not happen due to validation during parsing
-        }
-
-        // Reserved (8 bytes)
-        data.extend_from_slice(&[0u8; 8]);
-
-        // Layer (16-bit signed)
-        data.extend_from_slice(&self.layer.to_be_bytes());
-
-        // Alternate group (16-bit signed)
-        data.extend_from_slice(&self.alternate_group.to_be_bytes());
-
-        // Volume (fixed-point 8.8)
-        let volume_fixed = (self.volume * 256.0) as u16;
-        data.extend_from_slice(&volume_fixed.to_be_bytes());
-
-        // Reserved (2 bytes)
-        data.extend_from_slice(&[0u8; 2]);
-
-        // Matrix (9 x 32-bit values)
-        let matrix = self
-            .matrix
-            .unwrap_or([0x00010000, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000]);
-        for value in matrix {
-            data.extend_from_slice(&value.to_be_bytes());
-        }
-
-        // Width (fixed-point 16.16)
-        let width_fixed = (self.width * 65536.0) as u32;
-        data.extend_from_slice(&width_fixed.to_be_bytes());
-
-        // Height (fixed-point 16.16)
-        let height_fixed = (self.height * 65536.0) as u32;
-        data.extend_from_slice(&height_fixed.to_be_bytes());
+        data.push(version);
+        data.extend(tkhd.flags);
+        data.extend(be_u32_or_u64(tkhd.creation_time));
+        data.extend(be_u32_or_u64(tkhd.modification_time));
+        data.extend(tkhd.track_id.to_be_bytes());
+        data.extend([0u8; 4]); // reserved
+        data.extend(be_u32_or_u64(tkhd.duration));
+        data.extend([0u8; 8]); // reserved
+        data.extend(tkhd.layer.to_be_bytes());
+        data.extend(tkhd.alternate_group.to_be_bytes());
+        data.extend(fixed_point_8x8(tkhd.volume));
+        data.extend([0u8; 2]); // reserved
+        data.extend(
+            tkhd.matrix
+                .unwrap_or(IDENTITY_MATRIX)
+                .into_iter()
+                .flat_map(|v| v.to_be_bytes()),
+        );
+        data.extend(fixed_point_16x16(tkhd.width));
+        data.extend(fixed_point_16x16(tkhd.height));
 
         data
+    }
+}
+
+mod parser {
+    use winnow::{
+        binary::{be_i16, be_i32, be_u32, be_u64},
+        combinator::{seq, trace},
+        error::{StrContext, StrContextValue},
+        ModalResult, Parser,
+    };
+
+    use super::TrackHeaderAtom;
+    use crate::atom::{
+        tkhd::IDENTITY_MATRIX,
+        util::parser::{
+            be_u32_as_u64, byte_array, fixed_array, fixed_point_16x16, fixed_point_8x8, flags3,
+            stream, version, Stream,
+        },
+    };
+
+    pub fn parse_tkhd_data(input: &[u8]) -> Result<TrackHeaderAtom, crate::ParseError> {
+        parse_tkhd_data_inner
+            .parse(stream(input))
+            .map_err(crate::ParseError::from_winnow)
+    }
+
+    fn parse_tkhd_data_inner(input: &mut Stream<'_>) -> ModalResult<TrackHeaderAtom> {
+        let be_u32_or_u64 = |version: u8| {
+            let be_u64_type_fix =
+                |input: &mut Stream<'_>| -> ModalResult<u64> { be_u64.parse_next(input) };
+            match version {
+                0 => be_u32_as_u64,
+                1 => be_u64_type_fix,
+                _ => unreachable!(),
+            }
+        };
+
+        trace(
+            "tkhd",
+            seq!(TrackHeaderAtom {
+                version: version
+                    .verify(|version| *version <= 1)
+                    .context(StrContext::Expected(StrContextValue::Description(
+                        "expected version 0 or 1"
+                    ))),
+                flags: flags3,
+                creation_time: be_u32_or_u64(version).context(StrContext::Label("creation_time")),
+                modification_time: be_u32_or_u64(version).context(StrContext::Label("modification_time")),
+                track_id: be_u32.context(StrContext::Label("track_id")),
+                _: byte_array::<4>.context(StrContext::Label("reserved_1")),
+                duration: be_u32_or_u64(version),
+                _: byte_array::<8>.context(StrContext::Label("reserved_2")),
+                layer: be_i16.context(StrContext::Label("layer")),
+                alternate_group: be_i16.context(StrContext::Label("alternate_group")),
+                volume: fixed_point_8x8.context(StrContext::Label("volume")),
+                _: byte_array::<2>.context(StrContext::Label("reserved_3")),
+                matrix: matrix.context(StrContext::Label("matrix")),
+                width: fixed_point_16x16.context(StrContext::Label("width")),
+                height: fixed_point_16x16.context(StrContext::Label("height")),
+            })
+            .context(StrContext::Label("tkhd")),
+        )
+        .parse_next(input)
+    }
+
+    fn matrix(input: &mut Stream<'_>) -> ModalResult<Option<[i32; 9]>> {
+        trace(
+            "matrix",
+            fixed_array(be_i32).map(|matrix: [i32; 9]| {
+                if is_empty_matrix(&matrix) {
+                    None
+                } else {
+                    Some(matrix)
+                }
+            }),
+        )
+        .parse_next(input)
+    }
+
+    fn is_empty_matrix(matrix: &[i32; 9]) -> bool {
+        let empty = [0; 9];
+        let identity = IDENTITY_MATRIX;
+        matrix == &empty || matrix == &identity
     }
 }
 
