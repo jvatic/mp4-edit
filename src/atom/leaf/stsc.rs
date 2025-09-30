@@ -311,11 +311,11 @@ impl SerializeAtom for SampleToChunkAtom {
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
-        serialier::serialize_stsc_atom(self)
+        serializer::serialize_stsc_atom(self)
     }
 }
 
-mod serialier {
+mod serializer {
     use crate::atom::util::serializer::be_u32;
 
     use super::SampleToChunkAtom;
