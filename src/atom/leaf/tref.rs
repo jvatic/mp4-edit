@@ -3,35 +3,16 @@ use futures_io::AsyncRead;
 use std::{fmt, io::Read};
 
 use crate::{
-    atom::{util::async_to_sync_read, FourCC},
+    atom::{
+        util::{async_to_sync_read, read_to_end},
+        FourCC,
+    },
     parser::ParseAtom,
     writer::SerializeAtom,
     ParseError,
 };
 
 pub const TREF: &[u8; 4] = b"tref";
-
-/// Track Reference Types - Common reference types found in MP4 files
-pub mod reference_types {
-    /// Hint track reference - points to the media track that this hint track describes
-    pub const HINT: &[u8; 4] = b"hint";
-    /// Chapter track reference - points to the track that contains chapter information
-    pub const CHAP: &[u8; 4] = b"chap";
-    /// Subtitle track reference - points to the subtitle track
-    pub const SUBT: &[u8; 4] = b"subt";
-    /// Audio description track reference
-    pub const ADSC: &[u8; 4] = b"adsc";
-    /// Forced subtitle track reference
-    pub const FORC: &[u8; 4] = b"forc";
-    /// Karaoke track reference
-    pub const KARO: &[u8; 4] = b"karo";
-    /// Metadata track reference
-    pub const META: &[u8; 4] = b"meta";
-    /// Auxiliary video track reference
-    pub const AUXV: &[u8; 4] = b"auxv";
-    /// Closed caption track reference
-    pub const CLCP: &[u8; 4] = b"clcp";
-}
 
 /// A single track reference entry containing the reference type and target track IDs
 #[derive(Debug, Clone)]
@@ -110,7 +91,8 @@ impl ParseAtom for TrackReferenceAtom {
         if atom_type != TREF {
             return Err(ParseError::new_unexpected_atom(atom_type, TREF));
         }
-        parse_tref_data(async_to_sync_read(reader).await?).map_err(ParseError::new_atom_parse)
+        let data = read_to_end(reader).await?;
+        parser::parse_tref_data(&data)
     }
 }
 
@@ -120,97 +102,77 @@ impl SerializeAtom for TrackReferenceAtom {
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
-        let mut data = Vec::new();
-
-        // Serialize each reference as a child atom
-        for reference in self.references {
-            // Calculate size: 8 bytes header + 4 bytes per track ID
-            let size = 8 + (reference.track_ids.len() * 4);
-
-            // Write size (4 bytes)
-            data.extend(&(size as u32).to_be_bytes());
-
-            // Write reference type (4 bytes)
-            data.extend(&reference.reference_type.0);
-
-            // Write track IDs (4 bytes each)
-            for track_id in reference.track_ids {
-                data.extend(&track_id.to_be_bytes());
-            }
-        }
-
-        data
+        serializer::serialize_tref_atom(self)
     }
 }
 
-fn parse_tref_data<R: Read>(mut reader: R) -> Result<TrackReferenceAtom, anyhow::Error> {
-    let mut data = Vec::new();
-    reader.read_to_end(&mut data).context("reading tref data")?;
+mod serializer {
+    use crate::atom::util::serializer::{prepend_size, SizeU32};
 
-    let mut references = Vec::new();
-    let mut offset = 0;
+    use super::TrackReferenceAtom;
 
-    // Parse child atoms (reference type atoms)
-    while offset < data.len() {
-        if offset + 8 > data.len() {
-            return Err(anyhow!(
-                "Incomplete reference atom header at offset {}",
-                offset
-            ));
-        }
+    pub fn serialize_tref_atom(tref: TrackReferenceAtom) -> Vec<u8> {
+        tref.references
+            .into_iter()
+            .flat_map(|reference| {
+                prepend_size::<SizeU32, _>(move || {
+                    let mut data = Vec::new();
 
-        // Read size and type of reference atom
-        let size = u32::from_be_bytes([
-            data[offset],
-            data[offset + 1],
-            data[offset + 2],
-            data[offset + 3],
-        ]) as usize;
+                    data.extend(reference.reference_type.into_bytes());
+                    for track_id in reference.track_ids {
+                        data.extend(track_id.to_be_bytes());
+                    }
 
-        let reference_type = FourCC([
-            data[offset + 4],
-            data[offset + 5],
-            data[offset + 6],
-            data[offset + 7],
-        ]);
+                    data
+                })
+            })
+            .collect()
+    }
+}
 
-        if size < 8 {
-            return Err(anyhow!("Invalid reference atom size: {}", size));
-        }
+mod parser {
+    use winnow::{
+        binary::be_u32,
+        combinator::{repeat, seq, trace},
+        error::StrContext,
+        ModalResult, Parser,
+    };
 
-        if offset + size > data.len() {
-            return Err(anyhow!(
-                "Reference atom extends beyond tref data: offset={}, size={}, data_len={}",
-                offset,
-                size,
-                data.len()
-            ));
-        }
+    use super::{TrackReference, TrackReferenceAtom};
+    use crate::atom::util::parser::{
+        combinators::inclusive_length_and_then, fourcc, stream, Stream,
+    };
 
-        // Parse track IDs (remaining data after 8-byte header, each ID is 4 bytes)
-        let ids_data = &data[offset + 8..offset + size];
-        if ids_data.len() % 4 != 0 {
-            return Err(anyhow!(
-                "Invalid track IDs data length: {} bytes (must be multiple of 4)",
-                ids_data.len()
-            ));
-        }
-
-        let mut track_ids = Vec::new();
-        for chunk in ids_data.chunks_exact(4) {
-            let track_id = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-            track_ids.push(track_id);
-        }
-
-        references.push(TrackReference {
-            reference_type,
-            track_ids,
-        });
-
-        offset += size;
+    pub fn parse_tref_data(input: &[u8]) -> Result<TrackReferenceAtom, crate::ParseError> {
+        parse_tref_data_inner
+            .parse(stream(input))
+            .map_err(crate::ParseError::from_winnow)
     }
 
-    Ok(TrackReferenceAtom { references })
+    fn parse_tref_data_inner(input: &mut Stream<'_>) -> ModalResult<TrackReferenceAtom> {
+        trace(
+            "tref",
+            seq!(TrackReferenceAtom {
+                references: repeat(0.., inclusive_length_and_then(be_u32, reference))
+                    .context(StrContext::Label("references")),
+            })
+            .context(StrContext::Label("tref")),
+        )
+        .parse_next(input)
+    }
+
+    fn reference(input: &mut Stream<'_>) -> ModalResult<TrackReference> {
+        trace(
+            "reference",
+            seq!(TrackReference {
+                reference_type: fourcc.context(StrContext::Label("reference_type")),
+                track_ids: repeat(0.., be_u32.context(StrContext::Label("track_id")))
+                    .context(StrContext::Label("track_ids")),
+            })
+            .context(StrContext::Label("reference")),
+        )
+        .parse_next(input)
+    }
 }
 
 #[cfg(test)]
