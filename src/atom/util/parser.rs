@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
 use winnow::{
-    binary::{be_u16, be_u32, be_u64, length_and_then, u8},
+    binary::{be_i32, be_u16, be_u32, be_u64, length_and_then, u8},
     combinator::trace,
     error::{ParserError, StrContext, StrContextValue},
     token::rest,
@@ -60,6 +60,34 @@ pub fn be_u32_as_u64(input: &mut Stream<'_>) -> ModalResult<u64> {
         be_u32
             .map(|s| s as u64)
             .context(StrContext::Expected(StrContextValue::Description("be u32"))),
+    )
+    .parse_next(input)
+}
+
+pub fn be_u32_as<'i, T, E>(input: &mut Stream<'i>) -> ModalResult<T>
+where
+    T: TryFrom<u32, Error = E> + 'i,
+    E: std::error::Error + Send + Sync + 'static,
+{
+    trace(
+        "be_u32_as",
+        be_u32
+            .try_map(|s| T::try_from(s))
+            .context(StrContext::Expected(StrContextValue::Description("be u32"))),
+    )
+    .parse_next(input)
+}
+
+pub fn be_i32_as<'i, T, E>(input: &mut Stream<'i>) -> ModalResult<T>
+where
+    T: TryFrom<i32, Error = E> + 'i,
+    E: std::error::Error + Send + Sync + 'static,
+{
+    trace(
+        "be_i32_as",
+        be_i32
+            .try_map(|s| T::try_from(s))
+            .context(StrContext::Expected(StrContextValue::Description("be i32"))),
     )
     .parse_next(input)
 }
