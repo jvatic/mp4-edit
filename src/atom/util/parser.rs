@@ -195,6 +195,26 @@ pub fn fixed_point_8x8(input: &mut Stream<'_>) -> ModalResult<f32> {
     .parse_next(input)
 }
 
+/// Read be_u32 from between 1 and 4 bytes using VLQ
+pub fn variable_length_be_u32(input: &mut Stream<'_>) -> ModalResult<u32> {
+    variable_length_quantity::<_, 4>(input)
+}
+
+fn variable_length_quantity<T, const N: usize>(input: &mut Stream<'_>) -> ModalResult<T>
+where
+    T: From<u8> + std::ops::Shl<u8, Output = T> + std::ops::BitOr<T, Output = T>,
+{
+    let mut length = T::from(0);
+    for _ in 0..N {
+        let byte = u8.parse_next(input)?;
+        length = (length << 7) | T::from(byte & 0b0111_1111);
+        if (byte & 0b1000_0000) == 0 {
+            break;
+        }
+    }
+    Ok(length)
+}
+
 pub mod combinators {
     use winnow::combinator::trace;
     use winnow::error::ParserError;
