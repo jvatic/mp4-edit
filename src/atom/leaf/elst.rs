@@ -131,10 +131,8 @@ impl SerializeAtom for EditListAtom {
     }
 }
 
-const FIXED_POINT_SCALE: f32 = 65536.0;
-
 mod serializer {
-    use crate::atom::elst::{EditEntry, FIXED_POINT_SCALE};
+    use crate::atom::{elst::EditEntry, util::serializer::fixed_point_16x16};
 
     use super::EditListAtom;
 
@@ -201,15 +199,13 @@ mod serializer {
     }
 
     fn media_rate(media_rate: f32) -> Vec<u8> {
-        // Convert f32 to fixed-point 16.16
-        let rate_fixed = (media_rate * FIXED_POINT_SCALE) as u32;
-        rate_fixed.to_be_bytes().to_vec()
+        fixed_point_16x16(media_rate)
     }
 }
 
 mod parser {
     use winnow::{
-        binary::{be_i32, be_i64, be_u32, be_u64, length_repeat},
+        binary::{be_i64, be_u32, be_u64, length_repeat},
         combinator::{seq, trace},
         error::StrContext,
         ModalResult, Parser,
@@ -217,8 +213,8 @@ mod parser {
 
     use super::EditListAtom;
     use crate::atom::{
-        elst::{EditEntry, FIXED_POINT_SCALE},
-        util::parser::{flags3, stream, version, Stream},
+        elst::EditEntry,
+        util::parser::{be_i32_as, be_u32_as, fixed_point_16x16, flags3, stream, version, Stream},
     };
 
     pub fn parse_elst_data(input: &[u8]) -> Result<EditListAtom, crate::ParseError> {
@@ -234,7 +230,7 @@ mod parser {
                 version: version,
                 flags: flags3,
                 entries: length_repeat(
-                    entry_count,
+                    be_u32.context(StrContext::Label("entry_count")),
                     match version {
                         1 => entry_64,
                         _ => entry_32,
@@ -246,20 +242,12 @@ mod parser {
         .parse_next(input)
     }
 
-    fn entry_count(input: &mut Stream<'_>) -> ModalResult<u32> {
-        trace(
-            "entry_count",
-            be_u32.context(StrContext::Label("entry_count")),
-        )
-        .parse_next(input)
-    }
-
     fn entry_32(input: &mut Stream<'_>) -> ModalResult<EditEntry> {
         trace(
-            "entry_u32",
+            "entry_32",
             seq!(EditEntry {
-                segment_duration: segment_duration_u32,
-                media_time: media_time_i32,
+                segment_duration: be_u32_as.context(StrContext::Label("segment_duration")),
+                media_time: be_i32_as.context(StrContext::Label("media_time")),
                 media_rate: media_rate,
             })
             .context(StrContext::Label("entry")),
@@ -269,10 +257,10 @@ mod parser {
 
     fn entry_64(input: &mut Stream<'_>) -> ModalResult<EditEntry> {
         trace(
-            "entry_u64",
+            "entry_64",
             seq!(EditEntry {
-                segment_duration: segment_duration_u64,
-                media_time: media_time_i64,
+                segment_duration: be_u64.context(StrContext::Label("segment_duration")),
+                media_time: be_i64.context(StrContext::Label("media_time")),
                 media_rate: media_rate,
             })
             .context(StrContext::Label("entry")),
@@ -280,48 +268,10 @@ mod parser {
         .parse_next(input)
     }
 
-    fn segment_duration_u64(input: &mut Stream<'_>) -> ModalResult<u64> {
-        trace(
-            "segment_duration_u64",
-            be_u64.context(StrContext::Label("segment_duration")),
-        )
-        .parse_next(input)
-    }
-
-    fn segment_duration_u32(input: &mut Stream<'_>) -> ModalResult<u64> {
-        trace(
-            "segment_duration_u32",
-            be_u32
-                .map(|v| v as u64)
-                .context(StrContext::Label("segment_duration")),
-        )
-        .parse_next(input)
-    }
-
-    fn media_time_i64(input: &mut Stream<'_>) -> ModalResult<i64> {
-        trace(
-            "media_time_i64",
-            be_i64.context(StrContext::Label("media_time")),
-        )
-        .parse_next(input)
-    }
-
-    fn media_time_i32(input: &mut Stream<'_>) -> ModalResult<i64> {
-        trace(
-            "media_time_i32",
-            be_i32
-                .map(|v| v as i64)
-                .context(StrContext::Label("media_time")),
-        )
-        .parse_next(input)
-    }
-
     fn media_rate(input: &mut Stream<'_>) -> ModalResult<f32> {
         trace(
             "media_rate",
-            be_u32
-                .map(|v| (v as f32) / FIXED_POINT_SCALE)
-                .context(StrContext::Label("media_time")),
+            fixed_point_16x16.context(StrContext::Label("media_rate")),
         )
         .parse_next(input)
     }
