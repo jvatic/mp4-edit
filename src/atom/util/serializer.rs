@@ -126,7 +126,9 @@ pub mod bits {
     impl From<Packer> for Vec<u8> {
         fn from(packer: Packer) -> Self {
             let mut res = packer.full_bytes;
-            res.push(packer.partial_byte);
+            if packer.bit_offset > 0 {
+                res.push(packer.partial_byte);
+            }
             res
         }
     }
@@ -138,6 +140,10 @@ pub mod bits {
                 partial_byte: 0u8,
                 bit_offset: 0u8,
             }
+        }
+
+        pub fn push_bool(&mut self, b: bool) {
+            self.push_n::<1>(b as u8);
         }
 
         pub fn push_n<const N: u8>(&mut self, bits: u8) {
@@ -266,11 +272,17 @@ pub mod bits {
                     assert_eq!(packer.bit_offset, $expect_bit_offset);
                     assert_bytes_equal(&packer.full_bytes, &$expect_full_bytes);
 
-                    // ensure converting packer into a Vec includes the partial byte
-                    let mut expected_full_bytes = $expect_full_bytes;
-                    expected_full_bytes.push($expect_partial_byte);
-                    let full_bytes: Vec<_> = packer.into();
-                    assert_bytes_equal(&full_bytes, &expected_full_bytes);
+                    // ensure converting packer into a Vec handles partial byte
+                    if $expect_bit_offset > 0 {
+                        let mut expected_full_bytes = $expect_full_bytes;
+                        expected_full_bytes.push($expect_partial_byte);
+                        let full_bytes: Vec<_> = packer.into();
+                        assert_bytes_equal(&full_bytes, &expected_full_bytes);
+                    } else {
+                        let expected_full_bytes = $expect_full_bytes;
+                        let full_bytes: Vec<_> = packer.into();
+                        assert_bytes_equal(&full_bytes, &expected_full_bytes);
+                    }
                 }
             };
         }
