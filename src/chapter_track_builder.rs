@@ -409,8 +409,8 @@ impl ChapterTrack {
                 horizontal_justification: 0,
                 vertical_justification: 0,
                 background_color: Default::default(),
-                default_text_box: Default::default(),
-                default_style_record: Default::default(),
+                text_box: Default::default(),
+                style_record: Default::default(),
                 font_table: None,
             }),
         };
