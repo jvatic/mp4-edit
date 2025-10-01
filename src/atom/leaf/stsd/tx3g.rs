@@ -6,8 +6,8 @@ pub struct Tx3gEntryData {
     pub horizontal_justification: i8,
     pub vertical_justification: i8,
     pub background_color: ColorRgba,
-    pub default_text_box: TextBox,
-    pub default_style_record: StyleRecord,
+    pub text_box: TextBox,
+    pub style_record: StyleRecord,
     pub font_table: Option<Vec<FontTableEntry>>,
 }
 
@@ -68,8 +68,8 @@ pub mod serializer {
         data.extend(tx3g.horizontal_justification.to_be_bytes());
         data.extend(tx3g.vertical_justification.to_be_bytes());
         data.extend(serialize_color_rbga(tx3g.background_color));
-        data.extend(serialize_text_box(tx3g.default_text_box));
-        data.extend(serialize_style_record(tx3g.default_style_record));
+        data.extend(serialize_text_box(tx3g.text_box));
+        data.extend(serialize_style_record(tx3g.style_record));
 
         if let Some(font_table) = tx3g.font_table {
             data.extend(prepend_size::<SizeU32OrU64, _>(move || {
@@ -160,9 +160,8 @@ pub mod parser {
                 horizontal_justification: i8.context(StrContext::Label("horizontal_justification")),
                 vertical_justification: i8.context(StrContext::Label("vertical_justification")),
                 background_color: color_rgba.context(StrContext::Label("background_color")),
-                default_text_box: text_box.context(StrContext::Label("default_text_box")),
-                default_style_record: style_record
-                    .context(StrContext::Label("default_style_record")),
+                text_box: text_box.context(StrContext::Label("default_text_box")),
+                style_record: style_record.context(StrContext::Label("default_style_record")),
                 font_table: opt(inclusive_length_and_then(
                     atom_size,
                     |input: &mut Stream<'_>| {
