@@ -238,6 +238,16 @@ pub fn parse_stsd_extensions(data: &[u8]) -> Result<StsdExtensionData, ParseStsd
     Ok(StsdExtensionData { extensions: boxes })
 }
 
+mod parser {
+    use winnow::ModalResult;
+
+    use crate::atom::{stsd::StsdExtension, util::parser::Stream};
+
+    pub fn parse_stsd_extension(input: &mut Stream<'_>) -> ModalResult<StsdExtension> {
+        todo!()
+    }
+}
+
 fn parse_stsd_extension(
     cursor: &mut Cursor<&[u8]>,
 ) -> Result<StsdExtension, ParseStsdExtensionError> {
