@@ -16,7 +16,7 @@ use mp4_edit::{
         stsd::{self, StsdExtension},
         SampleDescriptionTableAtom,
     },
-    Atom, AtomData, Parser,
+    Atom, AtomData, FourCC, Parser,
 };
 
 /// Check if an atom type is a container atom
@@ -176,7 +176,7 @@ async fn extract_stsd_extensions(
     let empty_list: Vec<StsdExtension> = Vec::new();
     for entry in stsd.entries.iter() {
         let extensions = match &entry.data {
-            stsd::SampleEntryData::Mp4a(entry) => entry.extensions.iter(),
+            stsd::SampleEntryData::Audio(entry) => entry.extensions.iter(),
             _ => empty_list.iter(),
         };
 
@@ -189,12 +189,16 @@ async fn extract_stsd_extensions(
 
 async fn extract_stsd_extension(ext: &StsdExtension, output_dir: &str) -> Result<()> {
     // We'll only extract the unknown extensions to be sure we're getting the correct bytes
-    let ext = match ext {
-        StsdExtension::Unknown(ext) => ext,
+    let (typ, data) = match ext {
+        StsdExtension::Unknown {
+            fourcc,
+            size: _,
+            data,
+        } => (fourcc, data),
         _ => return Ok(()),
     };
 
-    let mut type_str = ext.typ.to_string();
+    let mut type_str = FourCC::new(typ).to_string();
 
     if type_str.contains('\0') {
         type_str = "unknown".to_string();
@@ -202,7 +206,7 @@ async fn extract_stsd_extension(ext: &StsdExtension, output_dir: &str) -> Result
 
     let (filename, output_path) = choose_output_filename(type_str.clone(), output_dir).await?;
 
-    let data = ext.data.clone();
+    let data = data.clone();
 
     fs::write(&output_path, &data).await.with_context(|| {
         format!(

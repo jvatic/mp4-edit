@@ -8,8 +8,8 @@ use crate::{
     atom::{
         atom_ref::{AtomRef, AtomRefMut},
         stsd::{
-            BtrtExtension, DecoderSpecificInfo, EsdsExtension, Mp4aEntryData, SampleEntry,
-            SampleEntryData, StsdExtension,
+            AudioSampleEntry, BtrtExtension, DecoderSpecificInfo, EsdsExtension, SampleEntry,
+            SampleEntryData, SampleEntryType, StsdExtension,
         },
         tkhd::TKHD,
         tref::TREF,
@@ -181,19 +181,23 @@ impl<'a> TrakAtomRefMut<'a> {
         let mut stbl = minf.sample_table();
         let stsd = stbl.sample_description();
 
-        let entry = stsd.find_or_create_audio_entry(
-            |entry| matches!(entry.data, SampleEntryData::Mp4a(_)),
+        let entry = stsd.find_or_create_entry(
+            |entry| matches!(entry.data, SampleEntryData::Audio(_)),
             || SampleEntry {
+                entry_type: SampleEntryType::Mp4a,
                 data_reference_index: 0,
-                data: SampleEntryData::Mp4a(Mp4aEntryData::default()),
+                data: SampleEntryData::Audio(AudioSampleEntry::default()),
             },
         );
 
-        if let SampleEntryData::Mp4a(mp4a) = &mut entry.data {
+        entry.entry_type = SampleEntryType::Mp4a;
+
+        if let SampleEntryData::Audio(audio) = &mut entry.data {
             let mut sample_frequency = None;
-            mp4a.extensions
+            audio
+                .extensions
                 .retain(|ext| matches!(ext, StsdExtension::Esds(_)));
-            let esds = mp4a.find_or_create_extension(
+            let esds = audio.find_or_create_extension(
                 |ext| matches!(ext, StsdExtension::Esds(_)),
                 || StsdExtension::Esds(EsdsExtension::default()),
             );
@@ -204,18 +208,18 @@ impl<'a> TrakAtomRefMut<'a> {
                     .get_or_insert_default();
                 cfg.avg_bitrate = bitrate;
                 cfg.max_bitrate = bitrate;
-                if let Some(DecoderSpecificInfo::Audio(a)) = cfg.decoder_specific_info.as_ref() {
-                    sample_frequency = a.sampling_frequency.as_hz();
+                if let Some(DecoderSpecificInfo::Audio(a, _)) = cfg.decoder_specific_info.as_ref() {
+                    sample_frequency = Some(a.sampling_frequency.as_hz());
                 }
             }
-            mp4a.extensions.push(StsdExtension::Btrt(BtrtExtension {
+            audio.extensions.push(StsdExtension::Btrt(BtrtExtension {
                 buffer_size_db: 0,
                 avg_bitrate: bitrate,
                 max_bitrate: bitrate,
             }));
 
             if let Some(hz) = sample_frequency {
-                mp4a.sample_rate = hz as f32;
+                audio.sample_rate = hz as f32;
             }
         } else {
             // this indicates a programming error since we won't get here with parsed data
