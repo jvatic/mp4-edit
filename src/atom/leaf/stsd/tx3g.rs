@@ -39,10 +39,10 @@ pub struct StyleRecord {
 
 #[derive(Default, Debug, Clone)]
 pub struct FontStyle {
-    pub bold: bool,   // 1 bit
-    pub italic: bool, // 1 bit
+    // 5 reserved bits
+    pub bold: bool,      // 1 bit
+    pub italic: bool,    // 1 bit
     pub underline: bool, // 1 bit
-                      // 5 reserved bits
 }
 
 #[derive(Default, Debug, Clone)]
@@ -59,7 +59,7 @@ const FTAB: &[u8; 4] = b"ftab";
 
 pub mod serializer {
     use super::{ColorRgba, FontStyle, FontTableEntry, StyleRecord, TextBox, Tx3gEntryData, FTAB};
-    use crate::atom::util::serializer::{pascal_string, prepend_size, SizeU32OrU64};
+    use crate::atom::util::serializer::{bits::Packer, pascal_string, prepend_size, SizeU32OrU64};
 
     pub fn serialize_tx3g_entry_data(tx3g: Tx3gEntryData) -> Vec<u8> {
         let mut data = Vec::new();
@@ -117,10 +117,12 @@ pub mod serializer {
     }
 
     fn serialize_font_style_flags(flags: FontStyle) -> u8 {
-        let bold = (flags.bold as u8) << 7;
-        let italic = (flags.italic as u8) << 6;
-        let underline = (flags.underline as u8) << 5;
-        bold & italic & underline
+        let mut packer = Packer::new();
+        packer.push_n::<5>(0u8); // reserved bits
+        packer.push_bool(flags.bold);
+        packer.push_bool(flags.italic);
+        packer.push_bool(flags.underline);
+        Vec::from(packer)[0]
     }
 
     fn serialize_font_table_entry(entry: FontTableEntry) -> Vec<u8> {
@@ -135,11 +137,11 @@ pub mod parser {
     use winnow::{
         binary::{
             be_i16, be_u16, be_u32,
-            bits::{bits, bool},
+            bits::{self, bits, bool},
             i8, length_repeat, u8,
         },
         combinator::{opt, seq, trace},
-        error::{StrContext, StrContextValue},
+        error::{ContextError, ErrMode, StrContext, StrContextValue},
         token::literal,
         ModalResult, Parser,
     };
@@ -229,6 +231,7 @@ pub mod parser {
             bits(
                 move |input: &mut (Stream<'_>, usize)| -> ModalResult<FontStyle> {
                     seq!(FontStyle {
+                        _: bits::take::<_, usize, _, ErrMode<ContextError>>(5usize).void(), // reserved bits
                         bold: bool.context(StrContext::Label("bold")),
                         italic: bool.context(StrContext::Label("italic")),
                         underline: bool.context(StrContext::Label("underline")),
