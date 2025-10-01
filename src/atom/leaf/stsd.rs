@@ -9,7 +9,8 @@ pub use crate::atom::stsd::extension::{
 use crate::{
     atom::{
         stsd::extension::parse_stsd_extensions,
-        {util::async_to_sync_read, FourCC},
+        util::{async_to_sync_read, serializer::fixed_point_16x16},
+        FourCC,
     },
     parser::ParseAtom,
     writer::SerializeAtom,
@@ -288,12 +289,8 @@ impl SerializeAtom for SampleDescriptionTableAtom {
                     entry_data.extend_from_slice(&video.spatial_quality.to_be_bytes());
                     entry_data.extend_from_slice(&video.width.to_be_bytes());
                     entry_data.extend_from_slice(&video.height.to_be_bytes());
-                    entry_data.extend_from_slice(
-                        &((video.horizresolution * 65536.0) as u32).to_be_bytes(),
-                    );
-                    entry_data.extend_from_slice(
-                        &((video.vertresolution * 65536.0) as u32).to_be_bytes(),
-                    );
+                    entry_data.extend_from_slice(&fixed_point_16x16(video.horizresolution));
+                    entry_data.extend_from_slice(&fixed_point_16x16(video.vertresolution));
                     entry_data.extend_from_slice(&video.entry_data_size.to_be_bytes());
                     entry_data.extend_from_slice(&video.frame_count.to_be_bytes());
 
@@ -321,8 +318,7 @@ impl SerializeAtom for SampleDescriptionTableAtom {
                     entry_data.extend_from_slice(&audio.sample_size.to_be_bytes());
                     entry_data.extend_from_slice(&audio.compression_id.to_be_bytes());
                     entry_data.extend_from_slice(&audio.packet_size.to_be_bytes());
-                    entry_data
-                        .extend_from_slice(&((audio.sample_rate * 65536.0) as u32).to_be_bytes());
+                    entry_data.extend_from_slice(&fixed_point_16x16(audio.sample_rate));
                     audio.extensions.into_iter().for_each(|ext| {
                         let ext_data = ext.to_bytes();
                         entry_data.extend_from_slice(&ext_data);
