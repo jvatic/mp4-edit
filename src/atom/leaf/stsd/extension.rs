@@ -1,10 +1,7 @@
 use crate::{
-    atom::{
-        stsd::extension::{
-            btrt::{serializer::serialize_btrt_extension, BtrtExtension},
-            esds::{serializer::serialize_esds_extension, EsdsExtension},
-        },
-        util::serializer::SerializeSize,
+    atom::stsd::extension::{
+        btrt::{BtrtExtension, BTRT},
+        esds::{EsdsExtension, ESDS},
     },
     FourCC,
 };
@@ -18,52 +15,54 @@ pub enum StsdExtension {
     Unknown(UnknownExtension),
 }
 
+impl StsdExtension {
+    pub fn ext_type(&self) -> FourCC {
+        match self {
+            Self::Esds(_) => FourCC::new(ESDS),
+            Self::Btrt(_) => FourCC::new(BTRT),
+            Self::Unknown(ext) => ext.typ.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnknownExtension {
     pub typ: FourCC,
     pub data: Vec<u8>,
 }
 
-impl StsdExtension {
-    pub fn to_bytes<Size>(self) -> Vec<u8>
-    where
-        Size: SerializeSize,
-    {
-        match self {
-            Self::Esds(esds) => serialize_esds_extension(esds),
-            Self::Btrt(btrt) => serialize_btrt_extension(btrt),
-            Self::Unknown(ext) => serializer::serialize_unknown_extension::<Size>(ext),
-        }
-    }
-}
-
 pub mod btrt;
 pub mod esds;
 
 pub mod serializer {
+    use crate::atom::stsd::{
+        extension::{
+            btrt::serializer::serialize_btrt_extension, esds::serializer::serialize_esds_extension,
+        },
+        StsdExtension,
+    };
     pub use crate::atom::{
         stsd::{extension::UnknownExtension, BtrtExtension},
         util::serializer::{prepend_size, SerializeSize, SizeU32},
     };
 
-    pub fn serialize_unknown_extension<Size>(ext: UnknownExtension) -> Vec<u8>
-    where
-        Size: SerializeSize,
-    {
-        prepend_size::<Size, _>(move || {
-            let mut data = Vec::with_capacity(ext.data.len() + 4);
-            data.extend(ext.typ.0);
-            data.extend(ext.data);
-            data
-        })
+    pub fn serialize_stsd_extension(ext: StsdExtension) -> Vec<u8> {
+        match ext {
+            StsdExtension::Esds(esds) => serialize_esds_extension(esds),
+            StsdExtension::Btrt(btrt) => serialize_btrt_extension(btrt),
+            StsdExtension::Unknown(ext) => serialize_unknown_extension(ext),
+        }
+    }
+
+    fn serialize_unknown_extension(ext: UnknownExtension) -> Vec<u8> {
+        ext.data
     }
 }
 
 pub mod parser {
     use winnow::{
-        combinator::{empty, repeat, seq, trace},
+        combinator::{empty, seq, trace},
         error::{ContextError, ErrMode, StrContext},
-        stream::ToUsize,
         Parser,
     };
 
@@ -77,7 +76,7 @@ pub mod parser {
                 },
                 StsdExtension,
             },
-            util::parser::{combinators::inclusive_length_and_then, fourcc, rest_vec, Stream},
+            util::parser::{rest_vec, Stream},
         },
         FourCC,
     };
@@ -104,25 +103,6 @@ pub mod parser {
                 data: rest_vec.context(StrContext::Label("data")),
             })
             .map(StsdExtension::Unknown)
-            .parse_next(input)
-        })
-    }
-
-    pub fn extensions<'i, ParseSize, UsizeLike>(
-        mut size_parser: ParseSize,
-    ) -> impl Parser<Stream<'i>, Vec<StsdExtension>, ErrMode<ContextError>>
-    where
-        UsizeLike: ToUsize,
-        ParseSize: Parser<Stream<'i>, UsizeLike, ErrMode<ContextError>>,
-    {
-        trace("extensions", move |input: &mut Stream<'i>| {
-            repeat(
-                1..,
-                inclusive_length_and_then(size_parser.by_ref(), |input: &mut Stream<'i>| {
-                    let typ = fourcc.parse_next(input)?;
-                    parse_stsd_extension(typ).parse_next(input)
-                }),
-            )
             .parse_next(input)
         })
     }

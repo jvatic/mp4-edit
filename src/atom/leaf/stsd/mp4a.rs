@@ -39,7 +39,10 @@ impl Mp4aEntryData {
 }
 
 pub mod serializer {
-    use crate::atom::util::serializer::SizeU32;
+    use crate::atom::{
+        stsd::extension::serializer::serialize_stsd_extension,
+        util::serializer::{fixed_point_16x16, prepend_size, SizeU32},
+    };
 
     use super::Mp4aEntryData;
 
@@ -53,11 +56,15 @@ pub mod serializer {
         data.extend(mp4a.sample_size.to_be_bytes());
         data.extend(mp4a.compression_id.to_be_bytes());
         data.extend(mp4a.packet_size.to_be_bytes());
-        data.extend(((mp4a.sample_rate * 65536.0) as u32).to_be_bytes());
-        mp4a.extensions.into_iter().for_each(|ext| {
-            let ext_data = ext.to_bytes::<SizeU32>();
-            data.extend(ext_data);
-        });
+        data.extend(fixed_point_16x16(mp4a.sample_rate));
+        data.extend(mp4a.extensions.into_iter().flat_map(|ext| {
+            prepend_size::<SizeU32, _>(move || {
+                let mut data = Vec::new();
+                data.extend(ext.ext_type().into_bytes());
+                data.extend(serialize_stsd_extension(ext));
+                data
+            })
+        }));
 
         data
     }
@@ -66,15 +73,17 @@ pub mod serializer {
 pub mod parser {
     use winnow::{
         binary::{be_u16, be_u32},
-        combinator::{seq, trace},
+        combinator::{repeat, seq, trace},
         error::StrContext,
         ModalResult, Parser,
     };
 
     use super::Mp4aEntryData;
     use crate::atom::{
-        stsd::{extension::parser::extensions, SampleEntryData},
-        util::parser::{byte_array, fixed_point_16x16, Stream},
+        stsd::{extension::parser::parse_stsd_extension, SampleEntryData, StsdExtension},
+        util::parser::{
+            byte_array, combinators::inclusive_length_and_then, fixed_point_16x16, fourcc, Stream,
+        },
     };
     pub fn mp4a_sample_entry(input: &mut Stream<'_>) -> ModalResult<SampleEntryData> {
         trace(
@@ -89,11 +98,25 @@ pub mod parser {
                 compression_id: be_u16.context(StrContext::Label("compression_id")),
                 packet_size: be_u16.context(StrContext::Label("packet_size")),
                 sample_rate: fixed_point_16x16.context(StrContext::Label("sample_rate")),
-                extensions: extensions(be_u32).context(StrContext::Label("extensions")),
+                extensions: extensions.context(StrContext::Label("extensions")),
             })
             .map(SampleEntryData::Mp4a),
         )
         .context(StrContext::Label("mp4a"))
+        .parse_next(input)
+    }
+
+    pub fn extensions(input: &mut Stream<'_>) -> ModalResult<Vec<StsdExtension>> {
+        trace(
+            "extensions",
+            repeat(
+                0..,
+                inclusive_length_and_then(be_u32, |input: &mut Stream<'_>| {
+                    let typ = fourcc.parse_next(input)?;
+                    parse_stsd_extension(typ).parse_next(input)
+                }),
+            ),
+        )
         .parse_next(input)
     }
 }
