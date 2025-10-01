@@ -1,5 +1,6 @@
 //! Test utilities for atom round-trip testing
 
+use crate::atom::stsd::extension::serializer::serialize_stsd_extension;
 use crate::atom::FourCC;
 use crate::parser::ParseAtom;
 use crate::writer::SerializeAtom;
@@ -198,10 +199,7 @@ where
 pub fn test_stsd_extension_roundtrip(typ: &[u8; 4]) {
     use winnow::Parser;
 
-    use crate::atom::{
-        stsd::extension::parser::parse_stsd_extension,
-        util::{parser::stream, serializer::SizeU32},
-    };
+    use crate::atom::{stsd::extension::parser::parse_stsd_extension, util::parser::stream};
 
     let typ = FourCC(*typ);
     let typ_string = typ.to_string();
@@ -216,7 +214,7 @@ pub fn test_stsd_extension_roundtrip(typ: &[u8; 4]) {
             .parse(stream(&data))
             .expect(format!("error parsing {file}").as_str());
 
-        let re_encoded = parsed.to_bytes::<SizeU32>();
+        let re_encoded = serialize_stsd_extension(parsed);
 
         assert_bytes_equal(&re_encoded, &data);
     }
