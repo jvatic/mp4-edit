@@ -145,7 +145,6 @@ where
         .zip(atom_data.chunks(CHUNK_SIZE))
     {
         let start_index = i * CHUNK_SIZE;
-        let len = ((i + 1) * CHUNK_SIZE).min(re_encoded.len().max(atom_data.len()));
 
         if left != right {
             let mut local_mismatch_index = 0;
@@ -156,18 +155,31 @@ where
                 }
             }
 
-            let mismatch_index = local_mismatch_index + start_index;
+            let mut mismatch_len = left.len().max(right.len());
+            if left.len() == right.len() {
+                for i in (0..left.len()).into_iter().rev() {
+                    if left[i..] != right[i..] {
+                        mismatch_len = i + 1;
+                        break;
+                    }
+                }
+            }
+
+            let mismatch_range_start = start_index + local_mismatch_index;
+            let mismatch_range_end = start_index + mismatch_len;
 
             let re_encoded_len = re_encoded.len();
             let original_len = atom_data.len();
             let delta = re_encoded_len.max(original_len) - re_encoded_len.min(original_len);
 
             println!(
-                "Round-trip failed for {file_path} at range [{mismatch_index}..{len}] (left.len()={re_encoded_len}, right.len()={original_len}, delta={delta})\nOriginal:   {:02X?}{:02X?}\nRe-encoded: {:02X?}{:02X?}",
+                "Round-trip failed for {file_path} at range [{mismatch_range_start}..{mismatch_range_end}] (left.len()={re_encoded_len}, right.len()={original_len}, delta={delta})\nOriginal:   {:02X?}{:02X?}{:02X?}\nRe-encoded: {:02X?}{:02X?}{:02X?}",
                 &right[0..local_mismatch_index],
-                &right[local_mismatch_index..],
+                &right[local_mismatch_index..mismatch_len],
+                &right[mismatch_len..],
                 &left[0..local_mismatch_index],
-                &left[local_mismatch_index..]
+                &left[local_mismatch_index..mismatch_len],
+                &left[mismatch_len..],
             );
 
             panic!("left != right");
