@@ -190,11 +190,7 @@ async fn extract_stsd_extensions(
 async fn extract_stsd_extension(ext: &StsdExtension, output_dir: &str) -> Result<()> {
     // We'll only extract the unknown extensions to be sure we're getting the correct bytes
     let (typ, data) = match ext {
-        StsdExtension::Unknown {
-            fourcc,
-            size: _,
-            data,
-        } => (fourcc, data),
+        StsdExtension::Unknown { fourcc, data } => (fourcc, data),
         _ => return Ok(()),
     };
 
