@@ -19,7 +19,7 @@ use crate::atom::{
     text::TEXT,
     tkhd::TrackHeaderAtom,
     util::{mp4_timestamp_now, parser::ColorRgb, scaled_duration},
-    Atom, AtomBuilder, AtomData, AtomHeader, BaseMediaInfoAtom, DataReferenceAtom, EditListAtom,
+    Atom, AtomData, AtomHeader, BaseMediaInfoAtom, DataReferenceAtom, EditListAtom,
     TextMediaInfoAtom, GMHD,
 };
 use crate::writer::SerializeAtom;
@@ -48,33 +48,6 @@ impl InputChapter {
     }
 }
 
-/// Configuration for QuickTime text sample entry formatting
-#[derive(Debug, Clone)]
-pub struct TextSampleConfig {
-    /// Minimum padding bytes to add after text content (for compatibility)
-    pub min_padding: u16,
-    /// Font size for chapter text display
-    pub font_size: u8,
-    /// Default text box dimensions [top, left, bottom, right]
-    pub text_box: [u16; 4],
-    /// Text color as RGBA values [red, green, blue, alpha]
-    pub text_color: [u8; 4],
-    /// Font name bytes (e.g., b"ftab" for default)
-    pub font_name: [u8; 4],
-}
-
-impl Default for TextSampleConfig {
-    fn default() -> Self {
-        Self {
-            min_padding: 4, // Small padding for compatibility
-            font_size: 13,
-            text_box: [0, 0, 256, 0],
-            text_color: [1, 0, 1, 0],      // Magenta with no alpha
-            font_name: [102, 116, 97, 98], // "ftab"
-        }
-    }
-}
-
 /// Represents a chapter track that can generate TRAK atoms and sample data
 pub struct ChapterTrack {
     language: LanguageCode,
@@ -87,7 +60,6 @@ pub struct ChapterTrack {
     sample_sizes: Vec<u32>, // Individual sample sizes
     media_duration: u64,
     movie_duration: u64,
-    text_config: TextSampleConfig,
     handler_name: String,
 }
 
@@ -103,16 +75,10 @@ impl ChapterTrack {
         #[builder(into)] total_duration: Duration,
         #[builder(default = mp4_timestamp_now())] creation_time: u64,
         #[builder(default = mp4_timestamp_now())] modification_time: u64,
-        #[builder(default = TextSampleConfig::default())] text_config: TextSampleConfig,
         #[builder(default = "SubtitleHandler".to_string(), into)] handler_name: String,
     ) -> Self {
         let (sample_data, sample_durations, sample_sizes) =
-            Self::create_samples_durations_and_sizes(
-                &chapters,
-                total_duration,
-                timescale,
-                &text_config,
-            );
+            Self::create_samples_durations_and_sizes(&chapters, total_duration, timescale);
 
         Self {
             language,
@@ -127,7 +93,6 @@ impl ChapterTrack {
             media_duration: scaled_duration(total_duration, u64::from(timescale)),
             // Calculate duration in movie timescale (for TKHD)
             movie_duration: scaled_duration(total_duration, u64::from(movie_timescale)),
-            text_config,
             handler_name,
         }
     }
@@ -138,7 +103,6 @@ impl ChapterTrack {
         chapters: &[InputChapter],
         total_duration: Duration,
         timescale: u32,
-        text_config: &TextSampleConfig,
     ) -> (Vec<Vec<u8>>, Vec<u32>, Vec<u32>) {
         if chapters.is_empty() {
             return (vec![], vec![], vec![]);
@@ -151,7 +115,7 @@ impl ChapterTrack {
 
         for (i, chapter) in chapters.iter().enumerate() {
             // Create chapter marker data with variable size based on content
-            let chapter_marker = Self::create_variable_chapter_marker(&chapter.title, text_config);
+            let chapter_marker = Self::create_variable_chapter_marker(&chapter.title);
             let sample_size = chapter_marker.len() as u32;
 
             samples.push(chapter_marker);
@@ -178,7 +142,7 @@ impl ChapterTrack {
     }
 
     /// Create variable-size chapter marker data based on actual text content
-    fn create_variable_chapter_marker(title: &str, config: &TextSampleConfig) -> Vec<u8> {
+    fn create_variable_chapter_marker(title: &str) -> Vec<u8> {
         // QuickTime text sample format:
         // - 2 bytes: text length (big-endian)
         // - N bytes: UTF-8 text
@@ -187,8 +151,8 @@ impl ChapterTrack {
         let title_bytes = title.as_bytes();
         let text_len = title_bytes.len() as u16;
 
-        // Calculate total size: text length field + text content + minimum padding
-        let total_size = 2 + title_bytes.len() + config.min_padding as usize;
+        // Calculate total size: text length field + text content
+        let total_size = 2 + title_bytes.len();
         let mut data = Vec::with_capacity(total_size);
 
         // Write text length (big-endian)
@@ -196,9 +160,6 @@ impl ChapterTrack {
 
         // Write text data
         data.extend_from_slice(title_bytes);
-
-        // Add minimum padding for compatibility
-        data.resize(data.len() + config.min_padding as usize, 0);
 
         data
     }
@@ -425,7 +386,7 @@ impl ChapterTrack {
         let text_sample_entry = SampleEntry {
             entry_type: SampleEntryType::Text,
             data_reference_index: 1,
-            data: SampleEntryData::Text(TextSampleEntry::default()),
+            data: SampleEntryData::Text(TextSampleEntry::builder().font_name("Sarif").build()),
         };
 
         let stsd = SampleDescriptionTableAtom::from(vec![text_sample_entry]);

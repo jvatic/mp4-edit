@@ -119,12 +119,10 @@ pub struct TextSampleEntry {
     pub font_face: FontFace,
     #[builder(default)]
     pub foreground_color: ColorRgb,
-    #[builder(default)]
+    #[builder(into)]
     pub font_name: String,
     #[builder(default)]
     pub extensions: Vec<StsdExtension>,
-    #[builder(default)]
-    pub trailing_data: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -310,8 +308,10 @@ mod serializer {
             data.extend(text_justification(text.text_justification));
             data.extend(color_rgb(text.background_color));
             data.extend(text_box(text.default_text_box));
+            data.extend([0u8; 8]); // reserved
             data.extend(text.font_number.to_be_bytes());
             data.extend(font_face(text.font_face));
+            data.extend([0u8; 2]); // reserved
             data.extend(color_rgb(text.foreground_color));
             data.extend(pascal_string(text.font_name));
 
@@ -319,8 +319,6 @@ mod serializer {
                 let ext_data: Vec<u8> = ext.to_bytes();
                 data.extend_from_slice(&ext_data);
             });
-
-            data.extend(text.trailing_data);
 
             data
         }
@@ -384,7 +382,7 @@ mod serializer {
 mod parser {
     use winnow::{
         binary::{be_i32, be_u16, be_u32, bits, length_repeat},
-        combinator::seq,
+        combinator::{opt, seq},
         error::{ContextError, ErrMode, StrContext},
         ModalResult, Parser,
     };
@@ -522,12 +520,13 @@ mod parser {
             text_justification: text_justification.context(StrContext::Label("text_justification")),
             background_color: color_rgb.context(StrContext::Label("background_color")),
             default_text_box: text_box.context(StrContext::Label("default_text_box")),
+            _: byte_array::<8>.context(StrContext::Label("reserved")),
             font_number: be_u16.context(StrContext::Label("font_number")),
             font_face: bits::bits(font_face).context(StrContext::Label("font_face")),
+            _: byte_array::<2>.context(StrContext::Label("reserved")),
             foreground_color: color_rgb.context(StrContext::Label("foreground_color")),
             font_name: pascal_string.context(StrContext::Label("text_name")),
             extensions: parse_stsd_extensions.context(StrContext::Label("extensions")),
-            trailing_data: rest_vec.context(StrContext::Label("trailing_data")),
         })
         .map(SampleEntryData::Text)
         .parse_next(input)
