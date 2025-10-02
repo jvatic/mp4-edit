@@ -175,7 +175,11 @@ where
             let matched_data_start = &right[0..local_mismatch_index];
             let mismatched_data_right = &right[local_mismatch_index..mismatch_len.min(right.len())];
             let mismatched_data_left = &left[local_mismatch_index..mismatch_len.min(left.len())];
-            let matched_data_end = &right[mismatch_len..];
+            let matched_data_end = if mismatch_len > right.len() {
+                &[0u8; 0]
+            } else {
+                &right[mismatch_len..]
+            };
 
             println!(
                 "Round-trip failed for {file_path} at range [{mismatch_range_start}..{mismatch_range_end}] (left.len()={re_encoded_len}, right.len()={original_len}, delta={delta})\nOriginal:   {:02X?}{:02X?}{:02X?}\nRe-encoded: {:02X?}{:02X?}{:02X?}",
