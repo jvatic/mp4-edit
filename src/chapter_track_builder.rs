@@ -6,7 +6,7 @@ use crate::atom::{
     container::{DINF, EDTS, MDIA, MINF, STBL, TRAK},
     dref::{DataReferenceEntry, DataReferenceEntryInner},
     elst::{EditEntry, ELST},
-    gmhd::GenericMediaHeaderAtom,
+    gmin::GMIN,
     hdlr::{HandlerReferenceAtom, HandlerType},
     mdhd::{LanguageCode, MediaHeaderAtom},
     stco_co64::ChunkOffsetAtom,
@@ -16,9 +16,11 @@ use crate::atom::{
     },
     stsz::SampleSizeAtom,
     stts::{TimeToSampleAtom, TimeToSampleEntry},
+    text::TEXT,
     tkhd::TrackHeaderAtom,
-    util::{mp4_timestamp_now, scaled_duration},
-    Atom, AtomData, AtomHeader, DataReferenceAtom, EditListAtom,
+    util::{mp4_timestamp_now, parser::ColorRgb, scaled_duration},
+    Atom, AtomBuilder, AtomData, AtomHeader, BaseMediaInfoAtom, DataReferenceAtom, EditListAtom,
+    TextMediaInfoAtom, GMHD,
 };
 use crate::writer::SerializeAtom;
 
@@ -348,9 +350,6 @@ impl ChapterTrack {
     fn create_media_information(&self, chunk_offset: u64) -> Atom {
         let stbl = self.create_sample_table(chunk_offset);
 
-        // Generic media header for text tracks
-        let gmhd = GenericMediaHeaderAtom::new();
-
         // Create DINF (Data Information) with proper data reference
         let dref = DataReferenceAtom {
             version: 0,
@@ -376,11 +375,31 @@ impl ChapterTrack {
             header: AtomHeader::new(*MINF),
             data: None,
             children: vec![
-                Atom {
-                    header: AtomHeader::new(gmhd.atom_type()),
-                    data: Some(AtomData::GenericMediaHeader(gmhd)),
-                    children: vec![],
-                },
+                Atom::builder()
+                    .header(AtomHeader::new(*GMHD))
+                    .children(vec![
+                        Atom::builder()
+                            .header(AtomHeader::new(*GMIN))
+                            .data(BaseMediaInfoAtom {
+                                version: 0,
+                                flags: [0, 0, 0],
+                                graphics_mode: 64,
+                                op_color: ColorRgb {
+                                    red: 32768,
+                                    green: 32768,
+                                    blue: 32768,
+                                },
+                                balance: 0.0,
+                            })
+                            .build(),
+                        Atom::builder()
+                            .header(AtomHeader::new(*TEXT))
+                            .data(TextMediaInfoAtom {
+                                matrix: [65536, 0, 0, 0, 65536, 0, 0, 0, 1073741824],
+                            })
+                            .build(),
+                    ])
+                    .build(),
                 dinf,
                 stbl,
             ],

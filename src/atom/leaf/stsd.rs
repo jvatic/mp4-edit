@@ -8,7 +8,7 @@ pub use crate::atom::stsd::extension::{
 use crate::{
     atom::{
         stsd::serializer::text::serialize_text_entry,
-        util::{read_to_end, serializer::fixed_point_16x16},
+        util::{parser::ColorRgb, read_to_end, serializer::fixed_point_16x16},
         FourCC,
     },
     parser::ParseAtom,
@@ -163,13 +163,6 @@ pub enum TextJustification {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct ColorRgb {
-    pub red: u16,
-    pub green: u16,
-    pub blue: u16,
-}
-
-#[derive(Debug, Clone, Default)]
 pub struct TextBox {
     pub top: u16,
     pub left: u16,
@@ -306,8 +299,8 @@ impl SerializeAtom for SampleDescriptionTableAtom {
 mod serializer {
     pub(crate) mod text {
         use crate::atom::{
-            stsd::{ColorRgb, DisplayFlags, FontFace, TextBox, TextJustification, TextSampleEntry},
-            util::serializer::{bits::Packer, pascal_string},
+            stsd::{DisplayFlags, FontFace, TextBox, TextJustification, TextSampleEntry},
+            util::serializer::{bits::Packer, color_rgb, pascal_string},
         };
 
         pub fn serialize_text_entry(text: TextSampleEntry) -> Vec<u8> {
@@ -364,14 +357,6 @@ mod serializer {
             value.to_be_bytes()
         }
 
-        fn color_rgb(color: ColorRgb) -> [u8; 6] {
-            let mut data = Vec::with_capacity(6);
-            data.extend(color.red.to_be_bytes());
-            data.extend(color.green.to_be_bytes());
-            data.extend(color.blue.to_be_bytes());
-            data.try_into().expect("color_rgb is 6 bytes")
-        }
-
         fn text_box(b: TextBox) -> [u8; 8] {
             let mut data = Vec::with_capacity(6);
             data.extend(b.top.to_be_bytes());
@@ -407,8 +392,8 @@ mod parser {
     use crate::atom::{
         stsd::extension::parser::parse_stsd_extensions,
         util::parser::{
-            byte_array, combinators::inclusive_length_and_then, fixed_point_16x16, flags3,
-            pascal_string, rest_vec, stream, version, Stream,
+            byte_array, color_rgb, combinators::inclusive_length_and_then, fixed_point_16x16,
+            flags3, pascal_string, rest_vec, stream, version, Stream,
         },
     };
 
@@ -504,15 +489,6 @@ mod parser {
                 -1 => TextJustification::Right,
                 v => TextJustification::Other(v),
             })
-        }
-
-        fn color_rgb(input: &mut Stream<'_>) -> ModalResult<ColorRgb> {
-            seq!(ColorRgb {
-                red: be_u16.context(StrContext::Label("red")),
-                green: be_u16.context(StrContext::Label("green")),
-                blue: be_u16.context(StrContext::Label("blue")),
-            })
-            .parse_next(input)
         }
 
         fn text_box(input: &mut Stream<'_>) -> ModalResult<TextBox> {

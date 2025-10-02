@@ -3,6 +3,7 @@
  */
 
 pub mod edts;
+pub mod gmhd;
 pub mod mdia;
 pub mod meta;
 pub mod minf;
@@ -12,6 +13,7 @@ pub mod trak;
 pub mod udta;
 
 pub use edts::*;
+pub use gmhd::*;
 pub use mdia::*;
 pub use meta::*;
 pub use minf::*;
@@ -38,6 +40,7 @@ pub fn is_container_atom(atom_type: &[u8; 4]) -> bool {
             | EDTS
             | MDIA
             | MINF
+            | GMHD
             | DINF
             | STBL
             | MOOF
