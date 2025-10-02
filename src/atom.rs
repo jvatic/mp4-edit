@@ -175,7 +175,8 @@ pub enum AtomData {
     HandlerReference(HandlerReferenceAtom),
     ItemList(ItemListAtom),
     SoundMediaHeader(SoundMediaHeaderAtom),
-    GenericMediaHeader(GenericMediaHeaderAtom),
+    BaseMediaInfo(BaseMediaInfoAtom),
+    TextMediaInfo(TextMediaInfoAtom),
     SampleDescriptionTable(SampleDescriptionTableAtom),
     TrackReference(TrackReferenceAtom),
     DataReference(DataReferenceAtom),
@@ -236,9 +237,15 @@ impl From<SoundMediaHeaderAtom> for AtomData {
     }
 }
 
-impl From<GenericMediaHeaderAtom> for AtomData {
-    fn from(atom: GenericMediaHeaderAtom) -> Self {
-        AtomData::GenericMediaHeader(atom)
+impl From<BaseMediaInfoAtom> for AtomData {
+    fn from(atom: BaseMediaInfoAtom) -> Self {
+        AtomData::BaseMediaInfo(atom)
+    }
+}
+
+impl From<TextMediaInfoAtom> for AtomData {
+    fn from(atom: TextMediaInfoAtom) -> Self {
+        AtomData::TextMediaInfo(atom)
     }
 }
 
@@ -317,6 +324,7 @@ impl ParseAtom for AtomData {
             elst::{EditListAtom, ELST},
             free::{FreeAtom, FREE, SKIP},
             ftyp::{FileTypeAtom, FTYP},
+            gmin::GMIN,
             hdlr::{HandlerReferenceAtom, HDLR},
             ilst::{ItemListAtom, ILST},
             mdhd::{MediaHeaderAtom, MDHD},
@@ -327,6 +335,7 @@ impl ParseAtom for AtomData {
             stsd::{SampleDescriptionTableAtom, STSD},
             stsz::{SampleSizeAtom, STSZ},
             stts::{TimeToSampleAtom, STTS},
+            text::TEXT,
             tkhd::{TrackHeaderAtom, TKHD},
             tref::{TrackReferenceAtom, TREF},
             FourCC, RawData,
@@ -349,6 +358,12 @@ impl ParseAtom for AtomData {
                 .await
                 .map(AtomData::from),
             SMHD => SoundMediaHeaderAtom::parse(atom_type, reader)
+                .await
+                .map(AtomData::from),
+            GMIN => BaseMediaInfoAtom::parse(atom_type, reader)
+                .await
+                .map(AtomData::from),
+            TEXT => TextMediaInfoAtom::parse(atom_type, reader)
                 .await
                 .map(AtomData::from),
             ILST => ItemListAtom::parse(atom_type, reader)
@@ -401,9 +416,10 @@ impl ParseAtom for AtomData {
 impl SerializeAtom for AtomData {
     fn atom_type(&self) -> FourCC {
         use AtomData::{
-            ChapterList, ChunkOffset, DataReference, EditList, FileType, Free, GenericMediaHeader,
+            BaseMediaInfo, ChapterList, ChunkOffset, DataReference, EditList, FileType, Free,
             HandlerReference, ItemList, MediaHeader, MovieHeader, RawData, SampleDescriptionTable,
-            SampleSize, SampleToChunk, SoundMediaHeader, TimeToSample, TrackHeader, TrackReference,
+            SampleSize, SampleToChunk, SoundMediaHeader, TextMediaInfo, TimeToSample, TrackHeader,
+            TrackReference,
         };
         match self {
             FileType(atom) => atom.atom_type(),
@@ -414,7 +430,8 @@ impl SerializeAtom for AtomData {
             HandlerReference(atom) => atom.atom_type(),
             ItemList(atom) => atom.atom_type(),
             SoundMediaHeader(atom) => atom.atom_type(),
-            GenericMediaHeader(atom) => atom.atom_type(),
+            BaseMediaInfo(atom) => atom.atom_type(),
+            TextMediaInfo(atom) => atom.atom_type(),
             SampleDescriptionTable(atom) => atom.atom_type(),
             TrackReference(atom) => atom.atom_type(),
             DataReference(atom) => atom.atom_type(),
@@ -430,9 +447,10 @@ impl SerializeAtom for AtomData {
 
     fn into_body_bytes(self) -> Vec<u8> {
         use AtomData::{
-            ChapterList, ChunkOffset, DataReference, EditList, FileType, Free, GenericMediaHeader,
+            BaseMediaInfo, ChapterList, ChunkOffset, DataReference, EditList, FileType, Free,
             HandlerReference, ItemList, MediaHeader, MovieHeader, RawData, SampleDescriptionTable,
-            SampleSize, SampleToChunk, SoundMediaHeader, TimeToSample, TrackHeader, TrackReference,
+            SampleSize, SampleToChunk, SoundMediaHeader, TextMediaInfo, TimeToSample, TrackHeader,
+            TrackReference,
         };
         match self {
             FileType(atom) => atom.into_body_bytes(),
@@ -443,7 +461,8 @@ impl SerializeAtom for AtomData {
             HandlerReference(atom) => atom.into_body_bytes(),
             ItemList(atom) => atom.into_body_bytes(),
             SoundMediaHeader(atom) => atom.into_body_bytes(),
-            GenericMediaHeader(atom) => atom.into_body_bytes(),
+            BaseMediaInfo(atom) => atom.into_body_bytes(),
+            TextMediaInfo(atom) => atom.into_body_bytes(),
             SampleDescriptionTable(atom) => atom.into_body_bytes(),
             TrackReference(atom) => atom.into_body_bytes(),
             DataReference(atom) => atom.into_body_bytes(),

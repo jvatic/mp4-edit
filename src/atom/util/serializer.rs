@@ -1,4 +1,4 @@
-use crate::atom::util::parser::{FIXED_POINT_16X16_SCALE, FIXED_POINT_8X8_SCALE};
+use crate::atom::util::parser::{ColorRgb, FIXED_POINT_16X16_SCALE, FIXED_POINT_8X8_SCALE};
 
 pub fn be_u32(value: u32) -> Vec<u8> {
     value.to_be_bytes().to_vec()
@@ -83,6 +83,14 @@ impl SerializeSize for SizeU32OrU64 {
             output
         }
     }
+}
+
+pub fn color_rgb(color: ColorRgb) -> [u8; 6] {
+    let mut data = Vec::with_capacity(6);
+    data.extend(color.red.to_be_bytes());
+    data.extend(color.green.to_be_bytes());
+    data.extend(color.blue.to_be_bytes());
+    data.try_into().expect("color_rgb is 6 bytes")
 }
 
 pub mod bits {

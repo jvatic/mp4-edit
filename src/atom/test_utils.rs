@@ -199,6 +199,30 @@ where
     Ok(())
 }
 
+// pub fn test_stsd_extension_roundtrip(typ: &[u8; 4]) {
+//     use winnow::Parser;
+
+//     use crate::atom::util::parser::stream;
+
+//     let typ = FourCC(*typ);
+//     let typ_string = typ.to_string();
+
+//     let files = discover_test_files(&typ_string, Some("stsd"));
+//     for file in files.iter() {
+//         eprintln!("Testing {file}...");
+
+//         let data = fs::read(file).expect(format!("error reading {file}").as_str());
+
+//         let parsed = parse_stsd_extension(typ)
+//             .parse(stream(&data))
+//             .expect(format!("error parsing {file}").as_str());
+
+//         let re_encoded = serialize_stsd_extension(parsed);
+
+//         assert_bytes_equal(&re_encoded, &data);
+//     }
+// }
+
 pub fn assert_bytes_equal(actual: &[u8], expected: &[u8]) {
     if actual == expected {
         return;

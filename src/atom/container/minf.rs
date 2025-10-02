@@ -2,7 +2,7 @@ use crate::{
     atom::{
         atom_ref::{AtomRef, AtomRefMut},
         smhd::SMHD,
-        StblAtomRef, StblAtomRefMut, DINF, STBL,
+        GmhdAtomRef, GmhdAtomRefMut, StblAtomRef, StblAtomRefMut, DINF, GMHD, STBL,
     },
     Atom,
 };
@@ -15,6 +15,11 @@ pub struct MinfAtomRef<'a>(pub(crate) AtomRef<'a>);
 impl<'a> MinfAtomRef<'a> {
     pub fn children(&self) -> impl Iterator<Item = &'a Atom> {
         self.0.children()
+    }
+
+    pub fn header(&self) -> GmhdAtomRef<'a> {
+        let atom = self.0.find_child(GMHD);
+        GmhdAtomRef(AtomRef(atom))
     }
 
     /// Finds the STBL atom
@@ -38,6 +43,11 @@ impl<'a> MinfAtomRefMut<'a> {
 
     pub fn into_children(self) -> impl Iterator<Item = &'a mut Atom> {
         self.0.into_children()
+    }
+
+    /// Finds or inserts the GMHD atom
+    pub fn header(&mut self) -> GmhdAtomRefMut<'_> {
+        GmhdAtomRefMut(self.0.find_or_insert_child(GMHD).insert_index(0).call())
     }
 
     /// Finds or inserts the STBL atom

@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use winnow::{
     binary::{be_i32, be_u16, be_u32, be_u64, length_and_then, u8},
-    combinator::trace,
+    combinator::{seq, trace},
     error::{ContextError, ErrMode, ParserError, StrContext, StrContextValue},
     token::rest,
     Bytes, LocatingSlice, ModalResult, Parser,
@@ -205,6 +205,22 @@ where
         }
     }
     Ok(length)
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ColorRgb {
+    pub red: u16,
+    pub green: u16,
+    pub blue: u16,
+}
+
+pub fn color_rgb(input: &mut Stream<'_>) -> ModalResult<ColorRgb> {
+    seq!(ColorRgb {
+        red: be_u16.context(StrContext::Label("red")),
+        green: be_u16.context(StrContext::Label("green")),
+        blue: be_u16.context(StrContext::Label("blue")),
+    })
+    .parse_next(input)
 }
 
 /// shim to bridge the gap between old parser code and new parser code
