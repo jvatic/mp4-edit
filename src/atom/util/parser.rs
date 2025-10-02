@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use winnow::{
     binary::{be_i32, be_u16, be_u32, be_u64, length_and_then, u8},
     combinator::trace,
-    error::{ParserError, StrContext, StrContextValue},
+    error::{ContextError, ErrMode, ParserError, StrContext, StrContextValue},
     token::rest,
     Bytes, LocatingSlice, ModalResult, Parser,
 };
@@ -88,14 +88,6 @@ where
         be_i32
             .try_map(|s| T::try_from(s))
             .context(StrContext::Expected(StrContextValue::Description("be i32"))),
-    )
-    .parse_next(input)
-}
-
-pub fn be_u24(input: &mut Stream<'_>) -> ModalResult<u32> {
-    trace(
-        "be_u24",
-        byte_array::<3>.map(|buf| u32::from_be_bytes([0, buf[0], buf[1], buf[2]])),
     )
     .parse_next(input)
 }
@@ -213,6 +205,18 @@ where
         }
     }
     Ok(length)
+}
+
+/// shim to bridge the gap between old parser code and new parser code
+/// once all old parser code has been upgraded, this can be deleted
+pub fn parse_winnow_shim<'i, T, P, E>(data: &'i [u8], mut parser: P) -> Result<T, E>
+where
+    P: Parser<Stream<'i>, T, ErrMode<ContextError>>,
+    E: From<crate::ParseError>,
+{
+    Ok(parser
+        .parse(stream(data))
+        .map_err(crate::ParseError::from_winnow)?)
 }
 
 pub mod combinators {

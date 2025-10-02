@@ -406,32 +406,7 @@ impl ChapterTrack {
         let text_sample_entry = SampleEntry {
             entry_type: SampleEntryType::Text,
             data_reference_index: 1,
-            data: SampleEntryData::Text(TextSampleEntry {
-                version: 0,
-                revision_level: 1,
-                vendor: [0u8; 4],
-                display_flags: 0,
-                text_justification: 0,
-                background_color: [0u16; 3], // Black background
-                default_text_box: self.text_config.text_box,
-                default_style: Some({
-                    let mut style = vec![
-                        0,
-                        0,
-                        0,
-                        0, // Start/end character indices
-                        0,
-                        0, // Font ID
-                        self.text_config.font_size,
-                    ];
-                    style.extend_from_slice(&self.text_config.font_name);
-                    style.push(0); // Font face flags
-                    style.extend_from_slice(&self.text_config.text_color);
-                    style
-                }),
-                font_table: None,
-                extensions: Vec::new(),
-            }),
+            data: SampleEntryData::Text(TextSampleEntry::default()),
         };
 
         let stsd = SampleDescriptionTableAtom::from(vec![text_sample_entry]);
