@@ -95,6 +95,21 @@ impl ParseError {
         }
     }
 
+    pub(crate) fn new_unexpected_atom_oneof(atom_type: FourCC, expected: Vec<&[u8; 4]>) -> Self {
+        let expected = expected
+            .into_iter()
+            .map(|expected| FourCC::from(*expected).to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        Self {
+            kind: ParseErrorKind::UnexpectedAtom,
+            location: Some((0, 4)),
+            source: Some(
+                anyhow!("expected one of {expected}, got {atom_type}").into_boxed_dyn_error(),
+            ),
+        }
+    }
+
     pub(crate) fn from_winnow(
         error: winnow::error::ParseError<
             winnow::LocatingSlice<&winnow::Bytes>,

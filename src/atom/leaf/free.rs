@@ -39,8 +39,11 @@ impl ParseAtom for FreeAtom {
         atom_type: FourCC,
         reader: R,
     ) -> Result<Self, ParseError> {
-        if atom_type != FREE {
-            return Err(ParseError::new_unexpected_atom(atom_type, FREE));
+        if atom_type != FREE && atom_type != SKIP {
+            return Err(ParseError::new_unexpected_atom_oneof(
+                atom_type,
+                vec![FREE, SKIP],
+            ));
         }
 
         let data = read_to_end(reader).await?;
