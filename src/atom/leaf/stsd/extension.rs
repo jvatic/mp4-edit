@@ -1,17 +1,8 @@
-use std::io::{Cursor, Read, Seek, SeekFrom};
+use audio_specific_config::AudioSpecificConfig;
 
-use thiserror::Error;
-
-use audio_specific_config::{
-    AudioSpecificConfig, ParseAudioSpecificConfigError as AudioSpecificConfigParseError,
-};
+use crate::atom::util::serializer::{prepend_size, SizeU32OrU64};
 
 mod audio_specific_config;
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct StsdExtensionData {
-    pub extensions: Vec<StsdExtension>,
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum StsdExtension {
@@ -63,26 +54,6 @@ pub struct BtrtExtension {
     pub buffer_size_db: u32,
     pub max_bitrate: u32,
     pub avg_bitrate: u32,
-}
-
-#[derive(Debug, Error)]
-pub enum ParseStsdExtensionError {
-    #[error("insufficient data")]
-    InsufficientData,
-    #[error("invalid format")]
-    InvalidFormat,
-    #[error("invalid audio specific config: {_0}")]
-    InvalidAudioSpecificConfig(#[from] AudioSpecificConfigParseError),
-    #[error("io error")]
-    IoError(std::io::Error),
-    #[error(transparent)]
-    ParseError(#[from] crate::ParseError),
-}
-
-impl From<std::io::Error> for ParseStsdExtensionError {
-    fn from(error: std::io::Error) -> Self {
-        ParseStsdExtensionError::IoError(error)
-    }
 }
 
 impl StsdExtension {
@@ -191,12 +162,12 @@ impl BtrtExtension {
 }
 
 fn serialize_box(fourcc: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-    let size = 8 + payload.len() as u32;
-    let mut result = Vec::new();
-    result.extend_from_slice(&size.to_be_bytes());
-    result.extend_from_slice(fourcc);
-    result.extend_from_slice(payload);
-    result
+    prepend_size::<SizeU32OrU64, _>(move || {
+        let mut data = Vec::new();
+        data.extend_from_slice(fourcc);
+        data.extend_from_slice(payload);
+        data
+    })
 }
 
 fn serialize_descriptor(tag: u8, payload: &[u8]) -> Vec<u8> {
@@ -218,187 +189,154 @@ fn serialize_descriptor_length(length: u32) -> Vec<u8> {
     ]
 }
 
-pub fn parse_stsd_extensions(data: &[u8]) -> Result<StsdExtensionData, ParseStsdExtensionError> {
-    let mut cursor = Cursor::new(data);
-    let mut boxes = Vec::new();
+pub(crate) mod parser {
+    use std::ops::Deref;
 
-    while cursor.position() < data.len() as u64 {
-        let box_data = parser::parse_stsd_extension(&mut cursor)?;
-        boxes.push(box_data);
-    }
-
-    Ok(StsdExtensionData { extensions: boxes })
-}
-
-mod parser {
     use winnow::{
-        binary::{be_u32, length_and_then, u8},
-        combinator::{fail, opt, seq, trace},
-        error::{ContextError, ErrMode, StrContext, StrContextValue},
+        binary::{be_u16, be_u24, be_u32, length_and_then, u8},
+        combinator::{opt, repeat, seq, trace},
+        error::{StrContext, StrContextValue},
         token::{literal, rest},
         ModalResult, Parser,
     };
 
     use crate::atom::util::parser::{
-        combinators::inclusive_length_and_then, stream, variable_length_be_u32, Stream,
+        atom_size, combinators::inclusive_length_and_then, flags3, fourcc, pascal_string, rest_vec,
+        variable_length_be_u32, version, Stream,
     };
 
     use super::*;
 
-    pub fn parse_stsd_extension(
-        cursor: &mut Cursor<&[u8]>,
-    ) -> Result<StsdExtension, ParseStsdExtensionError> {
-        // Read box header (size + fourcc)
-        let size = read_u32_be(cursor)?;
-        let mut fourcc = [0u8; 4];
-        cursor.read_exact(&mut fourcc)?;
-
-        if size < 8 {
-            return Err(ParseStsdExtensionError::InvalidFormat);
-        }
-
-        let payload_size = (size - 8) as usize;
-        let mut payload = vec![0u8; payload_size];
-        cursor.read_exact(&mut payload)?;
-
-        match &fourcc {
-            b"esds" => parse_esds_box(&payload).map(StsdExtension::Esds),
-            b"btrt" => parse_winnow_shim(&payload, parse_btrt_box).map(StsdExtension::Btrt),
-            _ => Ok(StsdExtension::Unknown {
-                fourcc,
-                data: payload,
-            }),
-        }
+    pub fn parse_stsd_extensions(input: &mut Stream<'_>) -> ModalResult<Vec<StsdExtension>> {
+        repeat(0.., parse_stsd_extension).parse_next(input)
     }
 
-    fn parse_esds_box(data: &[u8]) -> Result<EsdsExtension, ParseStsdExtensionError> {
-        if data.len() < 4 {
-            return Err(ParseStsdExtensionError::InsufficientData);
-        }
+    pub fn parse_stsd_extension(input: &mut Stream<'_>) -> ModalResult<StsdExtension> {
+        inclusive_length_and_then(
+            atom_size,
+            move |input: &mut Stream<'_>| -> ModalResult<StsdExtension> {
+                let fourcc = fourcc.parse_next(input)?;
 
-        let version = data[0];
-        let flags = [data[1], data[2], data[3]];
+                Ok(match fourcc.deref() {
+                    b"esds" => parse_esds_box.map(StsdExtension::Esds).parse_next(input)?,
+                    b"btrt" => parse_btrt_box.map(StsdExtension::Btrt).parse_next(input)?,
+                    _ => StsdExtension::Unknown {
+                        fourcc: fourcc.into_bytes(),
+                        data: rest_vec.parse_next(input)?,
+                    },
+                })
+            },
+        )
+        .parse_next(input)
+    }
 
-        let mut cursor = Cursor::new(&data[4..]);
-        let es_descriptor = parse_es_descriptor(&mut cursor)?;
-
-        Ok(EsdsExtension {
-            version,
-            flags,
-            es_descriptor,
+    fn parse_esds_box(input: &mut Stream<'_>) -> ModalResult<EsdsExtension> {
+        seq!(EsdsExtension {
+            version: version,
+            flags: flags3,
+            es_descriptor: parse_es_descriptor,
         })
+        .parse_next(input)
     }
 
-    fn parse_es_descriptor(
-        cursor: &mut Cursor<&[u8]>,
-    ) -> Result<EsDescriptor, ParseStsdExtensionError> {
+    fn parse_es_descriptor(input: &mut Stream<'_>) -> ModalResult<EsDescriptor> {
         // ES Descriptor tag
-        let tag = read_u8(cursor)?;
-        if tag != 0x03 {
-            return Err(ParseStsdExtensionError::InvalidFormat);
-        }
+        literal(0x03).parse_next(input)?;
 
-        let _length = read_descriptor_length(cursor)?;
-        let es_id = read_u16_be(cursor)?;
+        length_and_then(variable_length_be_u32, move |input: &mut Stream<'_>| {
+            let es_id = be_u16.parse_next(input)?;
 
-        let flags_byte = read_u8(cursor)?;
-        let stream_dependence_flag = (flags_byte & 0x80) != 0;
-        let url_flag = (flags_byte & 0x40) != 0;
-        let ocr_stream_flag = (flags_byte & 0x20) != 0;
-        let stream_priority = flags_byte & 0x1F;
+            let flags_byte = u8.parse_next(input)?;
+            let stream_dependence_flag = (flags_byte & 0x80) != 0;
+            let url_flag = (flags_byte & 0x40) != 0;
+            let ocr_stream_flag = (flags_byte & 0x20) != 0;
+            let stream_priority = flags_byte & 0x1F;
 
-        // Skip dependent stream ID if present
-        if stream_dependence_flag {
-            read_u16_be(cursor)?;
-        }
+            // Skip dependent stream ID if present
+            if stream_dependence_flag {
+                be_u16.parse_next(input)?;
+            }
 
-        // Skip URL if present
-        if url_flag {
-            let url_length = read_u8(cursor)? as usize;
-            cursor.seek(SeekFrom::Current(url_length as i64))?;
-        }
+            // Skip URL if present
+            if url_flag {
+                let _url = pascal_string.parse_next(input)?;
+            }
 
-        // Skip OCR ES ID if present
-        if ocr_stream_flag {
-            read_u16_be(cursor)?;
-        }
+            // Skip OCR ES ID if present
+            if ocr_stream_flag {
+                be_u16.parse_next(input)?;
+            }
 
-        // Parse DecoderConfigDescriptor
-        let decoder_config_descriptor = if cursor.position() < cursor.get_ref().len() as u64 {
-            Some(parse_decoder_config_descriptor(cursor)?)
-        } else {
-            None
-        };
+            // Parse DecoderConfigDescriptor
+            let decoder_config_descriptor =
+                opt(parse_decoder_config_descriptor).parse_next(input)?;
 
-        let mut data = Vec::new();
-        cursor.read_to_end(&mut data)?;
+            // Parse SLConfigDescriptor
+            let sl_config_descriptor = opt(parse_sl_config_descriptor).parse_next(input)?;
 
-        // Parse SLConfigDescriptor
-        let sl_config_descriptor = parse_winnow_shim(&data, opt(parse_sl_config_descriptor))?;
-
-        Ok(EsDescriptor {
-            es_id,
-            stream_dependence_flag,
-            url_flag,
-            ocr_stream_flag,
-            stream_priority,
-            decoder_config_descriptor,
-            sl_config_descriptor,
+            Ok(EsDescriptor {
+                es_id,
+                stream_dependence_flag,
+                url_flag,
+                ocr_stream_flag,
+                stream_priority,
+                decoder_config_descriptor,
+                sl_config_descriptor,
+            })
         })
+        .parse_next(input)
     }
 
     fn parse_decoder_config_descriptor(
-        cursor: &mut Cursor<&[u8]>,
-    ) -> Result<DecoderConfigDescriptor, ParseStsdExtensionError> {
-        let tag = read_u8(cursor)?;
-        if tag != 0x04 {
-            return Err(ParseStsdExtensionError::InvalidFormat);
-        }
+        input: &mut Stream<'_>,
+    ) -> ModalResult<DecoderConfigDescriptor> {
+        literal(0x04).parse_next(input)?;
 
-        let _length = read_descriptor_length(cursor)?;
-        let object_type_indication = read_u8(cursor)?;
+        length_and_then(variable_length_be_u32, move |input: &mut Stream<'_>| {
+            let object_type_indication = u8.parse_next(input)?;
 
-        let stream_info = read_u8(cursor)?;
-        let stream_type = (stream_info >> 2) & 0x3F;
-        let upstream = (stream_info & 0x02) != 0;
+            let stream_info = u8.parse_next(input)?;
+            let stream_type = (stream_info >> 2) & 0x3F;
+            let upstream = (stream_info & 0x02) != 0;
 
-        let buffer_size_db = read_u24_be(cursor)?;
-        let max_bitrate = read_u32_be(cursor)?;
-        let avg_bitrate = read_u32_be(cursor)?;
+            let buffer_size_db = be_u24.parse_next(input)?;
+            let max_bitrate = be_u32.parse_next(input)?;
+            let avg_bitrate = be_u32.parse_next(input)?;
 
-        // Parse DecoderSpecificInfo if present
-        let decoder_specific_info = if cursor.position() < cursor.get_ref().len() as u64 {
-            let tag = read_u8(cursor)?;
-            if tag == 0x05 {
-                let length = read_descriptor_length(cursor)? as usize;
-                let mut info_bytes = vec![0u8; length];
-                cursor.read_exact(&mut info_bytes)?;
-                let info = match stream_type {
-                    5 => {
-                        let audio_config = AudioSpecificConfig::parse(&info_bytes)?;
-                        let extra_bytes = info_bytes[audio_config.bytes_read..].to_vec();
-                        DecoderSpecificInfo::Audio(audio_config, extra_bytes)
-                    }
-                    _ => DecoderSpecificInfo::Unknown(info_bytes),
-                };
-                Some(info)
-            } else {
-                cursor.seek(SeekFrom::Current(-1))?; // Rewind
-                None
-            }
-        } else {
-            None
-        };
+            // Parse DecoderSpecificInfo if present
+            let decoder_specific_info = opt(move |input: &mut Stream<'_>| {
+                literal(0x05).parse_next(input)?;
+                length_and_then(variable_length_be_u32, move |input: &mut Stream<'_>| {
+                    let info_bytes = rest.parse_next(input)?;
+                    let info = match stream_type {
+                        5 => {
+                            // TODO: refactor AudioSpecificConfig parsing
+                            if let Ok(audio_config) = AudioSpecificConfig::parse(info_bytes) {
+                                let extra_bytes = info_bytes[audio_config.bytes_read..].to_vec();
+                                DecoderSpecificInfo::Audio(audio_config, extra_bytes)
+                            } else {
+                                DecoderSpecificInfo::Unknown(info_bytes.to_vec())
+                            }
+                        }
+                        _ => DecoderSpecificInfo::Unknown(info_bytes.to_vec()),
+                    };
+                    Ok(info)
+                })
+                .parse_next(input)
+            })
+            .parse_next(input)?;
 
-        Ok(DecoderConfigDescriptor {
-            object_type_indication,
-            stream_type,
-            upstream,
-            buffer_size_db,
-            max_bitrate,
-            avg_bitrate,
-            decoder_specific_info,
+            Ok(DecoderConfigDescriptor {
+                object_type_indication,
+                stream_type,
+                upstream,
+                buffer_size_db,
+                max_bitrate,
+                avg_bitrate,
+                decoder_specific_info,
+            })
         })
+        .parse_next(input)
     }
 
     fn parse_sl_config_descriptor(input: &mut Stream<'_>) -> ModalResult<SlConfigDescriptor> {
@@ -421,61 +359,14 @@ mod parser {
         )
         .parse_next(input)
     }
-
-    /// shim to bridge the gap between old parser code and new parser code
-    /// once all old parser code has been upgraded, this can be deleted
-    fn parse_winnow_shim<'i, T, P>(
-        data: &'i [u8],
-        mut parser: P,
-    ) -> Result<T, ParseStsdExtensionError>
-    where
-        P: Parser<Stream<'i>, T, ErrMode<ContextError>>,
-    {
-        Ok(parser
-            .parse(stream(data))
-            .map_err(crate::ParseError::from_winnow)?)
-    }
-
-    fn read_u8(cursor: &mut Cursor<&[u8]>) -> Result<u8, ParseStsdExtensionError> {
-        let mut buf = [0u8; 1];
-        cursor.read_exact(&mut buf)?;
-        Ok(buf[0])
-    }
-
-    fn read_u16_be(cursor: &mut Cursor<&[u8]>) -> Result<u16, ParseStsdExtensionError> {
-        let mut buf = [0u8; 2];
-        cursor.read_exact(&mut buf)?;
-        Ok(u16::from_be_bytes(buf))
-    }
-
-    fn read_u24_be(cursor: &mut Cursor<&[u8]>) -> Result<u32, ParseStsdExtensionError> {
-        let mut buf = [0u8; 3];
-        cursor.read_exact(&mut buf)?;
-        Ok(u32::from_be_bytes([0, buf[0], buf[1], buf[2]]))
-    }
-
-    fn read_u32_be(cursor: &mut Cursor<&[u8]>) -> Result<u32, ParseStsdExtensionError> {
-        let mut buf = [0u8; 4];
-        cursor.read_exact(&mut buf)?;
-        Ok(u32::from_be_bytes(buf))
-    }
-
-    fn read_descriptor_length(cursor: &mut Cursor<&[u8]>) -> Result<u32, ParseStsdExtensionError> {
-        let mut length = 0u32;
-        for _ in 0..4 {
-            let byte = read_u8(cursor)?;
-            length = (length << 7) | u32::from(byte & 0b0111_1111);
-            if (byte & 0b1000_0000) == 0 {
-                // highest bit isn't set, so we're done
-                break;
-            }
-        }
-        Ok(length)
-    }
 }
 
 #[cfg(test)]
 mod tests {
+    use winnow::Parser;
+
+    use crate::atom::util::parser::stream;
+
     use super::*;
 
     #[test]
@@ -487,12 +378,14 @@ mod tests {
             0, 0, 245, 74,
         ];
 
-        let result = parse_stsd_extensions(&data).expect("Failed to parse data");
+        let result = parser::parse_stsd_extensions
+            .parse(stream(&data))
+            .expect("Failed to parse data");
 
-        assert_eq!(result.extensions.len(), 2);
+        assert_eq!(result.len(), 2);
 
         // Check ESDS box
-        if let StsdExtension::Esds(esds) = &result.extensions[0] {
+        if let StsdExtension::Esds(esds) = &result[0] {
             assert_eq!(esds.version, 0);
             assert_eq!(esds.flags, [0, 0, 0]);
             assert_eq!(esds.es_descriptor.es_id, 1);
@@ -507,7 +400,7 @@ mod tests {
         }
 
         // Check BTRT box
-        if let StsdExtension::Btrt(btrt) = &result.extensions[1] {
+        if let StsdExtension::Btrt(btrt) = &result[1] {
             assert_eq!(btrt.buffer_size_db, 0);
             assert_eq!(btrt.max_bitrate, 62794);
             assert_eq!(btrt.avg_bitrate, 62794);
@@ -518,7 +411,7 @@ mod tests {
 
     #[test]
     fn test_round_trip_serialization() {
-        let original_data = [
+        let data = [
             0, 0, 0, 51, 101, 115, 100, 115, 0, 0, 0, 0, 3, 128, 128, 128, 34, 0, 1, 0, 4, 128,
             128, 128, 20, 64, 21, 0, 0, 0, 0, 0, 245, 74, 0, 0, 245, 74, 5, 128, 128, 128, 2, 19,
             144, 6, 128, 128, 128, 1, 2, 0, 0, 0, 20, 98, 116, 114, 116, 0, 0, 0, 0, 0, 0, 245, 74,
@@ -526,41 +419,44 @@ mod tests {
         ];
 
         // Parse the original data
-        let parsed = parse_stsd_extensions(&original_data).expect("Failed to parse original data");
+        let parsed = parser::parse_stsd_extensions
+            .parse(stream(&data))
+            .expect("Failed to parse original data");
 
         // Serialize back to bytes
-        let serialized = parsed
-            .extensions
+        let re_encoded = parsed
             .into_iter()
             .flat_map(|ext| ext.to_bytes())
             .collect::<Vec<_>>();
 
         // Compare with original
-        assert_eq!(serialized, original_data, "Round-trip serialization failed");
+        assert_eq!(re_encoded, data, "Round-trip serialization failed");
     }
 
     #[test]
     fn test_individual_box_serialization() {
-        let original_data = [
+        let data = [
             0, 0, 0, 51, 101, 115, 100, 115, 0, 0, 0, 0, 3, 128, 128, 128, 34, 0, 1, 0, 4, 128,
             128, 128, 20, 64, 21, 0, 0, 0, 0, 0, 245, 74, 0, 0, 245, 74, 5, 128, 128, 128, 2, 19,
             144, 6, 128, 128, 128, 1, 2, 0, 0, 0, 20, 98, 116, 114, 116, 0, 0, 0, 0, 0, 0, 245, 74,
             0, 0, 245, 74,
         ];
 
-        let mut parsed = parse_stsd_extensions(&original_data).expect("Failed to parse data");
+        let mut parsed = parser::parse_stsd_extensions
+            .parse(stream(&data))
+            .expect("Failed to parse data");
 
         // Test ESDS box serialization
-        if let StsdExtension::Esds(esds) = parsed.extensions.swap_remove(0) {
+        if let StsdExtension::Esds(esds) = parsed.swap_remove(0) {
             let esds_serialized = esds.into_vec();
-            let expected_esds = &original_data[8..51]; // Skip box header (8 bytes), take payload
+            let expected_esds = &data[8..51]; // Skip box header (8 bytes), take payload
             assert_eq!(esds_serialized, expected_esds, "ESDS serialization failed");
         }
 
         // Test BTRT box serialization
-        if let StsdExtension::Btrt(btrt) = parsed.extensions.swap_remove(0) {
+        if let StsdExtension::Btrt(btrt) = parsed.swap_remove(0) {
             let btrt_serialized = btrt.into_bytes();
-            let expected_btrt = &original_data[59..]; // Skip to BTRT payload
+            let expected_btrt = &data[59..]; // Skip to BTRT payload
             assert_eq!(btrt_serialized, expected_btrt, "BTRT serialization failed");
         }
     }

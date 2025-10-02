@@ -95,14 +95,6 @@ impl ParseError {
         }
     }
 
-    pub(crate) fn new_atom_parse(source: anyhow::Error) -> Self {
-        Self {
-            kind: ParseErrorKind::AtomParsing,
-            location: None,
-            source: Some(source.into_boxed_dyn_error()),
-        }
-    }
-
     pub(crate) fn from_winnow(
         error: winnow::error::ParseError<
             winnow::LocatingSlice<&winnow::Bytes>,
