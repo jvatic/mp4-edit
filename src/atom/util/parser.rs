@@ -8,7 +8,7 @@ use winnow::{
     Bytes, LocatingSlice, ModalResult, Parser,
 };
 
-use crate::FourCC;
+use crate::{atom::util::ColorRgb, FourCC};
 
 pub type Stream<'i> = LocatingSlice<&'i Bytes>;
 
@@ -195,13 +195,6 @@ where
         }
     }
     Ok(length)
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct ColorRgb {
-    pub red: u16,
-    pub green: u16,
-    pub blue: u16,
 }
 
 pub fn color_rgb(input: &mut Stream<'_>) -> ModalResult<ColorRgb> {

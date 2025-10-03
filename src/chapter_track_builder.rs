@@ -18,7 +18,7 @@ use crate::atom::{
     stts::{TimeToSampleAtom, TimeToSampleEntry},
     text::TEXT,
     tkhd::TrackHeaderAtom,
-    util::{mp4_timestamp_now, parser::ColorRgb, scaled_duration},
+    util::{mp4_timestamp_now, scaled_duration, ColorRgb},
     Atom, AtomData, AtomHeader, BaseMediaInfoAtom, DataReferenceAtom, EditListAtom,
     TextMediaInfoAtom, GMHD,
 };

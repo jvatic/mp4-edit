@@ -8,7 +8,7 @@ pub use crate::atom::stsd::extension::{
 use crate::{
     atom::{
         stsd::serializer::text::serialize_text_entry,
-        util::{parser::ColorRgb, read_to_end, serializer::fixed_point_16x16},
+        util::{read_to_end, serializer::fixed_point_16x16, ColorRgb},
         FourCC,
     },
     parser::ParseAtom,

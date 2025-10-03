@@ -1,4 +1,7 @@
-use crate::atom::util::parser::{ColorRgb, FIXED_POINT_16X16_SCALE, FIXED_POINT_8X8_SCALE};
+use crate::atom::util::{
+    parser::{FIXED_POINT_16X16_SCALE, FIXED_POINT_8X8_SCALE},
+    ColorRgb,
+};
 
 pub fn be_u32(value: u32) -> Vec<u8> {
     value.to_be_bytes().to_vec()
