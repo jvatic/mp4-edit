@@ -129,9 +129,7 @@ where
 
     let cursor = Cursor::new(re_encoded.clone());
     match T::parse(fourcc, cursor).await {
-        Ok(parsed_atom2) => {
-            // println!("re-encoded parsed: {parsed_atom2:#?}");
-        }
+        Ok(_) => {}
         Err(_) => {
             println!("{parsed_atom:#?}");
         }

@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use winnow::{
     binary::{be_i32, be_u16, be_u32, be_u64, length_and_then, u8},
     combinator::{seq, trace},
-    error::{ContextError, ErrMode, ParserError, StrContext, StrContextValue},
+    error::{ParserError, StrContext, StrContextValue},
     token::rest,
     Bytes, LocatingSlice, ModalResult, Parser,
 };
@@ -138,16 +138,6 @@ pub fn rest_vec<'i>(input: &mut Stream<'i>) -> ModalResult<Vec<u8>> {
     .parse_next(input)
 }
 
-pub fn rest_vec1<'i>(input: &mut Stream<'i>) -> ModalResult<Vec<u8>> {
-    trace("rest_vec1", move |input: &mut Stream<'i>| {
-        let data = rest
-            .verify(|data: &[u8]| !data.is_empty())
-            .parse_next(input)?;
-        Ok(data.to_vec())
-    })
-    .parse_next(input)
-}
-
 pub fn fixed_array<'i, const N: usize, Input, Output, Error, ParseNext>(
     mut parser: ParseNext,
 ) -> impl Parser<Input, [Output; N], Error> + 'i
@@ -221,18 +211,6 @@ pub fn color_rgb(input: &mut Stream<'_>) -> ModalResult<ColorRgb> {
         blue: be_u16.context(StrContext::Label("blue")),
     })
     .parse_next(input)
-}
-
-/// shim to bridge the gap between old parser code and new parser code
-/// once all old parser code has been upgraded, this can be deleted
-pub fn parse_winnow_shim<'i, T, P, E>(data: &'i [u8], mut parser: P) -> Result<T, E>
-where
-    P: Parser<Stream<'i>, T, ErrMode<ContextError>>,
-    E: From<crate::ParseError>,
-{
-    Ok(parser
-        .parse(stream(data))
-        .map_err(crate::ParseError::from_winnow)?)
 }
 
 pub mod combinators {
