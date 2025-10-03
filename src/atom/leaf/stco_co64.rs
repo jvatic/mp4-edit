@@ -8,7 +8,7 @@ use std::{
 
 use crate::{
     atom::{
-        util::{read_to_end, DebugEllipsis},
+        util::{read_to_end, DebugList, DebugUpperHex},
         FourCC,
     },
     parser::ParseAtom,
@@ -46,16 +46,7 @@ impl FromIterator<u64> for ChunkOffsets {
 
 impl fmt::Debug for ChunkOffsets {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.0.len() <= 10 {
-            return f
-                .debug_list()
-                .entries(self.0.iter().map(|co| format!("0x{co:0x}")))
-                .finish();
-        }
-        f.debug_list()
-            .entries(self.0.iter().take(10).map(|co| format!("0x{co:0x}")))
-            .entry(&DebugEllipsis(Some(self.0.len() - 10)))
-            .finish()
+        fmt::Debug::fmt(&DebugList::new(self.0.iter().map(DebugUpperHex), 10), f)
     }
 }
 

@@ -9,7 +9,7 @@ use std::{
 
 use crate::{
     atom::{
-        util::{read_to_end, DebugEllipsis},
+        util::{read_to_end, DebugList},
         FourCC,
     },
     parser::ParseAtom,
@@ -36,13 +36,7 @@ impl From<Vec<u32>> for SampleEntrySizes {
 
 impl fmt::Debug for SampleEntrySizes {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.0.len() <= 10 {
-            return f.debug_list().entries(self.0.iter()).finish();
-        }
-        f.debug_list()
-            .entries(self.0.iter().take(10))
-            .entry(&DebugEllipsis(Some(self.0.len() - 10)))
-            .finish()
+        fmt::Debug::fmt(&DebugList::new(self.0.iter(), 10), f)
     }
 }
 
