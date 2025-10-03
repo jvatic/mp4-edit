@@ -382,7 +382,7 @@ mod serializer {
 mod parser {
     use winnow::{
         binary::{be_i32, be_u16, be_u32, bits, length_repeat},
-        combinator::{opt, seq},
+        combinator::seq,
         error::{ContextError, ErrMode, StrContext},
         ModalResult, Parser,
     };
