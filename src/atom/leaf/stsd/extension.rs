@@ -1,14 +1,36 @@
+use std::fmt;
+
 use audio_specific_config::AudioSpecificConfig;
 
-use crate::atom::util::serializer::{prepend_size, SizeU32OrU64};
+use crate::{
+    atom::util::{
+        serializer::{prepend_size, SizeU32OrU64},
+        DebugList, DebugUpperHex,
+    },
+    FourCC,
+};
 
 mod audio_specific_config;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub enum StsdExtension {
     Esds(EsdsExtension),
     Btrt(BtrtExtension),
     Unknown { fourcc: [u8; 4], data: Vec<u8> },
+}
+
+impl fmt::Debug for StsdExtension {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StsdExtension::Btrt(btrt) => fmt::Debug::fmt(btrt, f),
+            StsdExtension::Esds(esds) => fmt::Debug::fmt(esds, f),
+            StsdExtension::Unknown { fourcc, data } => f
+                .debug_struct("Unknown")
+                .field("fourcc", &FourCC::new(fourcc))
+                .field("data", &DebugList::new(data.iter().map(DebugUpperHex), 10))
+                .finish(),
+        }
+    }
 }
 
 #[derive(Default, Debug, Clone, PartialEq)]

@@ -3,7 +3,7 @@ use std::fmt;
 
 use crate::{
     atom::{
-        util::{read_to_end, DebugEllipsis},
+        util::{read_to_end, DebugList, DebugUpperHex},
         FourCC,
     },
     parser::ParseAtom,
@@ -29,7 +29,10 @@ impl fmt::Debug for FreeAtom {
         f.debug_struct("FreeAtom")
             .field("atom_type", &self.atom_type)
             .field("data_size", &self.data_size)
-            .field("data", &DebugEllipsis(Some(self.data.len())))
+            .field(
+                "data",
+                &DebugList::new(self.data.iter().map(DebugUpperHex), 10),
+            )
             .finish()
     }
 }
