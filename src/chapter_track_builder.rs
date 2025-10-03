@@ -75,7 +75,7 @@ impl ChapterTrack {
         #[builder(into)] total_duration: Duration,
         #[builder(default = mp4_timestamp_now())] creation_time: u64,
         #[builder(default = mp4_timestamp_now())] modification_time: u64,
-        #[builder(default = "SubtitleHandler".to_string(), into)] handler_name: String,
+        #[builder(default = "Apple Text Media Handler".to_string(), into)] handler_name: String,
     ) -> Self {
         let (sample_data, sample_durations, sample_sizes) =
             Self::create_samples_durations_and_sizes(&chapters, total_duration, timescale);
