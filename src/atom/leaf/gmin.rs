@@ -2,7 +2,7 @@ use futures_io::AsyncRead;
 
 use crate::{
     atom::{
-        util::{parser::ColorRgb, read_to_end},
+        util::{read_to_end, ColorRgb},
         FourCC,
     },
     parser::ParseAtom,
