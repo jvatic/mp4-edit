@@ -72,7 +72,9 @@ pub enum DecoderSpecificInfo {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct SlConfigDescriptor {}
+pub struct SlConfigDescriptor {
+    pub predefined: u8,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BtrtExtension {
@@ -178,7 +180,7 @@ impl DecoderConfigDescriptor {
 
 impl SlConfigDescriptor {
     fn into_bytes(self) -> Vec<u8> {
-        serialize_descriptor(0x06, &[0x02])
+        serialize_descriptor(0x06, &[self.predefined])
     }
 }
 
@@ -381,7 +383,7 @@ pub(crate) mod parser {
         trace("parse_sl_config_descriptor",
         seq!(SlConfigDescriptor {
             _: literal(0x06).context(StrContext::Expected(StrContextValue::Description("0x06"))),
-            _: length_and_then(variable_length_be_u32, u8).context(StrContext::Label("predefined")),
+            predefined: length_and_then(variable_length_be_u32, u8).context(StrContext::Label("predefined")),
         }))
         .parse_next(input)
     }
