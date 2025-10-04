@@ -93,7 +93,8 @@ pub struct AudioSpecificConfig {
     pub audio_object_type: AudioObjectType,
     pub sampling_frequency: SamplingFrequency,
     pub channel_configuration: ChannelConfiguration,
-    pub reserved_bits: u8,
+    pub extension_bits: u8,
+    pub extension_bytes: Vec<u8>,
 }
 
 pub(crate) mod serializer {
@@ -104,19 +105,20 @@ pub(crate) mod serializer {
     pub fn serialize_audio_specific_config(cfg: AudioSpecificConfig) -> Vec<u8> {
         let mut packer = Packer::new();
 
+        packer.push_n::<5>(audio_object_type(cfg.audio_object_type));
+
         let explicit = match cfg.sampling_frequency {
             SamplingFrequency::Explicit(hz) => Some(hz),
             _ => None,
         };
-
-        packer.push_n::<5>(audio_object_type(cfg.audio_object_type));
         packer.push_n::<4>(sampling_frequency_index(cfg.sampling_frequency));
-        packer.push_n::<4>(channel_configuration(cfg.channel_configuration));
-        packer.push_n::<3>(cfg.reserved_bits);
-
         if let Some(hz) = explicit {
             packer.push_bytes(be_u24(hz));
         }
+
+        packer.push_n::<4>(channel_configuration(cfg.channel_configuration));
+        packer.push_n::<3>(cfg.extension_bits);
+        packer.push_bytes(cfg.extension_bytes);
 
         Vec::from(packer)
     }
@@ -172,38 +174,24 @@ pub(crate) mod parser {
         ModalResult, Parser,
     };
 
-    use crate::atom::util::parser::Stream;
+    use crate::atom::util::parser::{rest_vec, Stream};
 
     use super::{AudioObjectType, AudioSpecificConfig, ChannelConfiguration, SamplingFrequency};
 
     pub fn parse_audio_specific_config(input: &mut Stream<'_>) -> ModalResult<AudioSpecificConfig> {
         bits::bits(
             move |input: &mut (Stream<'_>, usize)| -> ModalResult<AudioSpecificConfig> {
-                let mut asc = seq!(AudioSpecificConfig {
+                seq!(AudioSpecificConfig {
                     audio_object_type: audio_object_type // 5 bits
                         .context(StrContext::Label("audio_object_type")),
-                    sampling_frequency: sampling_frequency // 4 bits
+                    sampling_frequency: sampling_frequency // 4 or 28 bits
                         .context(StrContext::Label("sampling_frequency")),
                     channel_configuration: channel_configuration // 4 bits
                         .context(StrContext::Label("channel_configuration")),
-                    reserved_bits: bits::take(3usize),
+                    extension_bits: bits::take(3usize).context(StrContext::Label("extension_bits")),
+                    extension_bytes: bits::bytes(rest_vec).context(StrContext::Label("extension_bytes")),
                 })
-                .parse_next(input)?;
-
-                if matches!(asc.sampling_frequency, SamplingFrequency::Explicit(_)) {
-                    asc.sampling_frequency = SamplingFrequency::Explicit(
-                        bits::bytes(move |input: &mut Stream<'_>| -> ModalResult<u32> {
-                            be_u24.parse_next(input) // 3 bytes
-                        })
-                        .context(StrContext::Label("sampling_frequency"))
-                        .context(StrContext::Expected(StrContextValue::Description(
-                            "explicit frequency (be_u24)",
-                        )))
-                        .parse_next(input)?,
-                    );
-                }
-
-                Ok(asc)
+                .parse_next(input)
             },
         )
         .parse_next(input)
@@ -244,7 +232,13 @@ pub(crate) mod parser {
             10 => empty.value(SamplingFrequency::Hz11025),
             11 => empty.value(SamplingFrequency::Hz8000),
             12 => empty.value(SamplingFrequency::Hz7350),
-            15 => empty.value(SamplingFrequency::Explicit(0)), // placeholder
+            15 => bits::bytes(move |input: &mut Stream<'_>| -> ModalResult<u32> {
+                be_u24.parse_next(input) // 3 bytes
+            }).map(SamplingFrequency::Explicit)
+            .context(StrContext::Label("sampling_frequency"))
+            .context(StrContext::Expected(StrContextValue::Description(
+                "explicit frequency (be_u24)",
+            ))),
             _ => fail.context(StrContext::Expected(StrContextValue::Description(
                 "0x00..0x0C, 0x0F",
             ))),
@@ -282,7 +276,7 @@ mod tests {
     fn round_trip_indexed() {
         let data = [0x13, 0x10];
         let cfg = parse_audio_specific_config.parse(stream(&data)).unwrap();
-        assert_eq!(cfg.reserved_bits, 0); // 0x10 & 0b111 = 0
+        assert_eq!(cfg.extension_bits, 0); // 0x10 & 0b111 = 0
         let ser = serialize_audio_specific_config(cfg);
         assert_eq!(ser, data);
     }
@@ -292,7 +286,7 @@ mod tests {
         let mut data = vec![0x2F, 0x88];
         data.extend(&[0x01, 0xE2, 0x40]);
         let cfg = parse_audio_specific_config.parse(stream(&data)).unwrap();
-        assert_eq!(cfg.reserved_bits, 0); // 0x88 & 0b111 = 0
+        assert_eq!(cfg.extension_bits, 0); // 0x88 & 0b111 = 0
         let ser = serialize_audio_specific_config(cfg);
         assert_eq!(ser, data);
     }
@@ -302,7 +296,7 @@ mod tests {
         let data = [0x2B, 0x8A];
         let cfg = parse_audio_specific_config.parse(stream(&data)).unwrap();
         println!("Parsed config: {:?}", cfg);
-        assert_eq!(cfg.reserved_bits, 2); // 0x8A & 0b111 = 2
+        assert_eq!(cfg.extension_bits, 2); // 0x8A & 0b111 = 2
         let ser = serialize_audio_specific_config(cfg);
         println!("Original: {:02X?}", data);
         println!("Serialized: {:02X?}", ser);

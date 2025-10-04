@@ -6,7 +6,7 @@ use crate::{
     atom::{
         stsd::extension::audio_specific_config::serializer::serialize_audio_specific_config,
         util::{
-            serializer::{prepend_size, SizeU32OrU64},
+            serializer::{pascal_string, prepend_size, SizeU32OrU64},
             DebugList, DebugUpperHex,
         },
     },
@@ -46,9 +46,9 @@ pub struct EsdsExtension {
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct EsDescriptor {
     pub es_id: u16,
-    pub stream_dependence_flag: bool,
-    pub url_flag: bool,
-    pub ocr_stream_flag: bool,
+    pub depends_on_es_id: Option<u16>,
+    pub url: Option<String>,
+    pub ocr_es_id: Option<u16>,
     pub stream_priority: u8,
     pub decoder_config_descriptor: Option<DecoderConfigDescriptor>,
     pub sl_config_descriptor: Option<SlConfigDescriptor>,
@@ -67,7 +67,7 @@ pub struct DecoderConfigDescriptor {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DecoderSpecificInfo {
-    Audio(AudioSpecificConfig, Vec<u8>), // AudioSpecificConfig + extra bytes
+    Audio(AudioSpecificConfig),
     Unknown(Vec<u8>),
 }
 
@@ -110,18 +110,28 @@ impl EsDescriptor {
 
         // Flags byte
         let mut flags_byte = self.stream_priority & 0x1F;
-        if self.stream_dependence_flag {
+        if self.depends_on_es_id.is_some() {
             flags_byte |= 0x80;
         }
-        if self.url_flag {
+        if self.url.is_some() {
             flags_byte |= 0x40;
         }
-        if self.ocr_stream_flag {
+        if self.ocr_es_id.is_some() {
             flags_byte |= 0x20;
         }
         payload.push(flags_byte);
 
-        // Add optional fields (not present in our sample data)
+        if let Some(depends_on_es_id) = self.depends_on_es_id {
+            payload.extend(depends_on_es_id.to_be_bytes());
+        }
+
+        if let Some(url) = self.url {
+            payload.extend(pascal_string(url));
+        }
+
+        if let Some(ocr_es_id) = self.ocr_es_id {
+            payload.extend(ocr_es_id.to_be_bytes());
+        }
 
         // Add DecoderConfigDescriptor if present
         if let Some(decoder_config) = self.decoder_config_descriptor {
@@ -156,11 +166,7 @@ impl DecoderConfigDescriptor {
         // Add DecoderSpecificInfo if present
         if let Some(decoder_info) = self.decoder_specific_info {
             let decoder_info_bytes = match decoder_info {
-                DecoderSpecificInfo::Audio(c, extra) => {
-                    let mut bytes = serialize_audio_specific_config(c);
-                    bytes.extend(extra);
-                    bytes
-                }
+                DecoderSpecificInfo::Audio(c) => serialize_audio_specific_config(c),
                 DecoderSpecificInfo::Unknown(c) => c.clone(),
             };
             payload.extend(serialize_descriptor(0x05, &decoder_info_bytes));
@@ -280,20 +286,23 @@ pub(crate) mod parser {
             let ocr_stream_flag = (flags_byte & 0x20) != 0;
             let stream_priority = flags_byte & 0x1F;
 
-            // Skip dependent stream ID if present
-            if stream_dependence_flag {
-                be_u16.parse_next(input)?;
-            }
+            let depends_on_es_id = if stream_dependence_flag {
+                Some(be_u16.parse_next(input)?)
+            } else {
+                None
+            };
 
-            // Skip URL if present
-            if url_flag {
-                let _url = pascal_string.parse_next(input)?;
-            }
+            let url = if url_flag {
+                Some(pascal_string.parse_next(input)?)
+            } else {
+                None
+            };
 
-            // Skip OCR ES ID if present
-            if ocr_stream_flag {
-                be_u16.parse_next(input)?;
-            }
+            let ocr_es_id = if ocr_stream_flag {
+                Some(be_u16.parse_next(input)?)
+            } else {
+                None
+            };
 
             // Parse DecoderConfigDescriptor
             let decoder_config_descriptor =
@@ -304,9 +313,9 @@ pub(crate) mod parser {
 
             Ok(EsDescriptor {
                 es_id,
-                stream_dependence_flag,
-                url_flag,
-                ocr_stream_flag,
+                depends_on_es_id,
+                url,
+                ocr_es_id,
                 stream_priority,
                 decoder_config_descriptor,
                 sl_config_descriptor,
@@ -338,11 +347,10 @@ pub(crate) mod parser {
                     variable_length_be_u32,
                     match stream_type {
                         5 => |input: &mut Stream<'_>| {
-                            // TODO: what are the trailling bytes? Are we missing a reserved field?
-                            let asc = parse_audio_specific_config
+                            parse_audio_specific_config
+                                .map(DecoderSpecificInfo::Audio)
                                 .context(StrContext::Label("audio_specific_config"))
-                                .parse_next(input)?;
-                            Ok(DecoderSpecificInfo::Audio(asc, rest_vec.parse_next(input)?))
+                                .parse_next(input)
                         },
                         _ => |input: &mut Stream<'_>| {
                             rest_vec
