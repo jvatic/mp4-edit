@@ -208,7 +208,7 @@ impl<'a> TrakAtomRefMut<'a> {
                     .get_or_insert_default();
                 cfg.avg_bitrate = bitrate;
                 cfg.max_bitrate = bitrate;
-                if let Some(DecoderSpecificInfo::Audio(a, _)) = cfg.decoder_specific_info.as_ref() {
+                if let Some(DecoderSpecificInfo::Audio(a)) = cfg.decoder_specific_info.as_ref() {
                     sample_frequency = Some(a.sampling_frequency.as_hz());
                 }
             }
