@@ -252,3 +252,31 @@ pub mod combinators {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    macro_rules! test_variable_length_quantity {
+        ({ $( $name:ident::<$t:ident, $n:literal>($input:expr) => $expected:expr ),+ $(,)? }) => {
+            $(#[test] fn $name() {
+                let input = $input;
+                let output = variable_length_quantity::<$t, $n>
+                    .parse(stream(&input))
+                    .unwrap();
+                let expected: $t = $expected;
+                assert_eq!(output, expected);
+            })+
+        };
+    }
+
+    test_variable_length_quantity!({
+        test_u16_127::<u16, 2>(vec![0x7F]) => 127,
+        test_u16_128::<u16, 2>(vec![0x81, 0x00]) => 128,
+        test_u16_358::<u16, 2>(vec![0x82, 0x66]) => 358,
+        test_u32_358::<u32, 4>(vec![0x82, 0x66]) => 358,
+        test_u64_358::<u64, 8>(vec![0x82, 0x66]) => 358,
+        test_u32_358_padded_x1::<u32, 4>(vec![0x80, 0x82, 0x66]) => 358,
+        test_u32_358_padded_x2::<u32, 4>(vec![0x80, 0x80, 0x82, 0x66]) => 358,
+    });
+}

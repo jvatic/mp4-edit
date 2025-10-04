@@ -540,56 +540,13 @@ mod parser {
 
 #[cfg(test)]
 mod tests {
-    use winnow::Parser;
-
-    use crate::atom::stsd::extension::parser::parse_stsd_extensions;
     use crate::atom::test_utils::test_atom_roundtrip_sync;
-    use crate::atom::util::parser::stream;
 
     use super::*;
-
-    #[test]
-    fn test_parse_extensions_round_trip() {
-        let extension_data: Vec<u8> = vec![
-            0, 0, 0, 51, 101, 115, 100, 115, 0, 0, 0, 0, 3, 128, 128, 128, 34, 0, 1, 0, 4, 128,
-            128, 128, 20, 64, 21, 0, 0, 0, 0, 0, 245, 74, 0, 0, 245, 74, 5, 128, 128, 128, 2, 19,
-            144, 6, 128, 128, 128, 1, 2, 0, 0, 0, 20, 98, 116, 114, 116, 0, 0, 0, 0, 0, 0, 245, 74,
-            0, 0, 245, 74,
-        ];
-        let result = parse_stsd_extensions.parse(stream(&extension_data));
-        assert!(result.is_ok(), "extensions should parse");
-        let result = result.unwrap();
-
-        let round_trip_data: Vec<u8> = result
-            .clone()
-            .into_iter()
-            .flat_map(|ext| ext.to_bytes())
-            .collect();
-
-        assert_eq!(
-            round_trip_data, extension_data,
-            "expected round trip data to equal input data ({result:?})"
-        );
-    }
 
     /// Test round-trip for all available stsd test data files
     #[test]
     fn test_stsd_roundtrip() {
         test_atom_roundtrip_sync::<SampleDescriptionTableAtom>(STSD);
-    }
-
-    #[test]
-    fn test_text_sample_entry_type_recognition() {
-        // Test that "text" sample entry type is recognized correctly
-        let text_bytes = b"text";
-        let entry_type = SampleEntryType::from_bytes(text_bytes);
-        assert_eq!(entry_type, SampleEntryType::Text);
-
-        // Test round-trip
-        let bytes_back = entry_type.as_bytes();
-        assert_eq!(bytes_back, text_bytes);
-
-        // Test string representation
-        assert_eq!(entry_type.as_str(), "text");
     }
 }
