@@ -513,13 +513,13 @@ mod tests {
         let samples = track.individual_samples();
         assert_eq!(samples.len(), 3);
 
-        // Expected sizes: 2 bytes (length) + title length + 4 bytes (min_padding)
-        // "Opening Credits" (15 chars) = 2 + 15 + 4 = 21 bytes
-        // "Dedication" (10 chars) = 2 + 10 + 4 = 16 bytes
-        // "Epigraph" (8 chars) = 2 + 8 + 4 = 14 bytes
-        assert_eq!(samples[0].len(), 21);
-        assert_eq!(samples[1].len(), 16);
-        assert_eq!(samples[2].len(), 14);
+        // Expected sizes: 2 bytes (length) + title length
+        // "Opening Credits" (15 chars) = 2 + 15 = 17 bytes
+        // "Dedication" (10 chars) = 2 + 10 = 12 bytes
+        // "Epigraph" (8 chars) = 2 + 8 = 10 bytes
+        assert_eq!(samples[0].len(), 17);
+        assert_eq!(samples[1].len(), 12);
+        assert_eq!(samples[2].len(), 10);
 
         // Verify we have individual duration entries for each chapter
         assert_eq!(track.sample_durations.len(), 3);
