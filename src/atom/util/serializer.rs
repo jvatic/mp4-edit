@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use crate::atom::util::{
     parser::{FIXED_POINT_16X16_SCALE, FIXED_POINT_8X8_SCALE},
     ColorRgb,
@@ -37,6 +39,31 @@ pub fn pascal_string(s: String) -> Vec<u8> {
     let len = u8::try_from(data.len()).expect("string byte len must fit in u8");
     data.insert(0, len);
     data
+}
+
+/// Encode be_u32 to between 1 and 4 bytes using VLQ
+pub fn variable_length_be_u32(length: u32) -> Vec<u8> {
+    variable_length_quantity::<4>(length as usize)
+}
+
+fn variable_length_quantity<const N: usize>(mut length: usize) -> Vec<u8> {
+    let mut data = VecDeque::with_capacity(N);
+    for _ in 0..N {
+        let mut byte = (length & 0b0111_1111) as u8;
+        length >>= 7;
+
+        if !data.is_empty() {
+            byte |= 0b1000_0000;
+        }
+
+        data.push_front(byte);
+
+        if length == 0 {
+            break;
+        }
+    }
+
+    data.into()
 }
 
 /// Serialize u8(size)
@@ -537,4 +564,31 @@ pub mod bits {
             panic!("expected 0b{expected:08b}, got 0b{actual:08b}")
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::atom::test_utils::assert_bytes_equal;
+
+    use super::*;
+
+    macro_rules! test_variable_length_quantity {
+        ({ $( $name:ident::<$n:literal>($input:expr) => $expected:expr ),+ $(,)? }) => {
+            $(#[test] fn $name() {
+                let input = $input;
+                let output = variable_length_quantity::<$n>(input);
+                let expected: Vec<u8> = $expected;
+                assert_bytes_equal(&output, &expected);
+            })+
+        };
+    }
+
+    test_variable_length_quantity!({
+        test_u16_0::<2>(0) => vec![0x00],
+        test_u16_127::<2>(127) => vec![0x7F],
+        test_u16_128::<2>(128) => vec![0x81, 0x00],
+        test_u16_358::<2>(358) => vec![0x82, 0x66],
+        test_u32_358::<4>(358) => vec![0x82, 0x66],
+        test_u64_358::<8>(358) => vec![0x82, 0x66],
+    });
 }
