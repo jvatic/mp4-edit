@@ -3,9 +3,12 @@ use std::fmt;
 use audio_specific_config::AudioSpecificConfig;
 
 use crate::{
-    atom::util::{
-        serializer::{prepend_size, SizeU32OrU64},
-        DebugList, DebugUpperHex,
+    atom::{
+        stsd::extension::audio_specific_config::serializer::serialize_audio_specific_config,
+        util::{
+            serializer::{prepend_size, SizeU32OrU64},
+            DebugList, DebugUpperHex,
+        },
     },
     FourCC,
 };
@@ -151,11 +154,11 @@ impl DecoderConfigDescriptor {
         payload.extend_from_slice(&self.avg_bitrate.to_be_bytes());
 
         // Add DecoderSpecificInfo if present
-        if let Some(ref decoder_info) = self.decoder_specific_info {
+        if let Some(decoder_info) = self.decoder_specific_info {
             let decoder_info_bytes = match decoder_info {
                 DecoderSpecificInfo::Audio(c, extra) => {
-                    let mut bytes = c.serialize();
-                    bytes.extend_from_slice(extra);
+                    let mut bytes = serialize_audio_specific_config(c);
+                    bytes.extend(extra);
                     bytes
                 }
                 DecoderSpecificInfo::Unknown(c) => c.clone(),
@@ -218,13 +221,16 @@ pub(crate) mod parser {
         binary::{be_u16, be_u24, be_u32, length_and_then, u8},
         combinator::{opt, repeat, seq, trace},
         error::{StrContext, StrContextValue},
-        token::{literal, rest},
+        token::literal,
         ModalResult, Parser,
     };
 
-    use crate::atom::util::parser::{
-        atom_size, combinators::inclusive_length_and_then, flags3, fourcc, pascal_string, rest_vec,
-        variable_length_be_u32, version, Stream,
+    use crate::atom::{
+        stsd::extension::audio_specific_config::parser::parse_audio_specific_config,
+        util::parser::{
+            atom_size, combinators::inclusive_length_and_then, flags3, fourcc, pascal_string,
+            rest_vec, variable_length_be_u32, version, Stream,
+        },
     };
 
     use super::*;
@@ -328,22 +334,24 @@ pub(crate) mod parser {
             // Parse DecoderSpecificInfo if present
             let decoder_specific_info = opt(move |input: &mut Stream<'_>| {
                 literal(0x05).parse_next(input)?;
-                length_and_then(variable_length_be_u32, move |input: &mut Stream<'_>| {
-                    let info_bytes = rest.parse_next(input)?;
-                    let info = match stream_type {
-                        5 => {
-                            // TODO: refactor AudioSpecificConfig parsing
-                            if let Ok(audio_config) = AudioSpecificConfig::parse(info_bytes) {
-                                let extra_bytes = info_bytes[audio_config.bytes_read..].to_vec();
-                                DecoderSpecificInfo::Audio(audio_config, extra_bytes)
-                            } else {
-                                DecoderSpecificInfo::Unknown(info_bytes.to_vec())
-                            }
-                        }
-                        _ => DecoderSpecificInfo::Unknown(info_bytes.to_vec()),
-                    };
-                    Ok(info)
-                })
+                length_and_then(
+                    variable_length_be_u32,
+                    match stream_type {
+                        5 => |input: &mut Stream<'_>| {
+                            // TODO: what are the trailling bytes? Are we missing a reserved field?
+                            let asc = parse_audio_specific_config
+                                .context(StrContext::Label("audio_specific_config"))
+                                .parse_next(input)?;
+                            Ok(DecoderSpecificInfo::Audio(asc, rest_vec.parse_next(input)?))
+                        },
+                        _ => |input: &mut Stream<'_>| {
+                            rest_vec
+                                .map(DecoderSpecificInfo::Unknown)
+                                .context(StrContext::Label("unknown"))
+                                .parse_next(input)
+                        },
+                    },
+                )
                 .parse_next(input)
             })
             .parse_next(input)?;
