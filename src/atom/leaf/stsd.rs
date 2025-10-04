@@ -83,6 +83,7 @@ pub struct AudioSampleEntry {
     pub version: u16,
     pub channel_count: u16,
     pub sample_size: u16,
+    pub predefined: u16,
     /// 16.16 fixed point
     pub sample_rate: f32,
     pub extensions: Vec<StsdExtension>,
@@ -260,7 +261,7 @@ impl SerializeAtom for SampleDescriptionTableAtom {
                     entry_data.extend([0u8; 6]); // reserved
                     entry_data.extend(audio.channel_count.to_be_bytes());
                     entry_data.extend(audio.sample_size.to_be_bytes());
-                    entry_data.extend(2u16.to_be_bytes()); // pre-defined
+                    entry_data.extend(audio.predefined.to_be_bytes());
                     entry_data.extend([0u8; 2]); // reserved
                     entry_data.extend(fixed_point_16x16(audio.sample_rate));
                     audio.extensions.into_iter().for_each(|ext| {
@@ -444,7 +445,7 @@ mod parser {
             _: byte_array::<6>.context(StrContext::Label("reserved")),
             channel_count: be_u16.context(StrContext::Label("channel_count")),
             sample_size: be_u16.context(StrContext::Label("sample_size")),
-            _: byte_array::<2>.context(StrContext::Label("pre-defined")),
+            predefined: be_u16.context(StrContext::Label("predefined")),
             _: byte_array::<2>.context(StrContext::Label("reserved")),
             sample_rate: fixed_point_16x16.context(StrContext::Label("sample_rate")),
             extensions: parse_stsd_extensions.context(StrContext::Label("extensions")),
