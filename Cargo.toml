@@ -17,7 +17,6 @@ futures-io = "0.3"
 futures-util = { version = "0.3", features = ["io"] }
 hex = "0.4.3"
 libaes = "0.7"
-mp4parse = "0.17.0"
 progress_bar = { version = "1.2.1", features = ["logger"] }
 thiserror = "2.0.12"
 tokio = { version = "1.45.1", features = ["full"] }
