@@ -199,7 +199,7 @@ mod serializer {
     }
 
     fn media_rate(media_rate: f32) -> Vec<u8> {
-        fixed_point_16x16(media_rate)
+        fixed_point_16x16(media_rate).to_vec()
     }
 }
 
