@@ -86,7 +86,7 @@ pub(crate) mod serializer {
         };
         packer.push_n::<4>(sampling_frequency_index(cfg.sampling_frequency));
         if let Some(hz) = explicit {
-            packer.push_bytes(be_u24(hz));
+            packer.push_bytes(be_u24(hz).to_vec());
         }
 
         packer.push_n::<4>(channel_configuration(cfg.channel_configuration));

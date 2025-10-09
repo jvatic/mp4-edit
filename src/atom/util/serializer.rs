@@ -5,22 +5,22 @@ use crate::atom::util::{
     ColorRgb,
 };
 
-pub fn be_u32(value: u32) -> Vec<u8> {
-    value.to_be_bytes().to_vec()
+pub fn be_u32(value: u32) -> [u8; 4] {
+    value.to_be_bytes()
 }
 
-pub fn be_u24(value: u32) -> Vec<u8> {
-    vec![(value >> 16) as u8, (value >> 8) as u8, value as u8]
+pub fn be_u24(value: u32) -> [u8; 3] {
+    [(value >> 16) as u8, (value >> 8) as u8, value as u8]
 }
 
-pub fn fixed_point_16x16(val: f32) -> Vec<u8> {
+pub fn fixed_point_16x16(val: f32) -> [u8; 4] {
     let fixed = (val * FIXED_POINT_16X16_SCALE) as u32;
-    fixed.to_be_bytes().to_vec()
+    fixed.to_be_bytes()
 }
 
-pub fn fixed_point_8x8(val: f32) -> Vec<u8> {
+pub fn fixed_point_8x8(val: f32) -> [u8; 2] {
     let fixed = (val * FIXED_POINT_8X8_SCALE) as u16;
-    fixed.to_be_bytes().to_vec()
+    fixed.to_be_bytes()
 }
 
 /// Prepends the size of `f()` + `Size`, according to `Size`
