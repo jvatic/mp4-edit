@@ -16,6 +16,10 @@ impl FourCC {
     pub fn as_bytes(&self) -> &[u8; 4] {
         &self.0
     }
+
+    pub fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.0).unwrap_or("????")
+    }
 }
 
 impl From<[u8; 4]> for FourCC {
