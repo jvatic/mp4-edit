@@ -6,7 +6,10 @@ use crate::{
     atom::{
         stsd::extension::audio_specific_config::serializer::serialize_audio_specific_config,
         util::{
-            serializer::{pascal_string, prepend_size, variable_length_be_u32, SizeU32OrU64},
+            serializer::{
+                pascal_string, prepend_size_exclusive, prepend_size_inclusive, SizeU32,
+                SizeU32OrU64, SizeVLQ,
+            },
             DebugList, DebugUpperHex,
         },
     },
@@ -195,7 +198,7 @@ impl BtrtExtension {
 }
 
 fn serialize_box(fourcc: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-    prepend_size::<SizeU32OrU64, _>(move || {
+    prepend_size_inclusive::<SizeU32OrU64, _>(move || {
         let mut data = Vec::new();
         data.extend_from_slice(fourcc);
         data.extend_from_slice(payload);
@@ -206,8 +209,9 @@ fn serialize_box(fourcc: &[u8; 4], payload: &[u8]) -> Vec<u8> {
 fn serialize_descriptor(tag: u8, payload: &[u8]) -> Vec<u8> {
     let mut result = Vec::new();
     result.push(tag);
-    result.extend(variable_length_be_u32(payload.len() as u32));
-    result.extend_from_slice(payload);
+    result.extend(prepend_size_exclusive::<SizeVLQ<SizeU32>, _>(move || {
+        payload.to_vec()
+    }));
     result
 }
 

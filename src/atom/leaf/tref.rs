@@ -103,7 +103,7 @@ impl SerializeAtom for TrackReferenceAtom {
 }
 
 mod serializer {
-    use crate::atom::util::serializer::{prepend_size, SizeU32};
+    use crate::atom::util::serializer::{prepend_size_inclusive, SizeU32};
 
     use super::TrackReferenceAtom;
 
@@ -111,7 +111,7 @@ mod serializer {
         tref.references
             .into_iter()
             .flat_map(|reference| {
-                prepend_size::<SizeU32, _>(move || {
+                prepend_size_inclusive::<SizeU32, _>(move || {
                     let mut data = Vec::new();
 
                     data.extend(reference.reference_type.into_bytes());

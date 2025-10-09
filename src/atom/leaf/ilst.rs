@@ -128,7 +128,7 @@ impl SerializeAtom for ItemListAtom {
 }
 
 mod serializer {
-    use crate::atom::util::serializer::{prepend_size, SizeU32OrU64};
+    use crate::atom::util::serializer::{prepend_size_inclusive, SizeU32OrU64};
 
     use super::{
         DataAtom, ItemListAtom, ListItemData, MetadataItem, DATA_TYPE_JPEG, DATA_TYPE_TEXT,
@@ -139,13 +139,13 @@ mod serializer {
     }
 
     fn serialize_item(item: MetadataItem) -> Vec<u8> {
-        prepend_size::<SizeU32OrU64, _>(move || {
+        prepend_size_inclusive::<SizeU32OrU64, _>(move || {
             let mut item_data = Vec::new();
 
             item_data.extend(item.item_type.into_bytes());
 
             if let Some(mean) = item.mean {
-                item_data.extend(prepend_size::<SizeU32OrU64, _>(move || {
+                item_data.extend(prepend_size_inclusive::<SizeU32OrU64, _>(move || {
                     let mut mean_data = Vec::new();
                     mean_data.extend(b"mean");
                     mean_data.extend(mean);
@@ -154,7 +154,7 @@ mod serializer {
             }
 
             if let Some(name) = item.name {
-                item_data.extend(prepend_size::<SizeU32OrU64, _>(move || {
+                item_data.extend(prepend_size_inclusive::<SizeU32OrU64, _>(move || {
                     let mut name_data = Vec::new();
                     name_data.extend(b"name");
                     name_data.extend(name);
@@ -163,7 +163,7 @@ mod serializer {
             }
 
             for data_atom in item.data_atoms {
-                item_data.extend(prepend_size::<SizeU32OrU64, _>(move || {
+                item_data.extend(prepend_size_inclusive::<SizeU32OrU64, _>(move || {
                     let mut atom_data = Vec::new();
                     atom_data.extend(b"data");
                     atom_data.extend(serialize_data_type(&data_atom));
