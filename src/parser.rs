@@ -312,7 +312,7 @@ impl<R: AsyncRead + Unpin + Send, C: ReadCapability> Parser<R, C> {
     ) -> Result<Vec<Atom>, ParseError> {
         let start_offset = self.reader.current_offset;
 
-        let mut top_level_atoms = Vec::new();
+        let mut atoms = Vec::new();
 
         loop {
             // ensure we're respecting container bounds
@@ -336,7 +336,7 @@ impl<R: AsyncRead + Unpin + Send, C: ReadCapability> Parser<R, C> {
                 }
             }?;
 
-            // only parse as far as the mdat atom (we're assuming mdat is the last atom)
+            // only parse as far as the mdat atom
             if header.atom_type == MDAT {
                 self.mdat = Some(header);
                 break;
@@ -364,20 +364,19 @@ impl<R: AsyncRead + Unpin + Send, C: ReadCapability> Parser<R, C> {
                     children: Box::pin(self.parse_metadata_inner(Some(size))).await?,
                 };
 
-                top_level_atoms.push(container_atom);
+                atoms.push(container_atom);
             } else {
-                // Yield leaf atoms
                 let atom_data = self.parse_atom_data(&header).await?;
                 let atom = Atom {
                     header,
                     data: Some(atom_data),
                     children: Vec::new(),
                 };
-                top_level_atoms.push(atom);
+                atoms.push(atom);
             }
         }
 
-        Ok(top_level_atoms)
+        Ok(atoms)
     }
 
     async fn parse_next_atom(&mut self) -> Result<AtomHeader, ParseError> {
