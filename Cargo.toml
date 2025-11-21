@@ -6,19 +6,21 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-aes = "0.8.4"
 anyhow = "1.0.98"
-async-stream = "0.3"
 bon = "3.6.5"
-cbc = "0.1.2"
 derive_more = { version = "2.0.1", features = ["full"] }
 either = "1.15.0"
 futures-io = "0.3"
 futures-util = { version = "0.3", features = ["io"] }
-hex = "0.4.3"
-libaes = "0.7"
-progress_bar = { version = "1.2.1", features = ["logger"] }
 thiserror = "2.0.12"
+winnow = "0.7.13"
+
+[dev-dependencies]
+# examples
+aes = "0.8.4"
+cbc = "0.1.2"
+progress_bar = { version = "1.2.1", features = ["logger"] }
 tokio = { version = "1.45.1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["compat"] }
-winnow = "0.7.13"
+# examples & tests
+hex = "0.4.3"
