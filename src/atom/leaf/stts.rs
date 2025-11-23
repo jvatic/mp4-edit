@@ -137,16 +137,6 @@ impl TimeToSampleAtom {
                 continue;
             }
 
-            // Entire trim range is within a single sample (no samples to remove)
-            if entry.sample_count == 1
-                && entry_trim_duration.start >= entry_duration.start
-                && entry_trim_duration.end < entry_duration.end
-            {
-                let trim_duration = entry_trim_duration.end - entry_trim_duration.start;
-                entry.sample_duration -= trim_duration as u32;
-                continue;
-            }
-
             // Partial overlap
 
             let sample_duration = entry.sample_duration as u64;
@@ -160,13 +150,34 @@ impl TimeToSampleAtom {
                     end => current_sample_index + end as usize - 1,
                 };
 
-            removed_sample_indices.insert(trim_sample_start_index..(trim_sample_end_index + 1));
-
             let num_samples_to_remove = trim_sample_end_index + 1 - trim_sample_start_index;
-            entry.sample_count = entry.sample_count.sub(num_samples_to_remove as u32);
+            if num_samples_to_remove == entry.sample_count as usize {
+                dbg!(&sample_duration);
+                dbg!(&entry_trim_duration);
+                if entry.sample_count > 1 {
+                    // remove one less samples
+                    if trim_sample_start_index == 0 {
+                        // anchor to start
+                        removed_sample_indices
+                            .insert(trim_sample_start_index..trim_sample_end_index);
+                    } else {
+                        // anchor to end
+                        removed_sample_indices
+                            .insert((trim_sample_start_index + 1)..trim_sample_end_index);
+                    }
+                }
+                entry.sample_count = 1;
+                let trimmed_duration = entry_trim_duration.end - entry_trim_duration.start;
+                entry.sample_duration -= trimmed_duration as u32;
+                total_duration_trimmed += trimmed_duration;
+            } else {
+                removed_sample_indices.insert(trim_sample_start_index..(trim_sample_end_index + 1));
 
-            total_duration_trimmed += ((trim_sample_end_index as u64 + 1) * sample_duration)
-                - (trim_sample_start_index as u64 * sample_duration);
+                entry.sample_count = entry.sample_count.sub(num_samples_to_remove as u32);
+
+                total_duration_trimmed += ((trim_sample_end_index as u64 + 1) * sample_duration)
+                    - (trim_sample_start_index as u64 * sample_duration);
+            }
         }
 
         for mut range in remove_entry_range.into_iter() {
