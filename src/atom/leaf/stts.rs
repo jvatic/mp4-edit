@@ -137,6 +137,16 @@ impl TimeToSampleAtom {
                 continue;
             }
 
+            // Entire trim range is within a single sample (no samples to remove)
+            if entry.sample_count == 1
+                && entry_trim_duration.start >= entry_duration.start
+                && entry_trim_duration.end < entry_duration.end
+            {
+                let trim_duration = entry_trim_duration.end - entry_trim_duration.start;
+                entry.sample_duration -= trim_duration as u32;
+                continue;
+            }
+
             // Partial overlap
 
             let sample_duration = entry.sample_duration as u64;
