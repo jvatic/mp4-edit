@@ -159,9 +159,6 @@ impl<'a> MoovAtomRefMut<'a> {
     where
         R: RangeBounds<Duration> + Clone + Debug,
     {
-        // TODO: after trimming samples,
-        // - [ ] Update mdhd duration to match: sample_count × 1024
-        // - [ ] Update mvhd duration proportionally: (mdhd_duration × 600) / 44100
         let movie_timescale = u64::from(self.header().timescale);
         let trimmed_duration = self
             .tracks()
