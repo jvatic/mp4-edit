@@ -94,6 +94,12 @@ impl<'a> ChunkOffsetBuilderTrack<'a> {
     }
 }
 
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct BuildMetadata {
+    pub total_size: u64,
+}
+
 pub struct ChunkOffsetBuilder<'a> {
     tracks: Vec<ChunkOffsetBuilderTrack<'a>>,
 }
@@ -142,20 +148,20 @@ impl<'a> ChunkOffsetBuilder<'a> {
     }
 
     /// Build interleaved chunk offsets for each track given a starting offset
-    pub fn build_chunk_offsets(&self, start_offset: u64) -> Vec<Vec<u64>> {
+    pub fn build_chunk_offsets(&self, start_offset: u64) -> (Vec<Vec<u64>>, BuildMetadata) {
         let tracks: Vec<Vec<u64>> = (0..self.tracks.len()).map(|_| Vec::new()).collect();
 
-        let (_, chunk_offsets) = self.build_chunk_info().fold(
-            (start_offset, tracks),
-            |(mut current_offset, mut tracks), chunk| {
+        let (_, chunk_offsets, total_size) = self.build_chunk_info().fold(
+            (start_offset, tracks, 0),
+            |(mut current_offset, mut tracks, size), chunk| {
                 let chunk_offset = current_offset;
                 current_offset += chunk.chunk_size;
                 tracks[chunk.track_index].push(chunk_offset);
-                (current_offset, tracks)
+                (current_offset, tracks, size + chunk.chunk_size)
             },
         );
 
-        chunk_offsets
+        (chunk_offsets, BuildMetadata { total_size })
     }
 
     /// Build interleaved chunk offsets preserving the original order based on input chunk offsets
@@ -163,7 +169,7 @@ impl<'a> ChunkOffsetBuilder<'a> {
         &self,
         original_chunk_offsets: Vec<&[u64]>,
         start_offset: u64,
-    ) -> Vec<Vec<u64>> {
+    ) -> (Vec<Vec<u64>>, BuildMetadata) {
         struct ChunkOffsetSortable {
             original_offset: u64,
             track_index: usize,
@@ -198,13 +204,15 @@ impl<'a> ChunkOffsetBuilder<'a> {
         all_chunks.sort_unstable_by_key(|chunk| chunk.original_offset);
 
         // Calculate new offsets maintaining the original interleaving order
+        let mut total_size = 0;
         let mut current_offset = start_offset;
         for chunk in all_chunks {
             tracks[chunk.track_index].push(current_offset);
             current_offset += chunk.chunk_size;
+            total_size += chunk.chunk_size;
         }
 
-        tracks
+        (tracks, BuildMetadata { total_size })
     }
 }
 
@@ -245,7 +253,7 @@ mod tests {
 
         let mut builder = ChunkOffsetBuilder::with_capacity(1);
         builder.add_track(&stsc, &stsz);
-        let offsets = builder.build_chunk_offsets(0);
+        let (offsets, meta) = builder.build_chunk_offsets(0);
         let offsets = &offsets[0];
 
         // Expected:
@@ -257,6 +265,10 @@ mod tests {
         assert_eq!(offsets[0], 0); // Chunk 1 starts at 0
         assert_eq!(offsets[1], 300); // Chunk 2 starts at 300
         assert_eq!(offsets[2], 700); // Chunk 3 starts at 700
+        assert_eq!(
+            meta.total_size,
+            stsz.entry_sizes.iter().map(|s| *s as u64).sum::<u64>()
+        );
     }
 
     #[test]
@@ -423,13 +435,24 @@ mod tests {
         assert_eq!(chunk_info[4].sample_indices, vec![2]);
 
         // Test chunk offsets are calculated correctly with interleaving
-        let offsets = builder.build_chunk_offsets(0);
+        let (offsets, meta) = builder.build_chunk_offsets(0);
 
         // Track 1 offsets: [0, 600] (T1C1 at 0, T1C2 at 0+300+300=600)
         assert_eq!(offsets[0], vec![0, 600]);
 
         // Track 2 offsets: [300, 1000, 1400] (T2C1 at 300, T2C2 at 300+300+400=1000, T2C3 at 1000+400=1400)
         assert_eq!(offsets[1], vec![300, 1000, 1400]);
+
+        assert_eq!(
+            meta.total_size,
+            stsz_1
+                .entry_sizes
+                .iter()
+                .cloned()
+                .chain(stsz_2.entry_sizes.iter().cloned())
+                .map(|s| s as u64)
+                .sum::<u64>()
+        );
     }
 
     #[test]
@@ -491,7 +514,7 @@ mod tests {
             original_offsets_track_2.as_slice(),
         ];
 
-        let new_offsets = builder.build_chunk_offsets_ordered(original_offsets, 0);
+        let (new_offsets, meta) = builder.build_chunk_offsets_ordered(original_offsets, 0);
 
         // With the original ordering (T2C1, T1C1, T2C2, T1C2) and chunk sizes:
         // T2C1: 300 bytes -> offset 0
@@ -504,6 +527,17 @@ mod tests {
 
         // Track 2 chunks should be at offsets [0, 600]
         assert_eq!(new_offsets[1], vec![0, 600]);
+
+        assert_eq!(
+            meta.total_size,
+            stsz_1
+                .entry_sizes
+                .iter()
+                .cloned()
+                .chain(stsz_2.entry_sizes.iter().cloned())
+                .map(|s| s as u64)
+                .sum::<u64>()
+        );
     }
 
     #[test]
@@ -535,12 +569,21 @@ mod tests {
         let original_offsets_track_1 = vec![5000u64, 10000u64];
         let original_offsets = vec![original_offsets_track_1.as_slice()];
 
-        let new_offsets = builder.build_chunk_offsets_ordered(original_offsets, 0);
+        let (new_offsets, meta) = builder.build_chunk_offsets_ordered(original_offsets, 0);
 
         // Chunk 1: samples 0,1,2 -> sizes 100+200+300 = 600
         // Chunk 2: samples 3,4,5 -> sizes 150+250+350 = 750
         // Sequential placement: Chunk 1 at 0, Chunk 2 at 600
         assert_eq!(new_offsets[0], vec![0, 600]);
+
+        assert_eq!(
+            meta.total_size,
+            stsz.entry_sizes
+                .iter()
+                .cloned()
+                .map(|s| s as u64)
+                .sum::<u64>()
+        );
     }
 
     #[test]
@@ -572,10 +615,20 @@ mod tests {
         let original_offsets = vec![original_offsets_track_1.as_slice()];
         let start_offset = 50000u64;
 
-        let new_offsets = builder.build_chunk_offsets_ordered(original_offsets, start_offset);
+        let (new_offsets, meta) =
+            builder.build_chunk_offsets_ordered(original_offsets, start_offset);
 
         // Starting at 50000, chunks of sizes 100, 200, 300
         assert_eq!(new_offsets[0], vec![50000, 50100, 50300]);
+
+        assert_eq!(
+            meta.total_size,
+            stsz.entry_sizes
+                .iter()
+                .cloned()
+                .map(|s| s as u64)
+                .sum::<u64>()
+        );
     }
 
     #[test]
@@ -644,7 +697,7 @@ mod tests {
             original_offsets_track_2.as_slice(),
         ];
 
-        let new_offsets = builder.build_chunk_offsets_ordered(original_offsets, 0);
+        let (new_offsets, meta) = builder.build_chunk_offsets_ordered(original_offsets, 0);
 
         // Chunk sizes:
         // T1C1: 100 bytes (sample 0)
@@ -658,6 +711,17 @@ mod tests {
 
         assert_eq!(new_offsets[0], vec![0, 300, 1050]);
         assert_eq!(new_offsets[1], vec![100, 650]);
+
+        assert_eq!(
+            meta.total_size,
+            stsz_1
+                .entry_sizes
+                .iter()
+                .cloned()
+                .chain(stsz_2.entry_sizes.iter().cloned())
+                .map(|s| s as u64)
+                .sum::<u64>()
+        );
     }
 
     #[test]
@@ -718,13 +782,24 @@ mod tests {
             original_offsets_track_2.as_slice(),
         ];
 
-        let new_offsets = builder.build_chunk_offsets_ordered(original_offsets, 0);
+        let (new_offsets, meta) = builder.build_chunk_offsets_ordered(original_offsets, 0);
 
         // Order: T1C1 (1000), T2C1 (2000), T2C2 (3000), T2C3 (4000), T2C4 (5000), T1C2 (10000)
         // Sizes: 4000, 50, 50, 50, 50, 4000
         // Offsets: 0, 4000, 4050, 4100, 4150, 4200
         assert_eq!(new_offsets[0], vec![0, 4200]);
         assert_eq!(new_offsets[1], vec![4000, 4050, 4100, 4150]);
+
+        assert_eq!(
+            meta.total_size,
+            stsz_1
+                .entry_sizes
+                .iter()
+                .cloned()
+                .chain(stsz_2.entry_sizes.iter().cloned())
+                .map(|s| s as u64)
+                .sum::<u64>()
+        );
     }
 
     #[test]
@@ -782,11 +857,22 @@ mod tests {
             original_offsets_track_2.as_slice(), // Empty track has no chunks
         ];
 
-        let new_offsets = builder.build_chunk_offsets_ordered(original_offsets, 0);
+        let (new_offsets, meta) = builder.build_chunk_offsets_ordered(original_offsets, 0);
 
         // Only track 1 has chunks: chunk 1 (300 bytes), chunk 2 (700 bytes)
         assert_eq!(new_offsets[0], vec![0, 300]);
         assert_eq!(new_offsets[1], vec![]); // Empty track remains empty
+
+        assert_eq!(
+            meta.total_size,
+            stsz_1
+                .entry_sizes
+                .iter()
+                .cloned()
+                .chain(stsz_2.entry_sizes.iter().cloned())
+                .map(|s| s as u64)
+                .sum::<u64>()
+        );
     }
 
     #[test]
@@ -849,7 +935,7 @@ mod tests {
             original_offsets_track_2.as_slice(),
         ];
 
-        let new_offsets = builder.build_chunk_offsets_ordered(original_offsets, 0);
+        let (new_offsets, meta) = builder.build_chunk_offsets_ordered(original_offsets, 0);
 
         // Calculate expected chunk sizes:
         // T1: [100, 150, 200, 250, 300] (individual samples)
@@ -861,5 +947,16 @@ mod tests {
 
         assert_eq!(new_offsets[0], vec![0, 300, 650, 1050, 1500]); // Track 1 chunks
         assert_eq!(new_offsets[1], vec![100, 450, 850, 1300]); // Track 2 chunks
+
+        assert_eq!(
+            meta.total_size,
+            stsz_1
+                .entry_sizes
+                .iter()
+                .cloned()
+                .chain(stsz_2.entry_sizes.iter().cloned())
+                .map(|s| s as u64)
+                .sum::<u64>()
+        );
     }
 }

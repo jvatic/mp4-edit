@@ -14,6 +14,7 @@ use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use thiserror::Error;
 
+use crate::chunk_offset_builder;
 use crate::{
     atom::{
         atom_ref::{AtomRef, AtomRefMut},
@@ -666,7 +667,9 @@ impl Metadata {
     /// Updates chunk offsets for each track
     ///
     /// Call this before writing metadata to disk to avoid corruption
-    pub fn update_chunk_offsets(&mut self) -> Result<(), UpdateChunkOffsetError> {
+    pub fn update_chunk_offsets(
+        &mut self,
+    ) -> Result<chunk_offset_builder::BuildMetadata, UpdateChunkOffsetError> {
         // mdat is located directly after metadata atoms, so metadata size + 8 bytes for the mdat header
         let mdat_content_offset = self.metadata_size() + 8;
 
@@ -689,7 +692,7 @@ impl Metadata {
             },
         )?;
 
-        let mut chunk_offsets = chunk_offsets
+        let (mut chunk_offsets, build_meta) = chunk_offsets
             .build_chunk_offsets_ordered(original_chunk_offsets, mdat_content_offset as u64);
 
         for (track_idx, trak) in self.moov_mut().tracks().enumerate() {
@@ -703,7 +706,7 @@ impl Metadata {
             stco.chunk_offsets = ChunkOffsets::from(chunk_offsets);
         }
 
-        Ok(())
+        Ok(build_meta)
     }
 }
 
