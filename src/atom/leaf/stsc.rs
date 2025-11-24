@@ -182,6 +182,11 @@ impl SampleToChunkAtom {
                 entry_samples_to_remove - (chunks_to_remove * entry.samples_per_chunk as usize);
 
             if entry_samples_to_remove == 0 {
+                if entry_chunk_count == chunks_to_remove {
+                    // we've removed all the chunks from this entry that aren't covered by the one we inserted above
+                    // it's easier with the current control-flow to remove this one vs not inserting one above
+                    remove_entry_range.insert(insert_entry_index..insert_entry_index + 1);
+                }
                 continue;
             }
 
@@ -480,10 +485,25 @@ mod tests {
                 );
             });
 
+        let expected_entry_diff = if stsc.entries.len() > test_case.expected_entries.len() {
+            format_args!(
+                "expected {} sample to chunk entries, got {}: {:#?}",
+                test_case.expected_entries.len(),
+                stsc.entries.len(),
+                stsc.entries,
+            )
+        } else {
+            format_args!(
+                "expected {} sample to chunk entries, got {}",
+                test_case.expected_entries.len(),
+                stsc.entries.len(),
+            )
+        };
+
         assert_eq!(
             stsc.entries.0.len(),
             test_case.expected_entries.len(),
-            "sample to chunk entries don't match what's expected",
+            "{expected_entry_diff}",
         );
     }
 
@@ -641,6 +661,20 @@ mod tests {
                     entry.first_chunk -= 8;
                     entry
                 }).unwrap(),
+            ]).build(),
+        remove_last_chunk_single_entry {
+            SampleToChunkAtom::builder().
+                entry(SampleToChunkEntry::builder().
+                    first_chunk(1).
+                    samples_per_chunk(2).
+                    sample_description_index(1).
+                    build(),
+                ).build()
+        } => |stsc| RemoveSampleIndicesTestCase::builder().
+            sample_indices_to_remove(vec![38..40]).
+            expected_removed_chunk_indices(vec![19..20]).
+            expected_entries(vec![
+                stsc.entries.first().cloned().unwrap(),
             ]).build(),
     );
 }
