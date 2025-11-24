@@ -102,7 +102,7 @@ impl SampleToChunkAtom {
 
             let entry_chunk_count = match entries.peek() {
                 Some((_, next_entry)) => (next_entry.first_chunk - entry.first_chunk) as usize,
-                None => total_chunks - entry.first_chunk as usize,
+                None => total_chunks - chunk_index,
             };
 
             // ensure we're updating chunk indices after removing/inserting chunks
