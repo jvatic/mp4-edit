@@ -2,6 +2,7 @@ use bon::{bon, Builder};
 use derive_more::{Deref, DerefMut};
 
 use futures_io::AsyncRead;
+use std::ops::Rem;
 use std::{fmt, ops::Range};
 
 use crate::{
@@ -408,13 +409,16 @@ mod tests {
         test_atom_roundtrip_sync::<SampleToChunkAtom>(STSC);
     }
 
+    #[derive(Builder)]
     struct RemoveSampleIndicesTestCase {
+        #[builder(default = 20)]
+        total_chunks: usize,
         sample_indices_to_remove: Vec<Range<usize>>,
         expected_removed_chunk_indices: Vec<Range<usize>>,
         expected_entries: Vec<SampleToChunkEntry>,
     }
 
-    fn test_remove_sample_indices_stsc() -> SampleToChunkAtom {
+    fn test_remove_sample_indices_default_stsc() -> SampleToChunkAtom {
         SampleToChunkAtom::builder()
             .entries(vec![
                 // chunks   0..1  (1)
@@ -451,13 +455,12 @@ mod tests {
             .build()
     }
 
-    fn test_remove_sample_indices<F>(test_case: F)
+    fn test_remove_sample_indices<F>(mut stsc: SampleToChunkAtom, test_case: F)
     where
         F: FnOnce(&SampleToChunkAtom) -> RemoveSampleIndicesTestCase,
     {
-        let total_chunks = 20;
-        let mut stsc = test_remove_sample_indices_stsc();
         let test_case = test_case(&stsc);
+        let total_chunks = test_case.total_chunks;
         let actual_removed_chunk_indices =
             stsc.remove_sample_indices(&test_case.sample_indices_to_remove, total_chunks);
 
@@ -465,8 +468,6 @@ mod tests {
             actual_removed_chunk_indices, test_case.expected_removed_chunk_indices,
             "removed chunk indices don't match what's expected",
         );
-
-        eprintln!("{:#?}", stsc.entries.0);
 
         stsc.entries
             .iter()
@@ -487,42 +488,45 @@ mod tests {
     }
 
     macro_rules! test_remove_sample_indices {
-        ($($name:ident => $test_case:expr,)*) => {
+        ($($name:ident $($stsc:expr)? => $test_case:expr,)*) => {
             $(
                 #[test]
                 fn $name() {
-                    test_remove_sample_indices($test_case);
+                    test_remove_sample_indices!(@inner $($stsc)? => $test_case)
                 }
             )*
+        };
+        (@inner => $test_case:expr) => {
+            test_remove_sample_indices!(@inner test_remove_sample_indices_default_stsc() => $test_case)
+        };
+        (@inner $stsc:expr => $test_case:expr) => {
+            test_remove_sample_indices($stsc, $test_case)
         };
     }
 
     test_remove_sample_indices!(
-        remove_first_entry => |stsc| RemoveSampleIndicesTestCase {
-            sample_indices_to_remove: vec![0..10],
-            expected_removed_chunk_indices: vec![0..1],
-            expected_entries: stsc.entries[1..].iter().cloned().map(|mut entry| {
+        remove_first_entry => |stsc| RemoveSampleIndicesTestCase::builder().
+            sample_indices_to_remove(vec![0..10]).
+            expected_removed_chunk_indices(vec![0..1]).
+            expected_entries(stsc.entries[1..].iter().cloned().map(|mut entry| {
                 entry.first_chunk -= 1;
                 entry
-            }).collect::<Vec<_>>(),
-        },
+            }).collect::<Vec<_>>()).build(),
         remove_first_sample_from_first_entry => |stsc| {
             let mut expected_entries = stsc.entries.0.clone();
             expected_entries[0].samples_per_chunk -= 1;
-            RemoveSampleIndicesTestCase {
-                sample_indices_to_remove: vec![0..1],
-                expected_removed_chunk_indices: vec![],
-                expected_entries,
-            }
+            RemoveSampleIndicesTestCase::builder().
+                sample_indices_to_remove(vec![0..1]).
+                expected_removed_chunk_indices(vec![]).
+                expected_entries(expected_entries).build()
         },
         remove_last_sample_from_first_entry => |stsc| {
             let mut expected_entries = stsc.entries.0.clone();
             expected_entries[0].samples_per_chunk -= 1;
-            RemoveSampleIndicesTestCase {
-                sample_indices_to_remove: vec![9..10],
-                expected_removed_chunk_indices: vec![],
-                expected_entries,
-            }
+            RemoveSampleIndicesTestCase::builder().
+                sample_indices_to_remove(vec![9..10]).
+                expected_removed_chunk_indices(vec![]).
+                expected_entries(expected_entries).build()
         },
         remove_sample_from_second_entry => |stsc| {
             let mut expected_entries = stsc.entries.0.clone();
@@ -530,28 +534,26 @@ mod tests {
             expected_entries[1].first_chunk += 1;
             inserted_entry.samples_per_chunk -= 1;
             expected_entries.insert(1, inserted_entry);
-            RemoveSampleIndicesTestCase {
-                sample_indices_to_remove: vec![10..11],
-                expected_removed_chunk_indices: vec![],
-                expected_entries,
-            }
+            RemoveSampleIndicesTestCase::builder().
+                sample_indices_to_remove(vec![10..11]).
+                expected_removed_chunk_indices(vec![]).
+                expected_entries(expected_entries).build()
         },
         remove_chunk_from_second_entry => |stsc| {
             let mut expected_entries = stsc.entries.0.clone();
             expected_entries.iter_mut().skip(2).for_each(|entry| entry.first_chunk -= 1);
-            RemoveSampleIndicesTestCase {
-                sample_indices_to_remove: vec![10..30],
-                expected_removed_chunk_indices: vec![1..2],
-                expected_entries,
-            }
+            RemoveSampleIndicesTestCase::builder().
+                sample_indices_to_remove(vec![10..30]).
+                expected_removed_chunk_indices(vec![1..2]).
+                expected_entries(expected_entries).build()
         },
         remove_five_samples_from_last_entry_middle => |stsc| {
-            RemoveSampleIndicesTestCase {
-                sample_indices_to_remove: vec![151..156],
-                expected_removed_chunk_indices: vec![],
+            RemoveSampleIndicesTestCase::builder().
+                sample_indices_to_remove(vec![151..156]).
+                expected_removed_chunk_indices(vec![]).
                 // we're removing 5 samples from chunk index 13
                 // so the last entry (starting at chunk index 10) should be split into 3
-                expected_entries: vec![
+                expected_entries(vec![
                     stsc.entries[0].clone(),
                     stsc.entries[1].clone(),
                     stsc.entries[2].clone(),
@@ -580,17 +582,16 @@ mod tests {
                         samples_per_chunk: 10,
                         sample_description_index: 2,
                     },
-                ],
-            }
+                ]).build()
         },
         remove_fifteen_samples_from_last_entry_middle => |stsc| {
-            RemoveSampleIndicesTestCase {
-                sample_indices_to_remove: vec![151..166],
-                expected_removed_chunk_indices: vec![13..14],
+            RemoveSampleIndicesTestCase::builder().
+                sample_indices_to_remove(vec![151..166]).
+                expected_removed_chunk_indices(vec![13..14]).
                 // we're removing 15 samples starting from chunk index 13,
                 // which will remove chunk index 13, and 5 samples from chunk index 14
                 // so the last entry (starting at chunk index 10) should be split into 3
-                expected_entries: vec![
+                expected_entries(vec![
                     stsc.entries[0].clone(),
                     stsc.entries[1].clone(),
                     stsc.entries[2].clone(),
@@ -619,30 +620,27 @@ mod tests {
                         samples_per_chunk: 10,
                         sample_description_index: 2,
                     },
-                ],
-            }
+                ]).build()
         },
-        remove_second_entry_merge_first_and_third => |stsc| RemoveSampleIndicesTestCase {
-            sample_indices_to_remove: vec![10..50],
-            expected_removed_chunk_indices: vec![1..3],
-            expected_entries: vec![
+        remove_second_entry_merge_first_and_third => |stsc| RemoveSampleIndicesTestCase::builder().
+            sample_indices_to_remove(vec![10..50]).
+            expected_removed_chunk_indices(vec![1..3]).
+            expected_entries(vec![
                 stsc.entries.first().cloned().unwrap(),
                 stsc.entries.last().cloned().map(|mut entry| {
                     entry.first_chunk -= 2;
                     entry
                 }).unwrap(),
-            ],
-        },
-        remove_second_and_third_entry_no_merge => |stsc| RemoveSampleIndicesTestCase {
-            sample_indices_to_remove: vec![10..110],
-            expected_removed_chunk_indices: vec![1..9],
-            expected_entries: vec![
+            ]).build(),
+        remove_second_and_third_entry_no_merge => |stsc| RemoveSampleIndicesTestCase::builder().
+            sample_indices_to_remove(vec![10..110]).
+            expected_removed_chunk_indices(vec![1..9]).
+            expected_entries(vec![
                 stsc.entries.first().cloned().unwrap(),
                 stsc.entries.last().cloned().map(|mut entry| {
                     entry.first_chunk -= 8;
                     entry
                 }).unwrap(),
-            ],
-        },
+            ]).build(),
     );
 }
