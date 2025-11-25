@@ -209,6 +209,8 @@ impl<'a> MoovAtomRefMut<'a> {
 mod tests {
     use std::ops::Bound;
 
+    use bon::Builder;
+
     use crate::{
         atom::{
             container::{DINF, MDIA, MINF, MOOV, STBL, TRAK},
@@ -234,12 +236,11 @@ mod tests {
 
     #[bon::builder(finish_fn(name = "build"))]
     fn create_test_metadata(
-        movie_timescale: u32,
-        media_timescale: u32,
-        duration: Duration,
+        #[builder(field)] tracks: Vec<Atom>,
+        #[builder(getter)] movie_timescale: u32,
+        #[builder(getter)] duration: Duration,
     ) -> Metadata {
         let atoms = vec![
-            // Create ftyp atom
             Atom::builder()
                 .header(AtomHeader::new(*FTYP))
                 .data(
@@ -255,31 +256,63 @@ mod tests {
                         .build(),
                 )
                 .build(),
-            // Create moov atom with a single track with complex sample data
             Atom::builder()
                 .header(AtomHeader::new(*MOOV))
-                .children(vec![
-                    // Movie header (mvhd)
-                    Atom::builder()
-                        .header(AtomHeader::new(*MVHD))
-                        .data(
-                            MovieHeaderAtom::builder()
-                                .timescale(movie_timescale)
-                                .duration(scaled_duration(duration, movie_timescale as u64))
-                                .next_track_id(2)
-                                .build(),
-                        )
-                        .build(),
-                    // Track (trak) with complex sample data
-                    create_test_track(movie_timescale, media_timescale, duration),
-                ])
+                .children(Vec::from_iter(
+                    std::iter::once(
+                        // Movie header (mvhd)
+                        Atom::builder()
+                            .header(AtomHeader::new(*MVHD))
+                            .data(
+                                MovieHeaderAtom::builder()
+                                    .timescale(movie_timescale)
+                                    .duration(scaled_duration(duration, movie_timescale as u64))
+                                    .next_track_id(2)
+                                    .build(),
+                            )
+                            .build(),
+                    )
+                    .chain(tracks.into_iter()),
+                ))
                 .build(),
         ];
 
         Metadata::new(atoms.into())
     }
 
-    fn create_test_track(movie_timescale: u32, media_timescale: u32, duration: Duration) -> Atom {
+    impl<S> CreateTestMetadataBuilder<S>
+    where
+        S: create_test_metadata_builder::State,
+        S::MovieTimescale: create_test_metadata_builder::IsSet,
+        S::Duration: create_test_metadata_builder::IsSet,
+    {
+        fn track<CTBS>(mut self, track: CreateTestTrackBuilder<CTBS>) -> Self
+        where
+            CTBS: create_test_track_builder::State,
+            CTBS::MovieTimescale: create_test_track_builder::IsUnset,
+            CTBS::MediaTimescale: create_test_track_builder::IsSet,
+            CTBS::Duration: create_test_track_builder::IsUnset,
+        {
+            self.tracks.push(
+                track
+                    .movie_timescale(*self.get_movie_timescale())
+                    .duration(self.get_duration().clone())
+                    .build(),
+            );
+            self
+        }
+    }
+
+    #[bon::builder(finish_fn(name = "build"))]
+    fn create_test_track(
+        #[builder(getter)] movie_timescale: u32,
+        #[builder(getter)] media_timescale: u32,
+        #[builder(getter)] duration: Duration,
+        handler_reference: Option<HandlerReferenceAtom>,
+        minf_header: Option<Atom>,
+        stsc_entries: Option<Vec<SampleToChunkEntry>>,
+        sample_sizes: Option<Vec<u32>>,
+    ) -> Atom {
         Atom::builder()
             .header(AtomHeader::new(*TRAK))
             .children(vec![
@@ -293,13 +326,51 @@ mod tests {
                             .build(),
                     )
                     .build(),
-                // Media (mdia) with complex sample data
-                create_test_media(media_timescale, duration),
+                // Media (mdia)
+                create_test_media(media_timescale, duration)
+                    .maybe_handler_reference(handler_reference)
+                    .maybe_minf_header(minf_header)
+                    .maybe_stsc_entries(stsc_entries)
+                    .maybe_sample_sizes(sample_sizes)
+                    .build(),
             ])
             .build()
     }
 
-    fn create_test_media(media_timescale: u32, duration: Duration) -> Atom {
+    #[bon::builder(finish_fn(name = "build"))]
+    fn create_test_media(
+        #[builder(start_fn)] media_timescale: u32,
+        #[builder(start_fn)] duration: Duration,
+        handler_reference: Option<HandlerReferenceAtom>,
+        minf_header: Option<Atom>,
+        stsc_entries: Option<Vec<SampleToChunkEntry>>,
+        sample_sizes: Option<Vec<u32>>,
+    ) -> Atom {
+        let handler_reference = handler_reference.unwrap_or_else(|| {
+            HandlerReferenceAtom::builder()
+                .handler_type(HandlerType::Audio)
+                .name("SoundHandler".to_string())
+                .build()
+        });
+
+        let minf_header = minf_header.unwrap_or_else(|| {
+            match &handler_reference.handler_type {
+                HandlerType::Audio => {
+                    // Sound media information header (smhd)
+                    Atom::builder()
+                        .header(AtomHeader::new(*SMHD))
+                        .data(SoundMediaHeaderAtom::default())
+                        .build()
+                }
+                _ => {
+                    todo!(
+                        "no default minf header for {:?}",
+                        &handler_reference.handler_type
+                    )
+                }
+            }
+        });
+
         Atom::builder()
             .header(AtomHeader::new(*MDIA))
             .children(vec![
@@ -316,28 +387,47 @@ mod tests {
                 // Handler reference (hdlr)
                 Atom::builder()
                     .header(AtomHeader::new(*HDLR))
-                    .data(
-                        HandlerReferenceAtom::builder()
-                            .handler_type(HandlerType::Audio)
-                            .name("SoundHandler".to_string())
-                            .build(),
-                    )
+                    .data(handler_reference)
                     .build(),
                 // Media information (minf)
-                create_test_media_info(duration, media_timescale),
+                create_test_media_info()
+                    .media_timescale(media_timescale)
+                    .duration(duration)
+                    .header(minf_header)
+                    .maybe_stsc_entries(stsc_entries)
+                    .maybe_sample_sizes(sample_sizes)
+                    .build(),
             ])
             .build()
     }
 
-    fn create_test_media_info(duration: Duration, media_timescale: u32) -> Atom {
+    #[bon::builder(finish_fn(name = "build"))]
+    fn create_test_media_info(
+        media_timescale: u32,
+        duration: Duration,
+        header: Atom,
+        stsc_entries: Option<Vec<SampleToChunkEntry>>,
+        sample_sizes: Option<Vec<u32>>,
+    ) -> Atom {
+        let stsc_entries = stsc_entries.unwrap_or_else(|| {
+            vec![SampleToChunkEntry::builder()
+                .first_chunk(1)
+                .samples_per_chunk(2)
+                .sample_description_index(1)
+                .build()]
+        });
+
+        let sample_sizes = sample_sizes.unwrap_or_else(|| {
+            // one sample per second
+            let total_samples = duration.as_secs() as usize;
+            let sample_size = 256;
+            vec![sample_size; total_samples]
+        });
+
         Atom::builder()
             .header(AtomHeader::new(*MINF))
             .children(vec![
-                // Sound media information header (smhd)
-                Atom::builder()
-                    .header(AtomHeader::new(*SMHD))
-                    .data(SoundMediaHeaderAtom::default())
-                    .build(),
+                header,
                 // Data information (dinf)
                 Atom::builder()
                     .header(AtomHeader::new(*DINF))
@@ -353,41 +443,55 @@ mod tests {
                             .build(),
                     ])
                     .build(),
-                // Sample table (stbl) with complex data
-                create_test_sample_table(duration, media_timescale),
+                // Sample table (stbl)
+                create_test_sample_table()
+                    .media_timescale(media_timescale)
+                    .stsc_entries(stsc_entries)
+                    .sample_sizes(sample_sizes)
+                    .build(),
             ])
             .build()
     }
 
-    fn create_test_sample_table(duration: Duration, media_timescale: u32) -> Atom {
-        // Create one sample per second with 2 samples per chunk
-        let duration_secs = duration.as_secs() as u32;
-        let total_samples = duration_secs; // One sample per second
-        let samples_per_chunk = 2u32;
+    #[bon::builder(finish_fn(name = "build"))]
+    fn create_test_sample_table(
+        media_timescale: u32,
+        stsc_entries: Vec<SampleToChunkEntry>,
+        sample_sizes: Vec<u32>,
+        #[builder(default = 1000)] mdat_content_offset: u64,
+    ) -> Atom {
+        let total_samples = sample_sizes.len() as u32;
 
-        // Calculate number of chunks needed
-        let total_chunks = (total_samples + samples_per_chunk - 1) / samples_per_chunk;
+        // Calculate chunk offsets
+        let chunk_offsets = {
+            let mut chunk_offsets = Vec::new();
+            let mut current_offset = mdat_content_offset;
+            let mut sample_size_index = 0;
+            let mut remaining_samples = total_samples;
+            let mut stsc_iter = stsc_entries.iter().peekable();
+            while let Some(entry) = stsc_iter.next() {
+                let n_chunks = match stsc_iter.peek() {
+                    Some(next) => next.first_chunk - entry.first_chunk,
+                    None => remaining_samples / entry.samples_per_chunk,
+                };
 
-        // bytes per sample
-        const SAMPLE_SIZE: usize = 256;
+                let n_samples = entry.samples_per_chunk * n_chunks;
+                remaining_samples = remaining_samples.saturating_sub(n_samples);
 
-        // Create chunk offsets
-        let mut chunk_offsets = Vec::new();
-        let mut current_offset = 1000u64;
-        for _ in 0..total_chunks {
-            chunk_offsets.push(current_offset);
-            current_offset += samples_per_chunk as u64 * SAMPLE_SIZE as u64;
-        }
+                for _ in 0..n_chunks {
+                    chunk_offsets.push(current_offset);
+                    current_offset += sample_sizes
+                        .iter()
+                        .skip(sample_size_index)
+                        .take(n_samples as usize)
+                        .map(|s| *s as u64)
+                        .sum::<u64>();
+                    sample_size_index += n_samples as usize;
+                }
+            }
 
-        // Create sample sizes (256 bytes per sample)
-        let sample_sizes: Vec<u32> = vec![SAMPLE_SIZE as u32; total_samples as usize];
-
-        // Create single sample-to-chunk entry (all chunks have 2 samples)
-        let stsc_entries = vec![SampleToChunkEntry::builder()
-            .first_chunk(1)
-            .samples_per_chunk(samples_per_chunk)
-            .sample_description_index(1)
-            .build()];
+            chunk_offsets
+        };
 
         Atom::builder()
             .header(AtomHeader::new(*STBL))
@@ -434,28 +538,21 @@ mod tests {
             .build()
     }
 
-    fn test_moov_trim_duration<F>(test_case: F)
-    where
-        F: FnOnce() -> TrimDurationTestCase,
-    {
-        let test_case = test_case();
+    fn test_moov_trim_duration(mut metadata: Metadata, test_case: TrimDurationTestCase) {
+        let movie_timescale = test_case.movie_timescale;
+        let media_timescale = test_case.media_timescale;
 
-        let movie_timescale = 1_000;
-        let media_timescale = 10_000;
-
-        // Create fresh metadata for each test case
-        let mut metadata = create_test_metadata()
-            .movie_timescale(movie_timescale)
-            .media_timescale(media_timescale)
-            .duration(test_case.original_duration)
-            .build();
-
-        // Perform the trim operation with the range bounds
-        let range = (test_case.start_bound, test_case.end_bound);
+        // Perform the trim operation with the given trim ranges
         metadata
             .moov_mut()
             .trim_duration()
-            .ranges(vec![range])
+            .ranges(
+                test_case
+                    .ranges
+                    .into_iter()
+                    .map(|r| (r.start_bound, r.end_bound))
+                    .collect::<Vec<_>>(),
+            )
             .trim();
 
         // Verify movie header duration was updated
@@ -563,78 +660,190 @@ mod tests {
         );
     }
 
-    struct TrimDurationTestCase {
-        original_duration: Duration,
+    #[derive(Debug, Builder)]
+    struct TrimDurationRange {
         start_bound: Bound<Duration>,
         end_bound: Bound<Duration>,
+    }
+
+    #[derive(Debug)]
+    struct TrimDurationTestCase {
+        movie_timescale: u32,
+        media_timescale: u32,
+        original_duration: Duration,
+        ranges: Vec<TrimDurationRange>,
         expected_remaining_duration: Duration,
     }
 
+    #[bon::bon]
+    impl TrimDurationTestCase {
+        #[builder]
+        pub fn new(
+            #[builder(field)] ranges: Vec<TrimDurationRange>,
+            #[builder(default = 1_000)] movie_timescale: u32,
+            #[builder(default = 10_000)] media_timescale: u32,
+            original_duration: Duration,
+            expected_remaining_duration: Duration,
+        ) -> Self {
+            assert!(
+                ranges.len() > 0,
+                "test case must include at least one range"
+            );
+
+            Self {
+                movie_timescale,
+                media_timescale,
+                original_duration,
+                ranges,
+                expected_remaining_duration,
+            }
+        }
+    }
+
+    impl<S> TrimDurationTestCaseBuilder<S>
+    where
+        S: trim_duration_test_case_builder::State,
+    {
+        fn range(mut self, range: TrimDurationRange) -> Self {
+            self.ranges.push(range);
+            self
+        }
+    }
+
     macro_rules! test_moov_trim_duration {
-        ($($name:ident => $test_case:expr,)*) => {
+        ($(
+            $name:ident {
+                $(
+                    @tracks( $($track:expr),*, ),
+                )?
+                $($field:ident: $value:expr),+$(,)?
+            } $(,)?
+        )* $(,)?) => {
             $(
-                #[test]
-                fn $name() {
-                    test_moov_trim_duration($test_case);
-                }
+                test_moov_trim_duration!(@single $name {
+                    $(
+                        @tracks( $($track),*, ),
+                    )?
+                    $($field: $value),+
+                });
             )*
+        };
+
+        (@single $name:ident {
+            $($field:ident: $value:expr),+$(,)?
+        } $(,)?) => {
+            test_moov_trim_duration!(@single $name {
+                @tracks(
+                    |media_timescale| create_test_track().media_timescale(media_timescale),
+                ),
+                $($field: $value),+
+            });
+        };
+
+        (@single $name:ident {
+            @tracks($($track:expr),+,),
+            $($field:ident: $value:expr),+
+        } $(,)?) => {
+            test_moov_trim_duration!(@fn_def $name {
+                @tracks($($track),+),
+                $($field: $value),+
+            });
+        };
+
+        (@fn_def $name:ident {
+            @tracks($($track:expr),+),
+            $($field:ident: $value:expr),+$(,)?
+        } $(,)?) => {
+            #[test]
+            fn $name() {
+                let movie_timescale = 1_000;
+                let media_timescale = 10_000;
+
+                let test_case = TrimDurationTestCase::builder().
+                    $($field($value)).+.
+                    build();
+
+                // Create fresh metadata for each test case
+                let metadata = create_test_metadata()
+                    .movie_timescale(movie_timescale)
+                    .duration(test_case.original_duration).
+                    $(
+                        track(
+                            ($track)(media_timescale)
+                        )
+                    ).+.
+                    build();
+
+                test_moov_trim_duration(metadata, test_case);
+            }
         };
     }
 
     test_moov_trim_duration!(
-        trim_start_2_seconds => || TrimDurationTestCase {
+        trim_start_2_seconds {
             original_duration: Duration::from_secs(10),
-            start_bound: Bound::Included(Duration::ZERO),
-            end_bound: Bound::Included(Duration::from_secs(2)),
+            range: TrimDurationRange::builder()
+                    .start_bound(Bound::Included(Duration::ZERO))
+                    .end_bound(Bound::Included(Duration::from_secs(2)))
+                    .build(),
             expected_remaining_duration: Duration::from_secs(8),
-        },
-        trim_end_2_seconds => || TrimDurationTestCase {
+        }
+        trim_end_2_seconds {
             original_duration: Duration::from_secs(10),
-            start_bound: Bound::Included(Duration::from_secs(8)),
-            end_bound: Bound::Included(Duration::from_secs(10)),
+            range: TrimDurationRange::builder()
+                    .start_bound(Bound::Included(Duration::from_secs(8)))
+                    .end_bound(Bound::Included(Duration::from_secs(10)))
+                    .build(),
             expected_remaining_duration: Duration::from_secs(8),
-        },
-        trim_middle_2_seconds => || TrimDurationTestCase {
+        }
+        trim_middle_2_seconds {
             original_duration: Duration::from_secs(10),
-            start_bound: Bound::Included(Duration::from_secs(4)),
-            end_bound: Bound::Included(Duration::from_secs(6)),
+            range: TrimDurationRange::builder()
+                    .start_bound(Bound::Included(Duration::from_secs(4)))
+                    .end_bound(Bound::Included(Duration::from_secs(6)))
+                    .build(),
             expected_remaining_duration: Duration::from_secs(8),
-        },
-        trim_middle_included_start_2_seconds => || TrimDurationTestCase {
+        }
+        trim_middle_included_start_2_seconds {
             original_duration: Duration::from_secs(10),
-            start_bound: Bound::Included(Duration::from_secs(2)),
-            end_bound: Bound::Included(Duration::from_secs(4)),
+            range: TrimDurationRange::builder()
+                    .start_bound(Bound::Included(Duration::from_secs(2)))
+                    .end_bound(Bound::Included(Duration::from_secs(4)))
+                    .build(),
             expected_remaining_duration: Duration::from_secs(8),
-        },
-        trim_middle_excluded_start_2_seconds => || TrimDurationTestCase {
+        }
+        trim_middle_excluded_start_2_seconds {
             original_duration: Duration::from_millis(10_000),
-            start_bound: Bound::Excluded(Duration::from_millis(1_999)),
-            end_bound: Bound::Included(Duration::from_millis(4_000)),
+            range: TrimDurationRange::builder()
+                    .start_bound(Bound::Excluded(Duration::from_millis(1_999)))
+                    .end_bound(Bound::Included(Duration::from_millis(4_000)))
+                    .build(),
             expected_remaining_duration: Duration::from_millis(8_000),
-        },
-        trim_middle_excluded_end_2_seconds => || TrimDurationTestCase {
+        }
+        trim_middle_excluded_end_2_seconds {
             original_duration: Duration::from_secs(10),
-            start_bound: Bound::Included(Duration::from_secs(1)),
-            end_bound: Bound::Excluded(Duration::from_secs(3)),
+            range: TrimDurationRange::builder()
+                    .start_bound(Bound::Included(Duration::from_secs(1)))
+                    .end_bound(Bound::Excluded(Duration::from_secs(3)))
+                    .build(),
             expected_remaining_duration: Duration::from_secs(8),
-        },
-        trim_start_unbounded_5_seconds => || TrimDurationTestCase {
+        }
+        trim_start_unbounded_5_seconds {
             original_duration: Duration::from_secs(10),
-            start_bound: Bound::Unbounded,
-            end_bound: Bound::Included(Duration::from_secs(5)),
+            range: TrimDurationRange::builder()
+                    .start_bound(Bound::Unbounded)
+                    .end_bound(Bound::Included(Duration::from_secs(5)))
+                    .build(),
             expected_remaining_duration: Duration::from_secs(5),
-        },
-        trim_end_unbounded_6_seconds => || TrimDurationTestCase {
+        }
+        trim_end_unbounded_6_seconds {
             original_duration: Duration::from_secs(100),
-            start_bound: Bound::Included(Duration::from_secs(94)),
-            end_bound: Bound::Unbounded,
+            range: TrimDurationRange::builder()
+                    .start_bound(Bound::Included(Duration::from_secs(94)))
+                    .end_bound(Bound::Unbounded)
+                    .build(),
             expected_remaining_duration: Duration::from_secs(94),
-        },
-        trim_unbounded => || TrimDurationTestCase {
-            original_duration: Duration::from_secs(100),
-            start_bound: Bound::Unbounded,
-            end_bound: Bound::Unbounded,
-            expected_remaining_duration: Duration::ZERO,
-        },
+        }
+        // TODO: unbounded trim should return an error since that would erase all content
     );
 }
