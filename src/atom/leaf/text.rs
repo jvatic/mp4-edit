@@ -15,6 +15,14 @@ pub struct TextMediaInfoAtom {
     pub matrix: [i32; 9],
 }
 
+impl Default for TextMediaInfoAtom {
+    fn default() -> Self {
+        Self {
+            matrix: [65536, 0, 0, 0, 65536, 0, 0, 0, 1073741824],
+        }
+    }
+}
+
 impl ParseAtom for TextMediaInfoAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,
