@@ -1,5 +1,6 @@
 use std::{ops::Range, vec};
 
+#[derive(Debug)]
 pub struct RangeCollection<T>(Vec<Option<Range<T>>>);
 
 impl<T> RangeCollection<T>
