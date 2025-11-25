@@ -182,7 +182,11 @@ impl TimeToSampleAtom {
             }
         }
 
-        for mut range in remove_entry_range.into_iter() {
+        let mut n_removed = 0;
+        for range in remove_entry_range.into_iter() {
+            let mut range = (range.start - n_removed)..(range.end - n_removed);
+            n_removed += range.len();
+
             // maybe merge entries before and after the removed ones
             if range.start > 0 {
                 if let Ok([prev_entry, next_entry]) = self
