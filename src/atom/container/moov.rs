@@ -844,6 +844,18 @@ mod tests {
                     .build(),
             expected_remaining_duration: Duration::from_secs(94),
         }
+        trim_start_and_end_20_seconds {
+            original_duration: Duration::from_secs(100),
+            range: TrimDurationRange::builder()
+                    .start_bound(Bound::Unbounded)
+                    .end_bound(Bound::Excluded(Duration::from_secs(20)))
+                    .build(),
+            range: TrimDurationRange::builder()
+                    .start_bound(Bound::Included(Duration::from_secs(80)))
+                    .end_bound(Bound::Unbounded)
+                    .build(),
+            expected_remaining_duration: Duration::from_secs(60),
+        }
         // TODO: unbounded trim should return an error since that would erase all content
     );
 }
