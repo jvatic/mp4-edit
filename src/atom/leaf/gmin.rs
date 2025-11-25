@@ -23,6 +23,22 @@ pub struct BaseMediaInfoAtom {
     // reserved: 2 bytes
 }
 
+impl Default for BaseMediaInfoAtom {
+    fn default() -> Self {
+        Self {
+            version: 0,
+            flags: [0, 0, 0],
+            graphics_mode: 64,
+            op_color: ColorRgb {
+                red: 32768,
+                green: 32768,
+                blue: 32768,
+            },
+            balance: 0.0,
+        }
+    }
+}
+
 impl ParseAtom for BaseMediaInfoAtom {
     async fn parse<R: AsyncRead + Unpin + Send>(
         atom_type: FourCC,

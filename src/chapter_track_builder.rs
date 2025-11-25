@@ -341,23 +341,11 @@ impl ChapterTrack {
                     .children(vec![
                         Atom::builder()
                             .header(AtomHeader::new(*GMIN))
-                            .data(BaseMediaInfoAtom {
-                                version: 0,
-                                flags: [0, 0, 0],
-                                graphics_mode: 64,
-                                op_color: ColorRgb {
-                                    red: 32768,
-                                    green: 32768,
-                                    blue: 32768,
-                                },
-                                balance: 0.0,
-                            })
+                            .data(BaseMediaInfoAtom::default())
                             .build(),
                         Atom::builder()
                             .header(AtomHeader::new(*TEXT))
-                            .data(TextMediaInfoAtom {
-                                matrix: [65536, 0, 0, 0, 65536, 0, 0, 0, 1073741824],
-                            })
+                            .data(TextMediaInfoAtom::default())
                             .build(),
                     ])
                     .build(),
