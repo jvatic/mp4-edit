@@ -95,7 +95,7 @@ impl TimeToSampleAtom {
         let mut next_sample_index = 0usize;
         let mut total_duration_trimmed = 0u64;
 
-        for (entry_index, entry) in self.entries.iter_mut().enumerate() {
+        'entries: for (entry_index, entry) in self.entries.iter_mut().enumerate() {
             let current_duration_offset = next_duration_offset;
             next_duration_offset =
                 current_duration_offset + entry.sample_count as u64 * entry.sample_duration as u64;
@@ -110,73 +110,75 @@ impl TimeToSampleAtom {
                 entry_duration_start..entry_duration_end + 1
             };
 
-            let (i, trim_duration, entry_trim_duration) =
-                match entry_trim_duration(&entry_duration, trim_ranges) {
-                    Some(m) => m,
-                    None => {
-                        // Entire entry is outside trim range
-                        continue;
-                    }
-                };
+            'trim_range: for (i, trim_range) in trim_ranges.iter().enumerate() {
+                let (trim_duration, entry_trim_duration) =
+                    match entry_trim_duration(&entry_duration, trim_range) {
+                        Some(m) => m,
+                        None => {
+                            // Entire entry is outside trim range, continue to next trim range
+                            continue 'trim_range;
+                        }
+                    };
 
-            debug_assert!(
-                i >= trim_range_index,
-                "invariant: trim ranges must not overlap"
-            );
-            trim_range_index = i;
-
-            // Entire entry is inside trim range
-            if trim_duration.contains(&entry_duration.start)
-                && trim_duration.contains(&(entry_duration.end - 1))
-            {
-                remove_entry_range.insert(entry_index..entry_index + 1);
-                removed_sample_indices.insert(
-                    current_sample_index..current_sample_index + entry.sample_count as usize,
+                debug_assert!(
+                    i >= trim_range_index,
+                    "invariant: trim ranges must not overlap"
                 );
-                total_duration_trimmed += entry_duration.end - entry_duration.start;
-                continue;
-            }
+                trim_range_index = i;
 
-            // Partial overlap
-
-            let sample_duration = entry.sample_duration as u64;
-
-            let trim_sample_start_index = (current_sample_index as u64
-                + (entry_trim_duration.start - entry_duration.start).div_ceil(sample_duration))
-                as usize;
-            let trim_sample_end_index =
-                match (entry_trim_duration.end - entry_duration.start) / sample_duration {
-                    0 => trim_sample_start_index,
-                    end => current_sample_index + end as usize - 1,
-                };
-
-            let num_samples_to_remove = trim_sample_end_index + 1 - trim_sample_start_index;
-            if num_samples_to_remove == entry.sample_count as usize {
-                dbg!(&sample_duration);
-                dbg!(&entry_trim_duration);
-                if entry.sample_count > 1 {
-                    // remove one less samples
-                    if trim_sample_start_index == 0 {
-                        // anchor to start
-                        removed_sample_indices
-                            .insert(trim_sample_start_index..trim_sample_end_index);
-                    } else {
-                        // anchor to end
-                        removed_sample_indices
-                            .insert((trim_sample_start_index + 1)..trim_sample_end_index);
-                    }
+                // Entire entry is inside trim range
+                if trim_duration.contains(&entry_duration.start)
+                    && trim_duration.contains(&(entry_duration.end - 1))
+                {
+                    remove_entry_range.insert(entry_index..entry_index + 1);
+                    removed_sample_indices.insert(
+                        current_sample_index..current_sample_index + entry.sample_count as usize,
+                    );
+                    total_duration_trimmed += entry_duration.end - entry_duration.start;
+                    continue 'entries;
                 }
-                entry.sample_count = 1;
-                let trimmed_duration = entry_trim_duration.end - entry_trim_duration.start;
-                entry.sample_duration -= trimmed_duration as u32;
-                total_duration_trimmed += trimmed_duration;
-            } else {
-                removed_sample_indices.insert(trim_sample_start_index..(trim_sample_end_index + 1));
 
-                entry.sample_count = entry.sample_count.sub(num_samples_to_remove as u32);
+                // Partial overlap
 
-                total_duration_trimmed += ((trim_sample_end_index as u64 + 1) * sample_duration)
-                    - (trim_sample_start_index as u64 * sample_duration);
+                let sample_duration = entry.sample_duration as u64;
+
+                let trim_sample_start_index = (current_sample_index as u64
+                    + (entry_trim_duration.start - entry_duration.start).div_ceil(sample_duration))
+                    as usize;
+                let trim_sample_end_index =
+                    match (entry_trim_duration.end - entry_duration.start) / sample_duration {
+                        0 => trim_sample_start_index,
+                        end => current_sample_index + end as usize - 1,
+                    };
+
+                let num_samples_to_remove = trim_sample_end_index + 1 - trim_sample_start_index;
+                if num_samples_to_remove == entry.sample_count as usize {
+                    if entry.sample_count > 1 {
+                        // remove one less samples
+                        if trim_sample_start_index == 0 {
+                            // anchor to start
+                            removed_sample_indices
+                                .insert(trim_sample_start_index..trim_sample_end_index);
+                        } else {
+                            // anchor to end
+                            removed_sample_indices
+                                .insert((trim_sample_start_index + 1)..trim_sample_end_index);
+                        }
+                    }
+                    entry.sample_count = 1;
+                    let trimmed_duration = entry_trim_duration.end - entry_trim_duration.start;
+                    entry.sample_duration -= trimmed_duration as u32;
+                    total_duration_trimmed += trimmed_duration;
+                } else {
+                    removed_sample_indices
+                        .insert(trim_sample_start_index..(trim_sample_end_index + 1));
+
+                    entry.sample_count = entry.sample_count.sub(num_samples_to_remove as u32);
+
+                    total_duration_trimmed += ((trim_sample_end_index as u64 + 1)
+                        * sample_duration)
+                        - (trim_sample_start_index as u64 * sample_duration);
+                }
             }
         }
 
@@ -207,40 +209,37 @@ impl TimeToSampleAtom {
 
 fn entry_trim_duration<'a, R>(
     entry_range: &Range<u64>,
-    trim_range: &'a [R],
-) -> Option<(usize, &'a R, Range<u64>)>
+    trim_range: &'a R,
+) -> Option<(&'a R, Range<u64>)>
 where
     R: RangeBounds<u64>,
 {
-    for (i, trim_range) in trim_range.iter().enumerate() {
-        // entry is contained in range
-        if trim_range.contains(&entry_range.start) && trim_range.contains(&(entry_range.end - 1)) {
-            return Some((i, trim_range, entry_range.clone()));
-        }
+    // entry is contained in range
+    if trim_range.contains(&entry_range.start) && trim_range.contains(&(entry_range.end - 1)) {
+        return Some((trim_range, entry_range.clone()));
+    }
 
-        let finite_trim_range = convert_range(entry_range, trim_range);
+    let finite_trim_range = convert_range(entry_range, trim_range);
 
-        // trim range is contained in entry
-        if entry_range.contains(&finite_trim_range.start)
-            && finite_trim_range.end > 0
-            && entry_range.contains(&(finite_trim_range.end - 1))
-        {
-            return Some((i, trim_range, finite_trim_range));
-        }
+    // trim range is contained in entry
+    if entry_range.contains(&finite_trim_range.start)
+        && finite_trim_range.end > 0
+        && entry_range.contains(&(finite_trim_range.end - 1))
+    {
+        return Some((trim_range, finite_trim_range));
+    }
 
-        // trim range starts inside of entry
-        if finite_trim_range.start >= entry_range.start && finite_trim_range.start < entry_range.end
-        {
-            return Some((i, trim_range, finite_trim_range.start..entry_range.end));
-        }
+    // trim range starts inside of entry
+    if finite_trim_range.start >= entry_range.start && finite_trim_range.start < entry_range.end {
+        return Some((trim_range, finite_trim_range.start..entry_range.end));
+    }
 
-        // trim range ends inside of entry
-        if trim_range.contains(&entry_range.start)
-            && finite_trim_range.start < entry_range.start
-            && finite_trim_range.end <= entry_range.end
-        {
-            return Some((i, trim_range, entry_range.start..finite_trim_range.end));
-        }
+    // trim range ends inside of entry
+    if trim_range.contains(&entry_range.start)
+        && finite_trim_range.start < entry_range.start
+        && finite_trim_range.end <= entry_range.end
+    {
+        return Some((trim_range, entry_range.start..finite_trim_range.end));
     }
 
     None
@@ -610,6 +609,26 @@ mod tests {
                 expect_removed_duration: 100 + 300,
                 expect_removed_samples: vec![0..1, 6..9],
                 expect_entries,
+            }
+        },
+        trim_start_and_end_single_entry ({
+            TimeToSampleAtom::builder().entry(
+                TimeToSampleEntry {
+                    sample_count: 100,
+                    sample_duration: 1,
+                },
+            ).build()
+        }) => |stts| {
+            let mut expect_entry = stts.entries[0].clone();
+            expect_entry.sample_count -= 20 + 20;
+            TrimDurationTestCase {
+                trim_duration: vec![
+                    (Bound::Unbounded, Bound::Excluded(20)),
+                    (Bound::Included(80), Bound::Unbounded),
+                ],
+                expect_removed_duration: 20 + 20,
+                expect_removed_samples: vec![0..20, 80..100],
+                expect_entries: vec![expect_entry],
             }
         },
     );
