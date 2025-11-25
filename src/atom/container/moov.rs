@@ -216,6 +216,7 @@ mod tests {
             container::{DINF, MDIA, MINF, MOOV, STBL, TRAK},
             dref::{DataReferenceAtom, DataReferenceEntry, DREF},
             ftyp::{FileTypeAtom, FTYP},
+            gmin::GMIN,
             hdlr::{HandlerReferenceAtom, HandlerType, HDLR},
             mdhd::{MediaHeaderAtom, MDHD},
             mvhd::{MovieHeaderAtom, MVHD},
@@ -225,9 +226,10 @@ mod tests {
             stsd::{SampleDescriptionTableAtom, STSD},
             stsz::{SampleSizeAtom, STSZ},
             stts::{TimeToSampleAtom, TimeToSampleEntry, STTS},
+            text::TEXT,
             tkhd::{TrackHeaderAtom, TKHD},
             util::scaled_duration,
-            Atom, AtomHeader,
+            Atom, AtomHeader, BaseMediaInfoAtom, TextMediaInfoAtom, GMHD,
         },
         parser::Metadata,
         FourCC,
@@ -360,6 +362,22 @@ mod tests {
                     Atom::builder()
                         .header(AtomHeader::new(*SMHD))
                         .data(SoundMediaHeaderAtom::default())
+                        .build()
+                }
+                HandlerType::Text => {
+                    // Generic media information header (gmhd)
+                    Atom::builder()
+                        .header(AtomHeader::new(*GMHD))
+                        .children(vec![
+                            Atom::builder()
+                                .header(AtomHeader::new(*GMIN))
+                                .data(BaseMediaInfoAtom::default())
+                                .build(),
+                            Atom::builder()
+                                .header(AtomHeader::new(*TEXT))
+                                .data(TextMediaInfoAtom::default())
+                                .build(),
+                        ])
                         .build()
                 }
                 _ => {
@@ -501,7 +519,7 @@ mod tests {
                     .header(AtomHeader::new(*STSD))
                     .data(SampleDescriptionTableAtom::default())
                     .build(),
-                // Time to Sample (stts) - each sample represents 1 second
+                // Time to Sample (stts)
                 Atom::builder()
                     .header(AtomHeader::new(*STTS))
                     .data(
@@ -509,13 +527,13 @@ mod tests {
                             .entry(
                                 TimeToSampleEntry::builder()
                                     .sample_count(total_samples)
-                                    .sample_duration(media_timescale) // 1 second per sample
+                                    .sample_duration(media_timescale)
                                     .build(),
                             )
                             .build(),
                     )
                     .build(),
-                // Sample to Chunk (stsc) - 2 samples per chunk
+                // Sample to Chunk (stsc)
                 Atom::builder()
                     .header(AtomHeader::new(*STSC))
                     .data(SampleToChunkAtom::from(stsc_entries))
@@ -845,6 +863,74 @@ mod tests {
             expected_remaining_duration: Duration::from_secs(94),
         }
         trim_start_and_end_20_seconds {
+            original_duration: Duration::from_secs(100),
+            range: TrimDurationRange::builder()
+                    .start_bound(Bound::Unbounded)
+                    .end_bound(Bound::Excluded(Duration::from_secs(20)))
+                    .build(),
+            range: TrimDurationRange::builder()
+                    .start_bound(Bound::Included(Duration::from_secs(80)))
+                    .end_bound(Bound::Unbounded)
+                    .build(),
+            expected_remaining_duration: Duration::from_secs(60),
+        }
+        trim_first_and_last_chunk {
+            @tracks(
+                |media_timescale| create_test_track().stsc_entries(vec![
+                    // 1 sample per second
+                    SampleToChunkEntry::builder()
+                        .first_chunk(1)
+                        .samples_per_chunk(20)
+                        .sample_description_index(1)
+                        .build(),
+                    SampleToChunkEntry::builder()
+                        .first_chunk(2)
+                        .samples_per_chunk(60)
+                        .sample_description_index(2)
+                        .build(),
+                    SampleToChunkEntry::builder()
+                        .first_chunk(3)
+                        .samples_per_chunk(20)
+                        .sample_description_index(3)
+                        .build(),
+                ]).media_timescale(media_timescale),
+            ),
+            original_duration: Duration::from_secs(100),
+            range: TrimDurationRange::builder()
+                    .start_bound(Bound::Unbounded)
+                    .end_bound(Bound::Excluded(Duration::from_secs(20)))
+                    .build(),
+            range: TrimDurationRange::builder()
+                    .start_bound(Bound::Included(Duration::from_secs(80)))
+                    .end_bound(Bound::Unbounded)
+                    .build(),
+            expected_remaining_duration: Duration::from_secs(60),
+        }
+        trim_first_and_20s_multi_track {
+            @tracks(
+                |media_timescale| create_test_track().stsc_entries(vec![
+                    // 1 sample per second
+                    SampleToChunkEntry::builder()
+                        .first_chunk(1)
+                        .samples_per_chunk(20)
+                        .sample_description_index(1)
+                        .build(),
+                    SampleToChunkEntry::builder()
+                        .first_chunk(2)
+                        .samples_per_chunk(60)
+                        .sample_description_index(2)
+                        .build(),
+                    SampleToChunkEntry::builder()
+                        .first_chunk(3)
+                        .samples_per_chunk(20)
+                        .sample_description_index(3)
+                        .build(),
+                ]).media_timescale(media_timescale),
+                |_| create_test_track().handler_reference(
+                    HandlerReferenceAtom::builder()
+                        .handler_type(HandlerType::Text).build(),
+                ).media_timescale(666_666),
+            ),
             original_duration: Duration::from_secs(100),
             range: TrimDurationRange::builder()
                     .start_bound(Bound::Unbounded)
