@@ -82,8 +82,17 @@ impl SampleSizeAtom {
             .map(|r| r.end - r.start)
             .sum::<usize>() as u32;
 
+        fn adjust_range(n_removed: usize, range: &Range<usize>) -> Range<usize> {
+            let start = range.start - n_removed;
+            let end = range.end - n_removed;
+            start..end
+        }
+
         if !self.entry_sizes.is_empty() && !indices_to_remove.is_empty() {
+            let mut n_removed = 0;
             for range in indices_to_remove {
+                let range = adjust_range(n_removed, range);
+                n_removed += range.len();
                 self.entry_sizes.drain(range.clone());
             }
         }
