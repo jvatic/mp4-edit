@@ -163,7 +163,7 @@ impl<'a> MoovAtomRefMut<'a> {
         let trimmed_duration = self
             .tracks()
             .map(|mut trak| trak.trim_duration(movie_timescale, trim_ranges))
-            .min();
+            .max();
         if let Some(trimmed_duration) = trimmed_duration {
             self.header().update_duration(|d| d - trimmed_duration);
         }
