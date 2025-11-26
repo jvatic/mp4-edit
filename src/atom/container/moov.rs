@@ -160,12 +160,12 @@ impl<'a> MoovAtomRefMut<'a> {
         R: RangeBounds<Duration> + Clone + Debug,
     {
         let movie_timescale = u64::from(self.header().timescale);
-        let trimmed_duration = self
+        let remaining_duration = self
             .tracks()
             .map(|mut trak| trak.trim_duration(movie_timescale, trim_ranges))
             .max();
-        if let Some(trimmed_duration) = trimmed_duration {
-            self.header().update_duration(|d| d - trimmed_duration);
+        if let Some(remaining_duration) = remaining_duration {
+            self.header().update_duration(|_| remaining_duration);
         }
         self
     }
