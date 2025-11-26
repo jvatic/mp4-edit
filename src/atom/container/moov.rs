@@ -160,11 +160,26 @@ impl<'a> MoovAtomRefMut<'a> {
         R: RangeBounds<Duration> + Clone + Debug,
     {
         let movie_timescale = u64::from(self.header().timescale);
+        let mut remaining_audio_duration = None;
         let remaining_duration = self
             .tracks()
-            .map(|mut trak| trak.trim_duration(movie_timescale, trim_ranges))
+            .map(|mut trak| {
+                let handler_type = trak
+                    .as_ref()
+                    .media()
+                    .handler_reference()
+                    .map(|hdlr| hdlr.handler_type.clone());
+                let remaining_duration = trak.trim_duration(movie_timescale, trim_ranges);
+                if let Some(HandlerType::Audio) = handler_type {
+                    if matches!(remaining_audio_duration, None) {
+                        remaining_audio_duration = Some(remaining_duration);
+                    }
+                }
+                remaining_duration
+            })
             .max();
-        if let Some(remaining_duration) = remaining_duration {
+        // trust the first audio track's reported duration or fall back to the longest reported duration
+        if let Some(remaining_duration) = remaining_audio_duration.or(remaining_duration) {
             self.header().update_duration(|_| remaining_duration);
         }
         self
