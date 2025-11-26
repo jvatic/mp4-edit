@@ -146,11 +146,22 @@ impl<'a> MoovAtomRefMut<'a> {
     /// Retains given duration range, trimming everything before and after.
     ///
     /// See also [`Self::trim_duration`].
-    pub fn retain_duration(&mut self, range: Range<Duration>) -> &mut Self {
+    #[builder(finish_fn(name = "retain"), builder_type = RetainDuration)]
+    pub fn retain_duration(
+        &mut self,
+        from_offset: Option<Duration>,
+        duration: Duration,
+    ) -> &mut Self {
         use std::ops::Bound;
         let trim_ranges = vec![
-            (Bound::Unbounded, Bound::Included(range.start)),
-            (Bound::Excluded(range.end), Bound::Unbounded),
+            (
+                Bound::Unbounded,
+                Bound::Included(from_offset.unwrap_or_default()),
+            ),
+            (
+                Bound::Included(from_offset.unwrap_or_default() + duration),
+                Bound::Unbounded,
+            ),
         ];
         self.trim_duration_ranges(&trim_ranges)
     }
