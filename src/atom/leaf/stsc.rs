@@ -452,8 +452,8 @@ mod tests {
                     sample_description_index: 1,
                 },
                 // total chunks = 20
-                // chunks     9..19  (10)
-                // samples 110..210 (100)
+                // chunks     9..20  (11)
+                // samples 110..220 (100)
                 SampleToChunkEntry {
                     first_chunk: 10,
                     samples_per_chunk: 10,
@@ -516,15 +516,15 @@ mod tests {
             $(
                 #[test]
                 fn $name() {
-                    test_remove_sample_indices!(@inner $($stsc)? => $test_case)
+                    test_remove_sample_indices!(@inner $($stsc)? => $test_case);
                 }
             )*
         };
         (@inner => $test_case:expr) => {
-            test_remove_sample_indices!(@inner test_remove_sample_indices_default_stsc() => $test_case)
+            test_remove_sample_indices!(@inner test_remove_sample_indices_default_stsc() => $test_case);
         };
         (@inner $stsc:expr => $test_case:expr) => {
-            test_remove_sample_indices($stsc, $test_case)
+            test_remove_sample_indices($stsc, $test_case);
         };
     }
 
@@ -666,6 +666,20 @@ mod tests {
                     entry
                 }).unwrap(),
             ]).build(),
+        remove_first_and_last_entry => |stsc| RemoveSampleIndicesTestCase::builder().
+            sample_indices_to_remove(vec![0..10, 110..220]).
+            expected_removed_chunk_indices(vec![0..1, 9..20]).
+            expected_entries(vec![
+                stsc.entries.get(1).cloned().map(|mut entry| {
+                    entry.first_chunk = 1;
+                    entry
+                }).unwrap(),
+                stsc.entries.get(2).cloned().map(|mut entry| {
+                    entry.first_chunk = 3;
+                    entry
+                }).unwrap(),
+            ]).build(),
+
         remove_last_chunk_single_entry {
             SampleToChunkAtom::builder().
                 entry(SampleToChunkEntry::builder().
