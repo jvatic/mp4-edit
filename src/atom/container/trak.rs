@@ -227,7 +227,7 @@ impl<'a> TrakAtomRefMut<'a> {
         }
     }
 
-    /// trims given duration range, excluding partially matched samples, and returns the actual duration trimmed
+    /// trims given duration range, excluding partially matched samples, and returns the remaining duration
     pub(crate) fn trim_duration<R>(&mut self, movie_timescale: u64, trim_ranges: &[R]) -> Duration
     where
         R: RangeBounds<Duration> + Clone + Debug,
@@ -244,10 +244,10 @@ impl<'a> TrakAtomRefMut<'a> {
             .collect::<Vec<_>>();
 
         // Step 1: Determine which samples to remove based on time
-        let (trimmed_duration, sample_indices_to_remove) =
+        let (remaining_duration, sample_indices_to_remove) =
             stbl.time_to_sample().trim_duration(&scaled_ranges);
 
-        let trimmed_duration = unscaled_duration(trimmed_duration, media_timescale);
+        let remaining_duration = unscaled_duration(remaining_duration, media_timescale);
 
         // Step 2: Update sample sizes
         stbl.sample_size()
@@ -264,10 +264,10 @@ impl<'a> TrakAtomRefMut<'a> {
             .remove_chunk_indices(&chunk_indices_to_remove);
 
         // Step 5: Update headers
-        mdia.header().update_duration(|d| d - trimmed_duration);
+        mdia.header().update_duration(|_| remaining_duration);
         self.header()
-            .update_duration(movie_timescale, |d| d - trimmed_duration);
+            .update_duration(movie_timescale, |_| remaining_duration);
 
-        trimmed_duration
+        remaining_duration
     }
 }

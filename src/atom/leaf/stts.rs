@@ -77,7 +77,7 @@ impl TimeToSampleAtom {
     }
 
     /// Removes samples contained in the given `trim_duration`, excluding partially matched samples.
-    /// Returns actual duration trimmed and indices of removed samples.
+    /// Returns the remaining duration after the trim and indices of removed samples.
     ///
     /// # Panics
     ///
@@ -93,12 +93,14 @@ impl TimeToSampleAtom {
         let mut remove_entry_range = RangeCollection::new();
         let mut next_duration_offset = 0u64;
         let mut next_sample_index = 0usize;
+        let mut total_original_duration = 0u64;
         let mut total_duration_trimmed = 0u64;
 
         'entries: for (entry_index, entry) in self.entries.iter_mut().enumerate() {
             let current_duration_offset = next_duration_offset;
-            next_duration_offset =
-                current_duration_offset + entry.sample_count as u64 * entry.sample_duration as u64;
+            let entry_duration = entry.sample_count as u64 * entry.sample_duration as u64;
+            next_duration_offset = current_duration_offset + entry_duration;
+            total_original_duration += entry_duration;
 
             let current_sample_index = next_sample_index;
             next_sample_index += entry.sample_count as usize;
@@ -205,7 +207,7 @@ impl TimeToSampleAtom {
         }
 
         (
-            total_duration_trimmed,
+            total_original_duration - total_duration_trimmed,
             removed_sample_indices.into_iter().collect(),
         )
     }
@@ -425,17 +427,34 @@ mod tests {
     where
         F: FnOnce(&TimeToSampleAtom) -> TrimDurationTestCase,
     {
+        let starting_duration = stts.entries.iter().fold(0, |sum, entry| {
+            sum + (entry.sample_count as u64 * entry.sample_duration as u64)
+        });
+
         let test_case = test_case(&stts);
-        let (actual_removed_duration, actual_removed_samples) =
+
+        let (actual_remaining_duration, actual_removed_samples) =
             stts.trim_duration(&test_case.trim_duration);
+
         assert_eq!(
             actual_removed_samples, test_case.expect_removed_samples,
             "removed sample indices don't match what's expected"
         );
+
+        let calculated_remaining_duration = stts.entries.iter().fold(0, |sum, entry| {
+            sum + (entry.sample_count as u64 * entry.sample_duration as u64)
+        });
+        assert_eq!(
+            actual_remaining_duration, calculated_remaining_duration,
+            "remaining duration doesn't add up correctly"
+        );
+
+        let actual_removed_duration = starting_duration.saturating_sub(actual_remaining_duration);
         assert_eq!(
             actual_removed_duration, test_case.expect_removed_duration,
-            "removed duration doesn't match what's expected"
+            "removed duration doesn't match what's expected; started with {starting_duration} and ended up with {actual_remaining_duration}"
         );
+
         assert_eq!(
             stts.entries.0, test_case.expect_entries,
             "time to sample entries don't match what's expected"
