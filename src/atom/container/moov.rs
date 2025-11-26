@@ -131,7 +131,7 @@ impl<'a> MoovAtomRefMut<'a> {
         from_end: Option<Duration>,
     ) -> &mut Self {
         use std::ops::Bound;
-        let start_duration = from_start.map(|d| (Bound::Unbounded, Bound::Excluded(d)));
+        let start_duration = from_start.map(|d| (Bound::Unbounded, Bound::Included(d)));
         let end_duration = from_end.map(|d| {
             let d = self.header().duration().saturating_sub(d);
             (Bound::Included(d), Bound::Unbounded)
