@@ -14,8 +14,8 @@ use crate::{
         tkhd::TKHD,
         tref::TREF,
         util::{scaled_duration_range, unscaled_duration},
-        EdtsAtomRefMut, MdiaAtomRef, MdiaAtomRefMut, TrackHeaderAtom, TrackReferenceAtom, EDTS,
-        MDIA,
+        EdtsAtomRef, EdtsAtomRefMut, MdiaAtomRef, MdiaAtomRefMut, TrackHeaderAtom,
+        TrackReferenceAtom, EDTS, MDIA,
     },
     unwrap_atom_data, Atom, AtomData,
 };
@@ -49,6 +49,10 @@ impl<'a> TrakAtomRef<'a> {
             AtomData::TrackHeader(data) => Some(data),
             _ => None,
         }
+    }
+
+    pub fn edit_list_container(&self) -> EdtsAtomRef<'a> {
+        EdtsAtomRef(AtomRef(self.0.find_child(EDTS)))
     }
 
     /// Finds the MDIA atom
