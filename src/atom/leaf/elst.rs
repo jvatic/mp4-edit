@@ -1,11 +1,11 @@
-use std::time::Duration;
+use std::{ops::Range, time::Duration};
 
 use bon::bon;
 use futures_io::AsyncRead;
 
 use crate::{
     atom::{
-        util::{read_to_end, scaled_duration},
+        util::{read_to_end, scaled_duration, unscaled_duration},
         FourCC,
     },
     parser::ParseAtom,
@@ -37,47 +37,58 @@ impl EditListAtom {
         self.entries = entries.into();
         self
     }
+
+    /// converts edit list entries into a series of trim ranges
+    pub(crate) fn trim_ranges(
+        &self,
+        movie_timescale: u64,
+    ) -> impl Iterator<Item = Range<Duration>> + '_ {
+        self.entries
+            .iter()
+            .scan(movie_timescale, |movie_timescale, entry| {
+                let duration = unscaled_duration(entry.segment_duration, *movie_timescale);
+                match entry.media_time {
+                    -1 => todo!("trim range"),
+                    _ => todo!("don't trim anything"),
+                }
+                todo!()
+            })
+    }
 }
 
-pub struct SegmentDuration {
-    duration: Duration,
-    movie_timescale: u32,
+pub struct MediaTime {
+    /// None implies -1, or a gap
+    start_offset: Option<Duration>,
 }
 
-#[bon]
-impl SegmentDuration {
-    #[builder]
-    pub fn new(duration: Duration, movie_timescale: u32) -> Self {
+impl Default for MediaTime {
+    fn default() -> Self {
         Self {
-            duration,
-            movie_timescale,
+            start_offset: Some(Duration::from_secs(0)),
+        }
+    }
+}
+
+impl MediaTime {
+    /// media time starting at a specified offset
+    pub fn new(start_offset: Duration) -> Self {
+        Self {
+            start_offset: Some(start_offset),
         }
     }
 
-    pub fn scaled(&self) -> u64 {
-        scaled_duration(self.duration, self.movie_timescale as u64)
+    /// media time representing a gap in playback
+    pub fn new_empty() -> Self {
+        Self { start_offset: None }
     }
-}
 
-#[derive(Default)]
-pub struct MediaDuration {
-    duration: Duration,
-    media_timescale: u32,
-}
-
-#[bon]
-impl MediaDuration {
-    #[builder]
-    pub fn new(duration: Duration, media_timescale: u32) -> Self {
-        Self {
-            duration,
-            media_timescale,
+    pub fn scaled(&self, movie_timescale: u64) -> i64 {
+        match self.start_offset {
+            Some(start_offset) if start_offset.is_zero() => 0,
+            Some(start_offset) => i64::try_from(scaled_duration(start_offset, movie_timescale))
+                .expect("scaled duration should fit in i64"),
+            None => -1,
         }
-    }
-
-    pub fn scaled(&self) -> i64 {
-        i64::try_from(scaled_duration(self.duration, self.media_timescale as u64))
-            .expect("scaled duration should fit in i64")
     }
 }
 
@@ -96,13 +107,14 @@ pub struct EditEntry {
 impl EditEntry {
     #[builder]
     pub fn new(
-        segment_duration: SegmentDuration,
-        #[builder(default = Default::default())] media_time: MediaDuration,
+        movie_timescale: u64,
+        segment_duration: Duration,
+        #[builder(default = Default::default())] media_time: MediaTime,
         #[builder(default = 1.0)] media_rate: f32,
     ) -> Self {
         Self {
-            segment_duration: segment_duration.scaled(),
-            media_time: media_time.scaled(),
+            segment_duration: scaled_duration(segment_duration, movie_timescale),
+            media_time: media_time.scaled(movie_timescale),
             media_rate,
         }
     }
@@ -165,19 +177,19 @@ mod serializer {
 
     fn entries(version: u8, entries: Vec<EditEntry>) -> Vec<u8> {
         match version {
-            1 => entries.into_iter().flat_map(entry_u64).collect(),
-            _ => entries.into_iter().flat_map(entry_u32).collect(),
+            1 => entries.into_iter().flat_map(entry_64).collect(),
+            _ => entries.into_iter().flat_map(entry_32).collect(),
         }
     }
 
-    fn entry_u32(entry: EditEntry) -> Vec<u8> {
+    fn entry_32(entry: EditEntry) -> Vec<u8> {
         vec![
             u32::try_from(entry.segment_duration)
                 .expect("segument_duration should fit in u32")
                 .to_be_bytes()
                 .to_vec(),
             i32::try_from(entry.media_time)
-                .expect("media_time should fit in u32")
+                .expect("media_time should fit in i32")
                 .to_be_bytes()
                 .to_vec(),
             media_rate(entry.media_rate),
@@ -187,7 +199,7 @@ mod serializer {
         .collect()
     }
 
-    fn entry_u64(entry: EditEntry) -> Vec<u8> {
+    fn entry_64(entry: EditEntry) -> Vec<u8> {
         vec![
             entry.segment_duration.to_be_bytes().to_vec(),
             entry.media_time.to_be_bytes().to_vec(),
