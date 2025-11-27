@@ -15,6 +15,7 @@ derive_more = { version = "2.0.1", features = ["full"] }
 either = "1.15.0"
 futures-io = "0.3"
 futures-util = { version = "0.3", features = ["io"] }
+rangemap = "1.7.0"
 thiserror = "2.0.12"
 winnow = "0.7.13"
 

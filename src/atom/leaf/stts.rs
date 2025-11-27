@@ -2,6 +2,7 @@ use bon::{bon, Builder};
 use derive_more::{Deref, DerefMut};
 
 use futures_io::AsyncRead;
+use rangemap::RangeSet;
 use std::{
     fmt::{self, Debug},
     ops::{Bound, Range, RangeBounds, Sub},
@@ -9,7 +10,7 @@ use std::{
 
 use crate::{
     atom::{
-        util::{read_to_end, DebugList, RangeCollection},
+        util::{read_to_end, DebugList},
         FourCC,
     },
     parser::ParseAtom,
@@ -89,8 +90,8 @@ impl TimeToSampleAtom {
         R: RangeBounds<u64> + Debug,
     {
         let mut trim_range_index = 0;
-        let mut removed_sample_indices = RangeCollection::with_capacity(trim_ranges.len());
-        let mut remove_entry_range = RangeCollection::new();
+        let mut removed_sample_indices = RangeSet::new();
+        let mut remove_entry_range = RangeSet::new();
         let mut next_duration_offset = 0u64;
         let mut next_sample_index = 0usize;
         let mut total_original_duration = 0u64;
