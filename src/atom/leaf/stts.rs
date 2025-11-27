@@ -227,6 +227,11 @@ where
 
     let finite_trim_range = convert_range(entry_range, trim_range);
 
+    // trim range ends too soon to be useful
+    if finite_trim_range.end <= entry_range.start {
+        return None;
+    }
+
     // trim range is contained in entry
     if entry_range.contains(&finite_trim_range.start)
         && finite_trim_range.end > 0
@@ -477,6 +482,22 @@ mod tests {
     }
 
     test_trim_duration!(
+        trim_unbounded_to_0_excluded_from_start => |stts| TrimDurationTestCase {
+            trim_duration: vec![(Bound::Unbounded, Bound::Excluded(0))],
+            expect_removed_samples: vec![],
+            expect_removed_duration: 0,
+            expect_entries: stts.entries.iter().cloned().collect::<Vec<_>>(),
+        },
+        trim_unbounded_to_0_included_from_start => |stts| {
+            let mut expected_entries = stts.entries.0.clone();
+            expected_entries[0].sample_duration -= 1;
+            TrimDurationTestCase {
+                trim_duration: vec![(Bound::Unbounded, Bound::Included(0))],
+                expect_removed_samples: vec![],
+                expect_removed_duration: 1,
+                expect_entries: expected_entries,
+            }
+        },
         trim_first_entry_unbounded_start => |stts| TrimDurationTestCase {
             trim_duration: vec![(Bound::Unbounded, Bound::Excluded(100))],
             expect_removed_samples: vec![0..1],
