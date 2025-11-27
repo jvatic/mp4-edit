@@ -4,7 +4,7 @@ use bon::bon;
 
 use crate::atom::{
     container::{DINF, EDTS, MDIA, MINF, STBL, TRAK},
-    dref::{DataReferenceEntry, DataReferenceEntryInner},
+    dref::DataReferenceEntry,
     elst::{EditEntry, ELST},
     gmin::GMIN,
     hdlr::{HandlerReferenceAtom, HandlerType},
@@ -18,9 +18,8 @@ use crate::atom::{
     stts::{TimeToSampleAtom, TimeToSampleEntry},
     text::TEXT,
     tkhd::TrackHeaderAtom,
-    util::{mp4_timestamp_now, scaled_duration, ColorRgb},
-    Atom, AtomData, AtomHeader, BaseMediaInfoAtom, DataReferenceAtom, EditListAtom,
-    TextMediaInfoAtom, GMHD,
+    util::{mp4_timestamp_now, scaled_duration},
+    Atom, AtomHeader, BaseMediaInfoAtom, DataReferenceAtom, EditListAtom, TextMediaInfoAtom, GMHD,
 };
 use crate::writer::SerializeAtom;
 
@@ -217,11 +216,10 @@ impl ChapterTrack {
         let edit_list = self.create_edit_list_atom();
         let media_atom = self.create_media_atom(chunk_offset);
 
-        Atom {
-            header: AtomHeader::new(*TRAK),
-            data: None,
-            children: vec![track_header, edit_list, media_atom],
-        }
+        Atom::builder()
+            .header(AtomHeader::new(*TRAK))
+            .children(vec![track_header, edit_list, media_atom])
+            .build()
     }
 
     fn create_track_header(&self) -> Atom {
@@ -240,31 +238,24 @@ impl ChapterTrack {
             height: 0.0,
         };
 
-        Atom {
-            header: AtomHeader::new(tkhd.atom_type()),
-            data: Some(AtomData::TrackHeader(tkhd)),
-            children: vec![],
-        }
+        Atom::builder()
+            .header(AtomHeader::new(tkhd.atom_type()))
+            .data(tkhd)
+            .build()
     }
 
     fn create_edit_list_atom(&self) -> Atom {
-        Atom {
-            header: AtomHeader::new(*EDTS),
-            data: None,
-            children: vec![Atom {
-                header: AtomHeader::new(*ELST),
-                data: Some(AtomData::EditList(EditListAtom {
-                    version: 0,
-                    flags: [0u8; 3],
-                    entries: vec![EditEntry {
-                        segment_duration: self.movie_duration,
-                        media_time: 0,
-                        media_rate: 1.0,
-                    }],
-                })),
-                children: Vec::new(),
-            }],
-        }
+        Atom::builder()
+            .header(AtomHeader::new(*EDTS))
+            .children(vec![Atom::builder()
+                .header(AtomHeader::new(*ELST))
+                .data(EditListAtom::new(vec![EditEntry {
+                    segment_duration: self.movie_duration,
+                    media_time: 0,
+                    media_rate: 1.0,
+                }]))
+                .build()])
+            .build()
     }
 
     fn create_media_atom(&self, chunk_offset: u64) -> Atom {
@@ -272,11 +263,10 @@ impl ChapterTrack {
         let hdlr = self.create_handler_reference();
         let minf = self.create_media_information(chunk_offset);
 
-        Atom {
-            header: AtomHeader::new(*MDIA),
-            data: None,
-            children: vec![mdhd, hdlr, minf],
-        }
+        Atom::builder()
+            .header(AtomHeader::new(*MDIA))
+            .children(vec![mdhd, hdlr, minf])
+            .build()
     }
 
     fn create_media_header(&self) -> Atom {
@@ -288,11 +278,10 @@ impl ChapterTrack {
             .language(self.language)
             .build();
 
-        Atom {
-            header: AtomHeader::new(mdhd.atom_type()),
-            data: Some(AtomData::MediaHeader(mdhd)),
-            children: vec![],
-        }
+        Atom::builder()
+            .header(AtomHeader::new(mdhd.atom_type()))
+            .data(mdhd)
+            .build()
     }
 
     fn create_handler_reference(&self) -> Atom {
@@ -301,41 +290,38 @@ impl ChapterTrack {
             .name(&self.handler_name)
             .build();
 
-        Atom {
-            header: AtomHeader::new(hdlr.atom_type()),
-            data: Some(AtomData::HandlerReference(hdlr)),
-            children: vec![],
-        }
+        Atom::builder()
+            .header(AtomHeader::new(hdlr.atom_type()))
+            .data(hdlr)
+            .build()
     }
 
     fn create_media_information(&self, chunk_offset: u64) -> Atom {
         let stbl = self.create_sample_table(chunk_offset);
 
         // Create DINF (Data Information) with proper data reference
-        let dref = DataReferenceAtom {
-            version: 0,
-            flags: [0u8; 3],
-            entries: vec![DataReferenceEntry {
-                inner: DataReferenceEntryInner::Url(String::new()),
-                version: 0,
-                flags: [0, 0, 1], // Self-contained flag
-            }],
-        };
+        let dref = DataReferenceAtom::builder()
+            .entry(
+                DataReferenceEntry::builder()
+                    .url(String::new())
+                    .flags(
+                        [0, 0, 1], // Self-contained flag
+                    )
+                    .build(),
+            )
+            .build();
 
-        let dinf = Atom {
-            header: AtomHeader::new(*DINF),
-            data: None,
-            children: vec![Atom {
-                header: AtomHeader::new(dref.atom_type()),
-                data: Some(AtomData::DataReference(dref)),
-                children: vec![],
-            }],
-        };
+        let dinf = Atom::builder()
+            .header(AtomHeader::new(*DINF))
+            .children(vec![Atom::builder()
+                .header(AtomHeader::new(dref.atom_type()))
+                .data(dref)
+                .build()])
+            .build();
 
-        Atom {
-            header: AtomHeader::new(*MINF),
-            data: None,
-            children: vec![
+        Atom::builder()
+            .header(AtomHeader::new(*MINF))
+            .children(vec![
                 Atom::builder()
                     .header(AtomHeader::new(*GMHD))
                     .children(vec![
@@ -351,8 +337,8 @@ impl ChapterTrack {
                     .build(),
                 dinf,
                 stbl,
-            ],
-        }
+            ])
+            .build()
     }
 
     fn create_sample_table(&self, chunk_offset: u64) -> Atom {
@@ -362,11 +348,10 @@ impl ChapterTrack {
         let stsz = self.create_sample_size();
         let stco = self.create_chunk_offset(chunk_offset);
 
-        Atom {
-            header: AtomHeader::new(*STBL),
-            data: None,
-            children: vec![stsd, stts, stsc, stsz, stco],
-        }
+        Atom::builder()
+            .header(AtomHeader::new(*STBL))
+            .children(vec![stsd, stts, stsc, stsz, stco])
+            .build()
     }
 
     fn create_sample_description(&self) -> Atom {
@@ -379,11 +364,10 @@ impl ChapterTrack {
 
         let stsd = SampleDescriptionTableAtom::from(vec![text_sample_entry]);
 
-        Atom {
-            header: AtomHeader::new(stsd.atom_type()),
-            data: Some(AtomData::SampleDescriptionTable(stsd)),
-            children: vec![],
-        }
+        Atom::builder()
+            .header(AtomHeader::new(stsd.atom_type()))
+            .data(stsd)
+            .build()
     }
 
     fn create_time_to_sample(&self) -> Atom {
@@ -400,11 +384,10 @@ impl ChapterTrack {
 
         let stts = TimeToSampleAtom::from(entries);
 
-        Atom {
-            header: AtomHeader::new(stts.atom_type()),
-            data: Some(AtomData::TimeToSample(stts)),
-            children: vec![],
-        }
+        Atom::builder()
+            .header(AtomHeader::new(stts.atom_type()))
+            .data(stts)
+            .build()
     }
 
     fn create_sample_to_chunk(&self) -> Atom {
@@ -415,33 +398,28 @@ impl ChapterTrack {
             sample_description_index: 1,
         }]);
 
-        Atom {
-            header: AtomHeader::new(stsc.atom_type()),
-            data: Some(AtomData::SampleToChunk(stsc)),
-            children: vec![],
-        }
+        Atom::builder()
+            .header(AtomHeader::new(stsc.atom_type()))
+            .data(stsc)
+            .build()
     }
 
     fn create_sample_size(&self) -> Atom {
-        // Use variable sample sizes - this is the key improvement
         let stsz = if let Some(uniform_size) = self.uniform_sample_size() {
-            // Optimization: if all samples have the same size, use uniform mode
             SampleSizeAtom::builder()
                 .sample_size(uniform_size)
                 .sample_count(self.sample_count())
                 .build()
         } else {
-            // Use individual sample sizes for variable-length content
             SampleSizeAtom::builder()
                 .entry_sizes(self.sample_sizes.clone())
                 .build()
         };
 
-        Atom {
-            header: AtomHeader::new(stsz.atom_type()),
-            data: Some(AtomData::SampleSize(stsz)),
-            children: vec![],
-        }
+        Atom::builder()
+            .header(AtomHeader::new(stsz.atom_type()))
+            .data(stsz)
+            .build()
     }
 
     fn create_chunk_offset(&self, chunk_offset: u64) -> Atom {
@@ -450,11 +428,10 @@ impl ChapterTrack {
             .chunk_offset(chunk_offset)
             .build();
 
-        Atom {
-            header: AtomHeader::new(stco.atom_type()),
-            data: Some(AtomData::ChunkOffset(stco)),
-            children: vec![],
-        }
+        Atom::builder()
+            .header(AtomHeader::new(stco.atom_type()))
+            .data(stco)
+            .build()
     }
 }
 
