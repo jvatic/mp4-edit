@@ -2,12 +2,12 @@ use bon::{bon, Builder};
 use derive_more::{Deref, DerefMut};
 
 use futures_io::AsyncRead;
-use std::ops::Rem;
+use rangemap::RangeSet;
 use std::{fmt, ops::Range};
 
 use crate::{
     atom::{
-        util::{read_to_end, DebugList, RangeCollection},
+        util::{read_to_end, DebugList},
         FourCC,
     },
     parser::ParseAtom,
@@ -87,10 +87,10 @@ impl SampleToChunkAtom {
     ) -> Vec<Range<usize>> {
         let mut next_sample_index = 0usize;
 
-        let mut removed_chunk_indices = RangeCollection::new();
+        let mut removed_chunk_indices = RangeSet::new();
         let mut num_removed_chunks = 0usize;
 
-        let mut remove_entry_range = RangeCollection::new();
+        let mut remove_entry_range = RangeSet::new();
 
         let mut insert_entries: Vec<(usize, SampleToChunkEntry)> = Vec::new();
         let mut num_inserted_entries = 0usize;
