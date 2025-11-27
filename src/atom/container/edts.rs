@@ -1,9 +1,38 @@
+use std::fmt;
+
 use crate::{
-    atom::{atom_ref::AtomRefMut, elst::ELST, EditListAtom},
-    unwrap_atom_data, AtomData,
+    atom::{
+        atom_ref::{AtomRef, AtomRefMut},
+        elst::ELST,
+        EditListAtom,
+    },
+    unwrap_atom_data, Atom, AtomData,
 };
 
 pub const EDTS: &[u8; 4] = b"edts";
+
+#[derive(Clone, Copy)]
+pub struct EdtsAtomRef<'a>(pub(crate) AtomRef<'a>);
+
+impl fmt::Debug for EdtsAtomRef<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EdtsAtomRef").finish()
+    }
+}
+
+impl<'a> EdtsAtomRef<'a> {
+    pub fn children(&self) -> impl Iterator<Item = &'a Atom> {
+        self.0.children()
+    }
+
+    pub fn edit_list(&self) -> Option<&'a EditListAtom> {
+        let atom = self.0.find_child(ELST)?;
+        match atom.data.as_ref()? {
+            AtomData::EditList(data) => Some(data),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct EdtsAtomRefMut<'a>(pub(crate) AtomRefMut<'a>);
