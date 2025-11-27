@@ -82,7 +82,7 @@ impl SampleToChunkAtom {
     /// multiple ranges must not overlap.
     pub(crate) fn remove_sample_indices(
         &mut self,
-        sample_indices_to_remove: &[Range<usize>],
+        sample_indices_to_remove: &RangeSet<usize>,
         total_chunks: usize,
     ) -> Vec<Range<usize>> {
         let mut next_sample_index = 0usize;
@@ -257,26 +257,26 @@ impl SampleToChunkAtom {
 fn entry_samples_to_remove(
     entry_start_sample_index: usize,
     entry_end_sample_index: usize,
-    sample_indices_to_remove: &[Range<usize>],
-) -> Vec<Range<usize>> {
-    let mut entry_samples_to_remove = Vec::new();
+    sample_indices_to_remove: &RangeSet<usize>,
+) -> RangeSet<usize> {
+    let mut entry_samples_to_remove = RangeSet::new();
 
     for range in sample_indices_to_remove.iter() {
         // entry is contained in range
         if range.contains(&entry_start_sample_index) && range.contains(&entry_end_sample_index) {
-            entry_samples_to_remove.push(entry_start_sample_index..entry_end_sample_index + 1);
+            entry_samples_to_remove.insert(entry_start_sample_index..entry_end_sample_index + 1);
             continue;
         }
 
         // range is contained in entry
         if range.start >= entry_start_sample_index && range.end <= entry_end_sample_index {
-            entry_samples_to_remove.push(range.clone());
+            entry_samples_to_remove.insert(range.clone());
             continue;
         }
 
         // range starts inside of entry
         if range.start >= entry_start_sample_index {
-            entry_samples_to_remove.push(range.start..entry_end_sample_index + 1);
+            entry_samples_to_remove.insert(range.start..entry_end_sample_index + 1);
             continue;
         }
 
@@ -285,7 +285,7 @@ fn entry_samples_to_remove(
             && range.start < entry_start_sample_index
             && range.end <= entry_end_sample_index
         {
-            entry_samples_to_remove.push(entry_start_sample_index..range.end);
+            entry_samples_to_remove.insert(entry_start_sample_index..range.end);
             continue;
         }
     }
@@ -445,14 +445,17 @@ mod tests {
     }
 
     fn test_entry_samples_to_remove(tc: EntrySamplesToRemoveTestCase) {
+        let sample_indices_to_remove = RangeSet::from_iter(tc.sample_indices_to_remove.into_iter());
         let actual_entry_samples_to_remove = entry_samples_to_remove(
             tc.entry_start_sample_index,
             tc.entry_end_sample_index,
-            &tc.sample_indices_to_remove,
+            &sample_indices_to_remove,
         );
+        let expected_entry_samples_to_remove =
+            RangeSet::from_iter(tc.expected_entry_samples_to_remove.into_iter());
         assert_eq!(
             actual_entry_samples_to_remove,
-            tc.expected_entry_samples_to_remove
+            expected_entry_samples_to_remove
         );
     }
 
@@ -568,8 +571,10 @@ mod tests {
     {
         let test_case = test_case(&stsc);
         let total_chunks = test_case.total_chunks;
+        let sample_indices_to_remove =
+            RangeSet::from_iter(test_case.sample_indices_to_remove.into_iter());
         let actual_removed_chunk_indices =
-            stsc.remove_sample_indices(&test_case.sample_indices_to_remove, total_chunks);
+            stsc.remove_sample_indices(&sample_indices_to_remove, total_chunks);
 
         assert_eq!(
             actual_removed_chunk_indices, test_case.expected_removed_chunk_indices,

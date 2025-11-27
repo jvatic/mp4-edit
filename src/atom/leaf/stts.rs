@@ -85,7 +85,7 @@ impl TimeToSampleAtom {
     /// This method panics if the trim ranges overlap.
     ///
     /// WARNING: failing to update other atoms appropriately will cause file corruption.
-    pub(crate) fn trim_duration<R>(&mut self, trim_ranges: &[R]) -> (u64, Vec<Range<usize>>)
+    pub(crate) fn trim_duration<R>(&mut self, trim_ranges: &[R]) -> (u64, RangeSet<usize>)
     where
         R: RangeBounds<u64> + Debug,
     {
@@ -209,7 +209,7 @@ impl TimeToSampleAtom {
 
         (
             total_original_duration - total_duration_trimmed,
-            removed_sample_indices.into_iter().collect(),
+            removed_sample_indices,
         )
     }
 }
@@ -443,7 +443,8 @@ mod tests {
             stts.trim_duration(&test_case.trim_duration);
 
         assert_eq!(
-            actual_removed_samples, test_case.expect_removed_samples,
+            actual_removed_samples,
+            RangeSet::from_iter(test_case.expect_removed_samples.into_iter()),
             "removed sample indices don't match what's expected"
         );
 
