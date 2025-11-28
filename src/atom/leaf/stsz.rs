@@ -2,6 +2,7 @@ use bon::bon;
 use derive_more::{Deref, DerefMut};
 use either::Either;
 use futures_io::AsyncRead;
+use rangemap::RangeSet;
 use std::{
     fmt::{self},
     ops::Range,
