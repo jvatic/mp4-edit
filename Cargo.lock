@@ -444,7 +444,6 @@ dependencies = [
  "futures-io",
  "futures-util",
  "hex",
- "mp4-edit",
  "progress_bar",
  "rangemap",
  "sha2",
