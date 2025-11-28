@@ -80,6 +80,8 @@ impl SampleToChunkAtom {
     ///
     /// `sample_indices_to_remove` must contain contiguous sample indices as a single range,
     /// multiple ranges must not overlap.
+    ///
+    /// TODO: simplify this function, it's too complex
     pub(crate) fn remove_sample_indices(
         &mut self,
         sample_indices_to_remove: &RangeSet<usize>,
@@ -95,13 +97,219 @@ impl SampleToChunkAtom {
         let mut insert_entries: Vec<(usize, SampleToChunkEntry)> = Vec::new();
         let mut num_inserted_entries = 0usize;
 
-        let mut entries = self.entries.iter_mut().enumerate().peekable();
-        'entries: while let Some((entry_index, entry)) = entries.next() {
-            let mut entry_index = entry_index + num_inserted_entries;
+        struct Context<'a> {
+            sample_indices_to_remove: &'a RangeSet<usize>,
 
+            removed_chunk_indices: &'a mut RangeSet<usize>,
+            num_removed_chunks: &'a mut usize,
+
+            remove_entry_range: &'a mut RangeSet<usize>,
+
+            insert_entries: &'a mut Vec<(usize, SampleToChunkEntry)>,
+            num_inserted_entries: &'a mut usize,
+        }
+
+        struct Entry<'a> {
+            index: usize,
+            inner: &'a mut SampleToChunkEntry,
+
+            chunk_index: usize,
+            chunk_count: usize,
+            first_sample_index: usize,
+        }
+
+        impl<'a> Entry<'a> {
+            fn process(self, ctx: &mut Context<'a>) {
+                if self.chunk_count == 0 {
+                    self.remove_entry(ctx);
+                    return;
+                }
+
+                let sample_count = self.inner.samples_per_chunk as usize * self.chunk_count;
+                let last_sample_index = self.first_sample_index + sample_count.saturating_sub(1);
+                let samples = self.first_sample_index..last_sample_index + 1;
+
+                // get only the sample indices that overlap with this entry
+                if let Some(sample_indices_to_remove) =
+                    entry_samples_to_remove(&samples, ctx.sample_indices_to_remove).first()
+                {
+                    // sample indices to remove fully includes this entry
+                    if sample_indices_to_remove.len() >= samples.len() {
+                        self.remove_entry(ctx);
+                    } else {
+                        // sample indices to remove partially includes this entry
+                        self.remove_partial(ctx, sample_indices_to_remove);
+                    }
+                }
+            }
+
+            fn remove_entry(mut self, ctx: &mut Context<'a>) {
+                ctx.remove_entry_range.insert(self.index..self.index + 1);
+                self.remove_chunks(ctx, self.chunk_count);
+            }
+
+            fn remove_partial(
+                mut self,
+                ctx: &mut Context<'a>,
+                sample_indices_to_remove: &Range<usize>,
+            ) {
+                let first_affected_chunk_index =
+                    if sample_indices_to_remove.start > self.first_sample_index {
+                        self.chunk_index
+                            + ((sample_indices_to_remove.start - self.first_sample_index)
+                                / self.inner.samples_per_chunk as usize)
+                    } else {
+                        self.chunk_index
+                    };
+
+                // number of whole chunks to remove
+                let n_chunks_to_remove =
+                    sample_indices_to_remove.len() / self.inner.samples_per_chunk as usize;
+
+                // number of samples to remove after removing `n_chunks_to_remove`
+                let n_samples_to_remove = sample_indices_to_remove.len()
+                    - (n_chunks_to_remove * self.inner.samples_per_chunk as usize);
+
+                // there are leading samples
+                if n_chunks_to_remove > 0
+                    && first_affected_chunk_index == self.chunk_index
+                    && sample_indices_to_remove.start > self.first_sample_index
+                {
+                    let num_samples =
+                        (sample_indices_to_remove.start - self.first_sample_index) as u32;
+                    // insert an entry before this one up to the affected sample index
+                    self.insert_before(
+                        ctx,
+                        SampleToChunkEntry::builder()
+                            .first_chunk(self.inner.first_chunk)
+                            .samples_per_chunk(num_samples)
+                            .sample_description_index(self.inner.sample_description_index)
+                            .build(),
+                    );
+                    self.inner.first_chunk += 1;
+
+                    Entry {
+                        index: self.index,
+                        inner: self.inner,
+                        chunk_index: self.chunk_index + 1,
+                        chunk_count: self.chunk_count - 1,
+                        first_sample_index: sample_indices_to_remove.start,
+                    }
+                    .process(ctx);
+                    return;
+                }
+
+                // there are leading chunks
+                if first_affected_chunk_index > self.chunk_index {
+                    let num_chunks = first_affected_chunk_index - self.chunk_index;
+
+                    self.insert_before(
+                        ctx,
+                        SampleToChunkEntry::builder()
+                            .first_chunk(self.inner.first_chunk)
+                            .samples_per_chunk(self.inner.samples_per_chunk)
+                            .sample_description_index(self.inner.sample_description_index)
+                            .build(),
+                    );
+                    self.inner.first_chunk += num_chunks as u32;
+
+                    let samples_per_chunk = self.inner.samples_per_chunk as usize;
+                    Entry {
+                        index: self.index,
+                        inner: self.inner,
+                        chunk_index: self.chunk_index + num_chunks,
+                        chunk_count: self.chunk_count - num_chunks,
+                        first_sample_index: self.first_sample_index
+                            + (num_chunks * samples_per_chunk),
+                    }
+                    .process(ctx);
+                    return;
+                };
+
+                // remove any full chunks that matched the remove sample range
+                if n_chunks_to_remove > 0 {
+                    self.remove_chunks(ctx, n_chunks_to_remove);
+
+                    let samples_per_chunk = self.inner.samples_per_chunk as usize;
+                    Entry {
+                        index: self.index,
+                        inner: self.inner,
+                        chunk_index: self.chunk_index + n_chunks_to_remove,
+                        chunk_count: self.chunk_count - n_chunks_to_remove,
+                        first_sample_index: self.first_sample_index
+                            + (n_chunks_to_remove * samples_per_chunk),
+                    }
+                    .process(ctx);
+                    return;
+                }
+
+                // there are still samples left to remove for this entry that are less than a full chunk
+                if n_samples_to_remove > 0 {
+                    if self.chunk_count > 1 {
+                        // there are full chunks in this entry that remain intact after removing these samples
+                        // so we need to insert a new entry to handle the resulting partial chunk
+                        self.insert_before(
+                            ctx,
+                            SampleToChunkEntry::builder()
+                                .first_chunk(self.inner.first_chunk)
+                                .samples_per_chunk(
+                                    self.inner.samples_per_chunk - n_samples_to_remove as u32,
+                                )
+                                .sample_description_index(self.inner.sample_description_index)
+                                .build(),
+                        );
+
+                        self.inner.first_chunk += 1;
+
+                        Entry {
+                            index: self.index,
+                            inner: self.inner,
+                            chunk_index: self.chunk_index + 1,
+                            chunk_count: self.chunk_count - 1,
+                            first_sample_index: sample_indices_to_remove.end,
+                        }
+                        .process(ctx);
+                        return;
+                    } else {
+                        // the remaining samples belong to the last remaining chunk in this entry
+                        // so we can just remove them directly
+                        self.inner.samples_per_chunk -= n_samples_to_remove as u32;
+
+                        // there's nothing left to process for this entry
+                        return;
+                    }
+                }
+
+                unreachable!(
+                    "there should always be samples to remove when remove_partial is called"
+                );
+            }
+
+            fn remove_chunks(&mut self, ctx: &mut Context<'a>, n_chunks: usize) {
+                if n_chunks == 0 {
+                    return;
+                }
+
+                let chunk_index = self.chunk_index;
+
+                ctx.removed_chunk_indices
+                    .insert(chunk_index..chunk_index + n_chunks);
+                *ctx.num_removed_chunks += n_chunks;
+            }
+
+            fn insert_before(&mut self, ctx: &mut Context<'a>, entry: SampleToChunkEntry) {
+                ctx.insert_entries.push((self.index, entry));
+                *ctx.num_inserted_entries += 1;
+                self.index += 1;
+            }
+        }
+
+        let mut entries = self.entries.iter_mut().enumerate().peekable();
+        while let Some((entry_index, entry)) = entries.next() {
+            let entry_index = entry_index + num_inserted_entries;
             let chunk_index = entry.first_chunk as usize - 1;
 
-            let entry_chunk_count = match entries.peek() {
+            let chunk_count = match entries.peek() {
                 Some((_, next_entry)) => (next_entry.first_chunk - entry.first_chunk) as usize,
                 None => total_chunks - chunk_index,
             };
@@ -109,121 +317,54 @@ impl SampleToChunkAtom {
             // ensure we're updating chunk indices after removing/inserting chunks
             entry.first_chunk -= num_removed_chunks as u32;
 
-            let entry_sample_count = entry.samples_per_chunk as usize * entry_chunk_count;
+            let first_sample_index = next_sample_index;
+            next_sample_index += entry.samples_per_chunk as usize * chunk_count;
 
-            let entry_start_sample_index = next_sample_index;
-            next_sample_index += entry.samples_per_chunk as usize * entry_chunk_count;
-
-            let entry_end_sample_index =
-                entry_start_sample_index + entry_sample_count.saturating_sub(1);
-
-            let entry_sample_ranges_to_remove = entry_samples_to_remove(
-                entry_start_sample_index,
-                entry_end_sample_index,
+            let mut ctx = Context {
                 sample_indices_to_remove,
-            );
 
-            'ranges: for entry_sample_range_to_remove in entry_sample_ranges_to_remove {
-                let entry_samples_to_remove = entry_sample_range_to_remove.len();
+                removed_chunk_indices: &mut removed_chunk_indices,
+                num_removed_chunks: &mut num_removed_chunks,
 
-                // sample indices to remove fully excludes this entry
-                if entry_samples_to_remove == 0 {
-                    continue 'ranges;
-                }
+                remove_entry_range: &mut remove_entry_range,
 
-                // sample indices to remove fully includes this entry
-                if entry_samples_to_remove == entry_sample_count {
-                    remove_entry_range.insert(entry_index..entry_index + 1);
-                    removed_chunk_indices.insert(chunk_index..(chunk_index + entry_chunk_count));
-                    num_removed_chunks += entry_chunk_count;
-                    continue 'entries;
-                }
+                insert_entries: &mut insert_entries,
+                num_inserted_entries: &mut num_inserted_entries,
+            };
 
-                // sample indices to remove partially includes this entry
+            Entry {
+                index: entry_index,
+                inner: entry,
 
-                let relative_sample_range_to_remove = (entry_sample_range_to_remove.start
-                    - entry_start_sample_index)
-                    ..(entry_end_sample_index + 1 - entry_sample_range_to_remove.end);
-                let first_affected_chunk_index = chunk_index
-                    + (relative_sample_range_to_remove.start / entry.samples_per_chunk as usize);
-
-                let chunks_to_remove = entry_samples_to_remove / entry.samples_per_chunk as usize;
-
-                let mut chunk_index = chunk_index;
-                let mut entry_chunk_count = entry_chunk_count;
-                if first_affected_chunk_index > chunk_index {
-                    let num_chunks = first_affected_chunk_index - chunk_index;
-
-                    // we need to insert an entry for chunks upto the affected chunk
-                    insert_entries.push((
-                        entry_index,
-                        SampleToChunkEntry::builder()
-                            .first_chunk(entry.first_chunk)
-                            .samples_per_chunk(entry.samples_per_chunk)
-                            .sample_description_index(entry.sample_description_index)
-                            .build(),
-                    ));
-                    num_inserted_entries += 1;
-
-                    entry.first_chunk += num_chunks as u32;
-                    entry_chunk_count -= num_chunks;
-                    chunk_index += num_chunks;
-
-                    entry_index += 1
-                };
-
-                if chunks_to_remove > 0 {
-                    removed_chunk_indices.insert(chunk_index..(chunk_index + chunks_to_remove));
-                    num_removed_chunks += chunks_to_remove;
-                }
-
-                let entry_samples_to_remove =
-                    entry_samples_to_remove - (chunks_to_remove * entry.samples_per_chunk as usize);
-
-                if entry_samples_to_remove == 0 {
-                    if entry_chunk_count == chunks_to_remove {
-                        // we've removed all the chunks from this entry that aren't covered by the one we inserted above
-                        // it's easier with the current control-flow to remove this one vs not inserting one above
-                        remove_entry_range.insert(entry_index..entry_index + 1);
-                    }
-                    continue 'ranges;
-                }
-
-                if entry_chunk_count == 1 {
-                    entry.samples_per_chunk -= entry_samples_to_remove as u32;
-                } else {
-                    // we need to insert a new entry
-                    insert_entries.push((
-                        entry_index,
-                        SampleToChunkEntry::builder()
-                            .first_chunk(entry.first_chunk)
-                            .samples_per_chunk(
-                                entry.samples_per_chunk - entry_samples_to_remove as u32,
-                            )
-                            .sample_description_index(entry.sample_description_index)
-                            .build(),
-                    ));
-                    entry_index += 1;
-                    num_inserted_entries += 1;
-
-                    // and then update the current one
-                    entry.first_chunk += 1;
-                }
-                continue 'ranges;
+                chunk_index,
+                chunk_count,
+                first_sample_index,
             }
+            .process(&mut ctx);
         }
 
+        let mut inserted_indices = Vec::with_capacity(insert_entries.len());
+
         for (insert_index, entry) in insert_entries {
-            if let Some(prev_entry) = self.entries.get(insert_index) {
-                if prev_entry.samples_per_chunk == entry.samples_per_chunk
-                    && prev_entry.sample_description_index == entry.sample_description_index
-                {
-                    // mark the original entry at this position for removal since it's replaced by an equal one
-                    // this is easier than recalculating all the remove indices
-                    remove_entry_range.insert(insert_index + 1..insert_index + 2);
-                }
-            }
             self.entries.insert(insert_index, entry);
+            inserted_indices.push(insert_index);
+        }
+
+        // inserting redundant entries make the above logic easier to reason about
+        // so we'll need to clean them up, looping backwards so we get the correct first_chunk
+        for index in inserted_indices.into_iter().rev() {
+            let entry = self.entries.get(index).expect("entry exists");
+            match self.entries.get(index + 1) {
+                Some(next_entry)
+                    if next_entry.samples_per_chunk == entry.samples_per_chunk
+                        && next_entry.sample_description_index
+                            == entry.sample_description_index =>
+                {
+                    // remove redundant entry
+                    remove_entry_range.insert(index + 1..index + 2);
+                }
+                _ => {}
+            }
         }
 
         let mut n_removed = 0;
@@ -255,39 +396,15 @@ impl SampleToChunkAtom {
 }
 
 fn entry_samples_to_remove(
-    entry_start_sample_index: usize,
-    entry_end_sample_index: usize,
+    entry_sample_indices: &Range<usize>,
     sample_indices_to_remove: &RangeSet<usize>,
 ) -> RangeSet<usize> {
     let mut entry_samples_to_remove = RangeSet::new();
 
-    for range in sample_indices_to_remove.iter() {
-        // entry is contained in range
-        if range.contains(&entry_start_sample_index) && range.contains(&entry_end_sample_index) {
-            entry_samples_to_remove.insert(entry_start_sample_index..entry_end_sample_index + 1);
-            continue;
-        }
-
-        // range is contained in entry
-        if range.start >= entry_start_sample_index && range.end <= entry_end_sample_index {
-            entry_samples_to_remove.insert(range.clone());
-            continue;
-        }
-
-        // range starts inside of entry
-        if range.start >= entry_start_sample_index {
-            entry_samples_to_remove.insert(range.start..entry_end_sample_index + 1);
-            continue;
-        }
-
-        // range ends inside of entry
-        if range.contains(&entry_start_sample_index)
-            && range.start < entry_start_sample_index
-            && range.end <= entry_end_sample_index
-        {
-            entry_samples_to_remove.insert(entry_start_sample_index..range.end);
-            continue;
-        }
+    for range in sample_indices_to_remove.overlapping(entry_sample_indices) {
+        let range =
+            range.start.max(entry_sample_indices.start)..range.end.min(entry_sample_indices.end);
+        entry_samples_to_remove.insert(range);
     }
 
     entry_samples_to_remove
@@ -446,11 +563,9 @@ mod tests {
 
     fn test_entry_samples_to_remove(tc: EntrySamplesToRemoveTestCase) {
         let sample_indices_to_remove = RangeSet::from_iter(tc.sample_indices_to_remove.into_iter());
-        let actual_entry_samples_to_remove = entry_samples_to_remove(
-            tc.entry_start_sample_index,
-            tc.entry_end_sample_index,
-            &sample_indices_to_remove,
-        );
+        let entry_sample_indices = tc.entry_start_sample_index..tc.entry_end_sample_index + 1;
+        let actual_entry_samples_to_remove =
+            entry_samples_to_remove(&entry_sample_indices, &sample_indices_to_remove);
         let expected_entry_samples_to_remove =
             RangeSet::from_iter(tc.expected_entry_samples_to_remove.into_iter());
         assert_eq!(
@@ -588,29 +703,18 @@ mod tests {
             .for_each(|(index, (actual, expected))| {
                 assert_eq!(
                     actual, expected,
-                    "sample to chunk entries[{index}] doesn't match what's expected"
+                    "sample to chunk entries[{index}] doesn't match what's expected\n{:#?}",
+                    stsc.entries,
                 );
             });
-
-        let expected_entry_diff = if stsc.entries.len() > test_case.expected_entries.len() {
-            format_args!(
-                "expected {} sample to chunk entries, got {}: {:#?}",
-                test_case.expected_entries.len(),
-                stsc.entries.len(),
-                stsc.entries,
-            )
-        } else {
-            format_args!(
-                "expected {} sample to chunk entries, got {}",
-                test_case.expected_entries.len(),
-                stsc.entries.len(),
-            )
-        };
 
         assert_eq!(
             stsc.entries.0.len(),
             test_case.expected_entries.len(),
-            "{expected_entry_diff}",
+            "expected {} sample to chunk entries, got {}: {:#?}",
+            test_case.expected_entries.len(),
+            stsc.entries.len(),
+            stsc.entries,
         );
     }
 
@@ -652,6 +756,7 @@ mod tests {
             },
             remove_last_sample_from_first_entry => |stsc| {
                 let mut expected_entries = stsc.entries.0.clone();
+                // there's just a single chunk in the first entry
                 expected_entries[0].samples_per_chunk -= 1;
                 RemoveSampleIndicesTestCase::builder().
                     sample_indices_to_remove(vec![9..10]).
@@ -669,7 +774,7 @@ mod tests {
                     expected_removed_chunk_indices(vec![]).
                     expected_entries(expected_entries).build()
             },
-            remove_chunk_from_second_entry => |stsc| {
+            remove_first_chunk_from_second_entry => |stsc| {
                 let mut expected_entries = stsc.entries.0.clone();
                 expected_entries.iter_mut().skip(2).for_each(|entry| entry.first_chunk -= 1);
                 RemoveSampleIndicesTestCase::builder().
@@ -716,7 +821,7 @@ mod tests {
             },
             remove_fifteen_samples_from_last_entry_middle => |stsc| {
                 RemoveSampleIndicesTestCase::builder().
-                    sample_indices_to_remove(vec![151..166]).
+                    sample_indices_to_remove(vec![150..165]).
                     expected_removed_chunk_indices(vec![13..14]).
                     // we're removing 15 samples starting from chunk index 13,
                     // which will remove chunk index 13, and 5 samples from chunk index 14
@@ -816,6 +921,57 @@ mod tests {
                 expected_entries(vec![
                     stsc.entries.first().cloned().unwrap(),
                 ]).build(),
+
+            remove_mid_second_chunk_to_mid_last_chunk => |stsc| {
+                RemoveSampleIndicesTestCase::builder().
+                    sample_indices_to_remove(vec![15..215]).
+                    expected_removed_chunk_indices(vec![2..19]).
+                    expected_entries(vec![
+                        // first entry is unchanged
+                        stsc.entries[0].clone(),
+                        // samples 10..15 remain intact
+                        SampleToChunkEntry {
+                            first_chunk: 2,
+                            samples_per_chunk: 5,
+                            sample_description_index: 1,
+                        },
+                        // samples 215..220 remain intact
+                        SampleToChunkEntry {
+                            first_chunk: 3,
+                            samples_per_chunk: 5,
+                            sample_description_index: 2,
+                        },
+                    ]).build()
+            },
+
+            remove_mid_fifth_chunk_to_mid_last_chunk => |stsc| {
+                RemoveSampleIndicesTestCase::builder().
+                    sample_indices_to_remove(vec![65..215]).
+                    expected_removed_chunk_indices(vec![5..19]).
+                    expected_entries(vec![
+                        // first two entries are unchanged
+                        stsc.entries[0].clone(),
+                        stsc.entries[1].clone(),
+                        // 4th chunk remains unchanged
+                        SampleToChunkEntry {
+                            first_chunk: 4,
+                            samples_per_chunk: 10,
+                            sample_description_index: 1,
+                        },
+                        // samples 60..65 remain intact
+                        SampleToChunkEntry {
+                            first_chunk: 5,
+                            samples_per_chunk: 5,
+                            sample_description_index: 1,
+                        },
+                        // samples 215..220 remain intact
+                        SampleToChunkEntry {
+                            first_chunk: 6,
+                            samples_per_chunk: 5,
+                            sample_description_index: 2,
+                        },
+                    ]).build()
+            },
         );
     }
 }
