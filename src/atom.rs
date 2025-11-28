@@ -2,7 +2,7 @@
  * This mod is concerned with mp4 atoms and how to {de}serialize them.
 */
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(test)]
 pub mod test_utils;
 pub(crate) mod util;
 
