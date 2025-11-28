@@ -143,6 +143,12 @@ impl TimeToSampleAtom {
 
                 // Partial overlap
 
+                if entry.sample_count == 1 {
+                    // we can't trim anything smaller than a sample
+                    // TODO: return range that can be used in an edit list entry
+                    continue 'entries;
+                }
+
                 let sample_duration = entry.sample_duration as u64;
 
                 let trim_sample_start_index = (current_sample_index as u64
@@ -674,6 +680,24 @@ mod tests {
                 ],
                 expect_removed_duration: 20 + 20,
                 expect_removed_samples: vec![0..20, 80..100],
+                expect_entries: vec![expect_entry],
+            }
+        },
+        trim_start_end_single_sample ({
+            TimeToSampleAtom::builder().entry(
+                TimeToSampleEntry {
+                    sample_count: 1,
+                    sample_duration: 100,
+                },
+            ).build()
+        }) => |stts| {
+            let expect_entry = stts.entries[0].clone();
+            TrimDurationTestCase {
+                trim_duration: vec![
+                    (Bound::Included(50), Bound::Included(100)),
+                ],
+                expect_removed_duration: 0,
+                expect_removed_samples: vec![],
                 expect_entries: vec![expect_entry],
             }
         },
