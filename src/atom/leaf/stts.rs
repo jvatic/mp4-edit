@@ -496,12 +496,30 @@ mod tests {
             expect_removed_duration: 0,
             expect_entries: stts.entries.iter().cloned().collect::<Vec<_>>(),
         },
-        trim_unbounded_to_0_included_from_start => |stts| {
-            let mut expected_entries = stts.entries.0.clone();
-            expected_entries[0].sample_duration -= 1;
+        trim_unbounded_to_0_included_from_start_trim_nothing => |stts| {
+            // 1s is less than 1 sample, so nothing should get trimmed
+            let expected_entries = stts.entries.0.clone();
             TrimDurationTestCase {
                 trim_duration: vec![(Bound::Unbounded, Bound::Included(0))],
                 expect_removed_samples: vec![],
+                expect_removed_duration: 0,
+                expect_entries: expected_entries,
+            }
+        },
+        trim_unbounded_to_0_included_from_start_trim_sample ({
+            TimeToSampleAtom::builder().entry(
+                TimeToSampleEntry {
+                    sample_count: 100,
+                    sample_duration: 1,
+                },
+            ).build()
+        }) => |stts| {
+            // 1s is 1 sample, so we should trim 1 sample
+            let mut expected_entries = stts.entries.0.clone();
+            expected_entries[0].sample_count -= 1;
+            TrimDurationTestCase {
+                trim_duration: vec![(Bound::Unbounded, Bound::Included(0))],
+                expect_removed_samples: vec![0..1],
                 expect_removed_duration: 1,
                 expect_entries: expected_entries,
             }
