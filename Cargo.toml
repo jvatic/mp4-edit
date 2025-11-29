@@ -31,5 +31,6 @@ hex = "0.4.3"
 escargot = "0.5.15"
 tempfile = "3.23.0"
 sha2 = "0.10.9"
+indicatif = "0.18.3"
 
 [profile.dev.package]
