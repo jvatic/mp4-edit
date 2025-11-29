@@ -6,7 +6,7 @@ use tempfile::NamedTempFile;
 
 #[test]
 fn test_mp4copy_example() {
-    let mp4_copy_in_path = "./test-data/m4b/AliceInWonderland_librivox.m4b";
+    let mp4_copy_in_path = "./test-data/m4b/AliceInWonderland_librivox_2_chapters.m4b";
     let mp4_copy_actual_out = NamedTempFile::new().expect("error crating temp file");
     let mp4_copy_out_path = mp4_copy_actual_out.path().to_owned();
 
@@ -25,7 +25,7 @@ fn test_mp4copy_example() {
     let mp4_copy_out_file = File::open(&mp4_copy_out_path).expect("error opening output file");
     match assert_file_hash(
         mp4_copy_out_file,
-        "1ba22e284ee80e8cf25077bc8f10b81f0fadef6b8e61ac7964f059402e8ee1d3",
+        "db8470b4fbf813056aaf452b8ccb3e8ed4443a2f8cfeeeb795ccaae995a939c6",
     ) {
         Ok(()) => {}
         Err(err) => {
@@ -43,7 +43,7 @@ fn assert_file_hash(file: File, expected_hash: &str) -> anyhow::Result<()> {
     let file_hash = hash_file(file).context("error hashing file")?;
 
     if file_hash != expected_hash {
-        bail!("left != right, expected {file_hash}");
+        bail!("left != right, expected {expected_hash}, got {file_hash}");
     }
 
     Ok(())
