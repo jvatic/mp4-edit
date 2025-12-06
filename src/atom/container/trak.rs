@@ -254,20 +254,27 @@ impl<'a> TrakAtomRefMut<'a> {
         let remaining_duration = unscaled_duration(remaining_duration, media_timescale);
 
         // Step 2: Update sample sizes
-        stbl.sample_size()
+        let removed_sample_sizes = stbl
+            .sample_size()
             .remove_sample_indices(&sample_indices_to_remove);
 
         // Step 3: Calculate and remove chunks based on samples
         let total_chunks = stbl.chunk_offset().chunk_count();
-        let chunk_indices_to_remove = stbl
+        let chunk_offset_ops = stbl
             .sample_to_chunk()
             .remove_sample_indices(&sample_indices_to_remove, total_chunks);
 
-        // Step 4: Remove chunk offsets
-        stbl.chunk_offset()
-            .remove_chunk_indices(&chunk_indices_to_remove);
+        // Step 4: Resolve chunk offset ops that depend on sample sizes
+        let chunk_offset_ops = chunk_offset_ops
+            .into_iter()
+            .map(|op| op.resolve(&removed_sample_sizes))
+            .collect::<Option<Vec<_>>>()
+            .expect("chunk offset ops should only involve removed sample indices");
 
-        // Step 5: Update headers
+        // Step 5: Remove chunk offsets
+        stbl.chunk_offset().apply_operations(chunk_offset_ops);
+
+        // Step 6: Update headers
         mdia.header().update_duration(|_| remaining_duration);
         self.header()
             .update_duration(movie_timescale, |_| remaining_duration);

@@ -7,6 +7,7 @@ use std::{fmt, ops::Range};
 
 use crate::{
     atom::{
+        stco_co64::ChunkOffsetOperationUnresolved,
         util::{read_to_end, DebugList},
         FourCC,
     },
@@ -78,15 +79,18 @@ impl SampleToChunkAtom {
     /// Removes sample indices from the sample-to-chunk mapping table,
     /// and returns the indices (starting from zero) of any chunks which are now empty (and should be removed)
     ///
+    /// TODO: return a list of operations to apply to chunk offsets
+    /// - [x] Remove(RangeSet of chunk indices to remove)
+    /// - [ ] Insert(chunk index, sample index range) (will need to be cross referenced with sample_sizes)
+    /// - [ ] ShiftLeft(chunk index, sample index range) (ditto '')
+    ///
     /// `sample_indices_to_remove` must contain contiguous sample indices as a single range,
     /// multiple ranges must not overlap.
-    ///
-    /// TODO: simplify this function, it's too complex
     pub(crate) fn remove_sample_indices(
         &mut self,
         sample_indices_to_remove: &RangeSet<usize>,
         total_chunks: usize,
-    ) -> Vec<Range<usize>> {
+    ) -> Vec<ChunkOffsetOperationUnresolved> {
         let mut next_sample_index = 0usize;
 
         let mut removed_chunk_indices = RangeSet::new();
@@ -391,7 +395,9 @@ impl SampleToChunkAtom {
             self.entries.drain(range);
         }
 
-        removed_chunk_indices.into_iter().collect()
+        vec![ChunkOffsetOperationUnresolved::Remove(
+            removed_chunk_indices,
+        )]
     }
 }
 
@@ -688,8 +694,20 @@ mod tests {
         let total_chunks = test_case.total_chunks;
         let sample_indices_to_remove =
             RangeSet::from_iter(test_case.sample_indices_to_remove.into_iter());
-        let actual_removed_chunk_indices =
+        let actual_chunk_offset_ops =
             stsc.remove_sample_indices(&sample_indices_to_remove, total_chunks);
+
+        // TODO: add assertions for all the ops
+        let actual_removed_chunk_indices = actual_chunk_offset_ops
+            .iter()
+            .find_map(|op| match op {
+                ChunkOffsetOperationUnresolved::Remove(chunk_offsets) => Some(chunk_offsets),
+                _ => None,
+            })
+            .expect("there should be removed chunk indices")
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
 
         assert_eq!(
             actual_removed_chunk_indices, test_case.expected_removed_chunk_indices,
