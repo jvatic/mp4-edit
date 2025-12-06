@@ -2,7 +2,7 @@ use bon::bon;
 use derive_more::{Deref, DerefMut};
 use either::Either;
 use futures_io::AsyncRead;
-use rangemap::RangeSet;
+use rangemap::{RangeMap, RangeSet};
 use std::{
     fmt::{self},
     ops::Range,
@@ -76,8 +76,40 @@ pub struct SampleSizeAtom {
     pub entry_sizes: SampleEntrySizes,
 }
 
+pub(crate) struct RemovedSampleSizes {
+    /// key=removed range start, value=(range.start, removed sizes)
+    removed_sizes: RangeMap<usize, (usize, Vec<u32>)>,
+}
+
+impl RemovedSampleSizes {
+    fn new() -> Self {
+        Self {
+            removed_sizes: RangeMap::new(),
+        }
+    }
+
+    fn insert(&mut self, indices: Range<usize>, sizes: impl Iterator<Item = u32>) {
+        let start_index = indices.start;
+        self.removed_sizes
+            .insert(indices, (start_index, sizes.collect::<Vec<_>>()));
+    }
+
+    /// Get removed sample sizes for the given sample indices
+    pub(crate) fn get_sizes(&self, sample_indices: Range<usize>) -> Option<&[u32]> {
+        // get the list of sizes that the range belongs to
+        let (first_index, sizes) = self.removed_sizes.get(&sample_indices.start)?;
+        // slice to the requested range (invariant: RangeMap Range<K>.len() == V.len())
+        let sizes = &sizes.as_slice()
+            [(sample_indices.start - first_index)..(sample_indices.end - first_index)];
+        Some(sizes)
+    }
+}
+
 impl SampleSizeAtom {
-    pub(crate) fn remove_sample_indices(&mut self, indices_to_remove: &RangeSet<usize>) {
+    pub(crate) fn remove_sample_indices(
+        &mut self,
+        indices_to_remove: &RangeSet<usize>,
+    ) -> RemovedSampleSizes {
         let num_samples_removed = indices_to_remove
             .iter()
             .map(|r| r.end - r.start)
@@ -89,16 +121,23 @@ impl SampleSizeAtom {
             start..end
         }
 
+        let mut removed_sizes = RemovedSampleSizes::new();
+
         if !self.entry_sizes.is_empty() && !indices_to_remove.is_empty() {
             let mut n_removed = 0;
             for range in indices_to_remove.iter() {
-                let range = adjust_range(n_removed, range);
-                n_removed += range.len();
-                self.entry_sizes.drain(range.clone());
+                let adjusted_range = adjust_range(n_removed, range);
+                n_removed += adjusted_range.len();
+                removed_sizes.insert(
+                    range.clone(),
+                    self.entry_sizes.drain(adjusted_range.clone()),
+                );
             }
         }
 
         self.sample_count = self.sample_count.saturating_sub(num_samples_removed);
+
+        removed_sizes
     }
 
     /// Returns `sample_count` if it's set, otherwise `entry_sizes.len()`

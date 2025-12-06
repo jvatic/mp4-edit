@@ -1,6 +1,7 @@
 use bon::bon;
 use derive_more::{Deref, DerefMut};
 use futures_io::AsyncRead;
+use rangemap::RangeSet;
 use std::{
     fmt,
     ops::{Deref, Range},
@@ -8,6 +9,7 @@ use std::{
 
 use crate::{
     atom::{
+        stsz::RemovedSampleSizes,
         util::{read_to_end, DebugList, DebugUpperHex},
         FourCC,
     },
@@ -19,7 +21,7 @@ use crate::{
 pub const STCO: &[u8; 4] = b"stco";
 pub const CO64: &[u8; 4] = b"co64";
 
-#[derive(Default, Clone, Deref, DerefMut)]
+#[derive(Default, Clone, Deref, DerefMut, PartialEq, Eq)]
 pub struct ChunkOffsets(Vec<u64>);
 
 impl ChunkOffsets {
@@ -63,6 +65,47 @@ pub struct ChunkOffsetAtom {
     pub is_64bit: bool,
 }
 
+#[derive(Debug)]
+pub(crate) enum ChunkOffsetOperationUnresolved {
+    Remove(RangeSet<usize>),
+    Insert(usize, Range<usize>),
+    ShiftLeft(usize, Range<usize>),
+}
+
+impl ChunkOffsetOperationUnresolved {
+    pub fn resolve(
+        self,
+        removed_sample_sizes: &RemovedSampleSizes,
+    ) -> Option<ChunkOffsetOperation> {
+        Some(match self {
+            Self::Remove(chunk_offsets) => ChunkOffsetOperation::Remove(chunk_offsets),
+            Self::Insert(chunk_index, sample_indices) => {
+                let size = removed_sample_sizes
+                    .get_sizes(sample_indices)?
+                    .iter()
+                    .map(|s| *s as u64)
+                    .sum::<u64>();
+                ChunkOffsetOperation::Insert(chunk_index, size)
+            }
+            Self::ShiftLeft(chunk_index, sample_indices) => {
+                let size = removed_sample_sizes
+                    .get_sizes(sample_indices)?
+                    .iter()
+                    .map(|s| *s as u64)
+                    .sum::<u64>();
+                ChunkOffsetOperation::ShiftLeft(chunk_index, size)
+            }
+        })
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum ChunkOffsetOperation {
+    Remove(RangeSet<usize>),
+    Insert(usize, u64),
+    ShiftLeft(usize, u64),
+}
+
 #[bon]
 impl ChunkOffsetAtom {
     #[builder]
@@ -85,13 +128,20 @@ impl ChunkOffsetAtom {
         self.chunk_offsets.len()
     }
 
-    /// Removes the specified chunk indices.
-    pub(crate) fn remove_chunk_indices(&mut self, chunk_indices_to_remove: &[Range<usize>]) {
+    /// Applies a list of operations
+    pub(crate) fn apply_operations(&mut self, ops: Vec<ChunkOffsetOperation>) {
         let mut n_removed = 0;
-        for range in chunk_indices_to_remove.iter().cloned() {
-            let range = (range.start - n_removed)..(range.end - n_removed);
-            n_removed += range.len();
-            self.chunk_offsets.drain(range);
+        for op in ops {
+            match op {
+                ChunkOffsetOperation::Remove(chunk_indices_to_remove) => {
+                    for range in chunk_indices_to_remove.iter().cloned() {
+                        let range = (range.start - n_removed)..(range.end - n_removed);
+                        n_removed += range.len();
+                        self.chunk_offsets.drain(range);
+                    }
+                }
+                _ => todo!(),
+            }
         }
     }
 }
