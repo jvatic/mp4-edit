@@ -265,11 +265,12 @@ impl<'a> TrakAtomRefMut<'a> {
             .remove_sample_indices(&sample_indices_to_remove, total_chunks);
 
         // Step 4: Resolve chunk offset ops that depend on sample sizes
+        let chunk_offsets = &stbl.chunk_offset().chunk_offsets;
         let chunk_offset_ops = chunk_offset_ops
             .into_iter()
-            .map(|op| op.resolve(&removed_sample_sizes))
-            .collect::<Option<Vec<_>>>()
-            .expect("chunk offset ops should only involve removed sample indices");
+            .map(|op| op.resolve(chunk_offsets, &removed_sample_sizes))
+            .collect::<anyhow::Result<Vec<_>>>()
+            .expect("chunk offset ops should only involve removed sample indices and valid chunk indices");
 
         // Step 5: Remove chunk offsets
         stbl.chunk_offset().apply_operations(chunk_offset_ops);
