@@ -261,18 +261,18 @@ impl<'a> TrakAtomRefMut<'a> {
 
         let remaining_duration = unscaled_duration(remaining_duration, media_timescale);
 
-        // Step 2: Update sample sizes
+        // Step 3: Update sample sizes
         let removed_sample_sizes = stbl
             .sample_size()
             .remove_sample_indices(&sample_indices_to_remove);
 
-        // Step 3: Calculate and remove chunks based on samples
+        // Step 4: Calculate and remove chunks based on samples
         let total_chunks = stbl.chunk_offset().chunk_count();
         let chunk_offset_ops = stbl
             .sample_to_chunk()
             .remove_sample_indices(&sample_indices_to_remove, total_chunks);
 
-        // Step 4: Resolve chunk offset ops that depend on sample sizes
+        // Step 5: Resolve chunk offset ops that depend on sample sizes
         let chunk_offsets = &stbl.chunk_offset().chunk_offsets;
         let chunk_offset_ops = chunk_offset_ops
             .into_iter()
@@ -280,15 +280,15 @@ impl<'a> TrakAtomRefMut<'a> {
             .collect::<anyhow::Result<Vec<_>>>()
             .expect("chunk offset ops should only involve removed sample indices and valid chunk indices");
 
-        // Step 5: Remove chunk offsets
+        // Step 6: Remove chunk offsets
         stbl.chunk_offset().apply_operations(chunk_offset_ops);
 
-        // Step 6: Update headers
+        // Step 7: Update headers
         mdia.header().update_duration(|_| remaining_duration);
         self.header()
             .update_duration(movie_timescale, |_| remaining_duration);
 
-        // Step 7: Replace any edit list entries with a no-op one
+        // Step 8: Replace any edit list entries with a no-op one
         if matches!(self.as_ref().edit_list_container().edit_list(), Some(_)) {
             self.edit_list_container()
                 .edit_list()
