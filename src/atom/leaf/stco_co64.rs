@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use bon::bon;
 use derive_more::{Deref, DerefMut};
 use futures_io::AsyncRead;
@@ -67,33 +68,65 @@ pub struct ChunkOffsetAtom {
 
 #[derive(Debug)]
 pub(crate) enum ChunkOffsetOperationUnresolved {
-    Remove(RangeSet<usize>),
-    Insert(usize, Range<usize>),
-    ShiftLeft(usize, Range<usize>),
+    Remove(Range<usize>),
+    Insert {
+        /// unadjusted chunk index used to get reference offset
+        chunk_index_unadjusted: usize,
+        /// chunk index that takes into account all previous operations
+        chunk_index: usize,
+        /// sample indices used to calculate delta from old offset
+        sample_indices: Range<usize>,
+    },
+    ShiftRight {
+        /// unadjusted chunk index used to get reference offset
+        chunk_index_unadjusted: usize,
+        /// chunk index that takes into account all previous operations
+        chunk_index: usize,
+        /// sample indices used to calculate delta from old offset
+        sample_indices: Range<usize>,
+    },
 }
 
 impl ChunkOffsetOperationUnresolved {
     pub fn resolve(
         self,
+        chunk_offsets: &ChunkOffsets,
         removed_sample_sizes: &RemovedSampleSizes,
-    ) -> Option<ChunkOffsetOperation> {
-        Some(match self {
+    ) -> anyhow::Result<ChunkOffsetOperation> {
+        let derive_new_offset = |chunk_index: usize, sample_indices: Range<usize>| {
+            let prev_offset = *chunk_offsets
+                .get(chunk_index)
+                .ok_or_else(|| anyhow!("chunk index {chunk_index} not found"))?;
+
+            let delta = removed_sample_sizes
+                .get_sizes(sample_indices.clone())
+                .ok_or_else(|| anyhow!("sample indices {sample_indices:?} not found"))?
+                .iter()
+                .map(|s| *s as u64)
+                .sum::<u64>();
+
+            dbg!(chunk_index, prev_offset, delta);
+
+            Ok::<u64, anyhow::Error>(prev_offset + delta)
+        };
+
+        Ok(match self {
             Self::Remove(chunk_offsets) => ChunkOffsetOperation::Remove(chunk_offsets),
-            Self::Insert(chunk_index, sample_indices) => {
-                let size = removed_sample_sizes
-                    .get_sizes(sample_indices)?
-                    .iter()
-                    .map(|s| *s as u64)
-                    .sum::<u64>();
-                ChunkOffsetOperation::Insert(chunk_index, size)
+            Self::Insert {
+                chunk_index_unadjusted,
+                chunk_index,
+                sample_indices,
+            } => {
+                let offset = derive_new_offset(chunk_index_unadjusted - 1, sample_indices)?;
+                ChunkOffsetOperation::Insert(chunk_index, offset)
             }
-            Self::ShiftLeft(chunk_index, sample_indices) => {
-                let size = removed_sample_sizes
-                    .get_sizes(sample_indices)?
-                    .iter()
-                    .map(|s| *s as u64)
-                    .sum::<u64>();
-                ChunkOffsetOperation::ShiftLeft(chunk_index, size)
+            Self::ShiftRight {
+                chunk_index_unadjusted,
+                chunk_index,
+                sample_indices,
+            } => {
+                let new_offset = derive_new_offset(chunk_index_unadjusted, sample_indices)?;
+                ChunkOffsetOperation::Replace(chunk_index, new_offset)
             }
         })
     }
@@ -101,9 +134,9 @@ impl ChunkOffsetOperationUnresolved {
 
 #[derive(Debug)]
 pub(crate) enum ChunkOffsetOperation {
-    Remove(RangeSet<usize>),
+    Remove(Range<usize>),
     Insert(usize, u64),
-    ShiftLeft(usize, u64),
+    Replace(usize, u64),
 }
 
 #[bon]
@@ -130,17 +163,21 @@ impl ChunkOffsetAtom {
 
     /// Applies a list of operations
     pub(crate) fn apply_operations(&mut self, ops: Vec<ChunkOffsetOperation>) {
-        let mut n_removed = 0;
         for op in ops {
             match op {
                 ChunkOffsetOperation::Remove(chunk_indices_to_remove) => {
-                    for range in chunk_indices_to_remove.iter().cloned() {
-                        let range = (range.start - n_removed)..(range.end - n_removed);
-                        n_removed += range.len();
-                        self.chunk_offsets.drain(range);
-                    }
+                    self.chunk_offsets.drain(chunk_indices_to_remove);
                 }
-                _ => todo!(),
+                ChunkOffsetOperation::Insert(chunk_index, offset) => {
+                    self.chunk_offsets.insert(chunk_index, offset);
+                }
+                ChunkOffsetOperation::Replace(chunk_index, new_offset) => {
+                    let chunk = self
+                        .chunk_offsets
+                        .get_mut(chunk_index)
+                        .expect("chunk offset must exist");
+                    *chunk = new_offset;
+                }
             }
         }
     }

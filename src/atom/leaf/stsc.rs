@@ -162,9 +162,7 @@ impl SampleToChunkAtom {
         sample_indices_to_remove: &RangeSet<usize>,
         total_chunks: usize,
     ) -> Vec<ChunkOffsetOperationUnresolved> {
-        let mut removed_chunk_indices = RangeSet::new();
-        let mut insert_chunks = Vec::new();
-        let mut adjust_chunks = Vec::new();
+        let mut chunk_ops = Vec::new();
 
         let mut num_removed_chunks = 0usize;
         let mut num_inserted_chunks = 0usize;
@@ -172,9 +170,7 @@ impl SampleToChunkAtom {
         struct Context<'a> {
             sample_indices_to_remove: &'a RangeSet<usize>,
 
-            removed_chunk_indices: &'a mut RangeSet<usize>,
-            insert_chunks: &'a mut Vec<(usize, Range<usize>)>,
-            adjust_chunks: &'a mut Vec<(usize, Range<usize>)>,
+            chunk_ops: &'a mut Vec<ChunkOffsetOperationUnresolved>,
 
             num_removed_chunks: &'a mut usize,
             num_inserted_chunks: &'a mut usize,
@@ -191,8 +187,7 @@ impl SampleToChunkAtom {
                 {
                     if sample_indices_to_remove.len() >= entry.sample_indices.len() {
                         // sample indices to remove fully includes this entry
-                        self.removed_chunk_indices
-                            .insert(entry.chunk_index..entry.chunk_index + 1);
+                        self.remove_chunk_offset(entry.chunk_index);
                         *self.num_removed_chunks += 1;
                     } else {
                         self.process_entry_partial_match(sample_indices_to_remove, entry);
@@ -237,8 +232,10 @@ impl SampleToChunkAtom {
                      */
 
                     // chunk offset increases by the size of the removed samples
-                    self.adjust_chunks
-                        .push((entry.chunk_index, sample_indices_to_remove.clone()));
+                    self.shift_chunk_offset_right(
+                        entry.chunk_index,
+                        sample_indices_to_remove.clone(),
+                    );
 
                     // chunk sample count decreases by n removed samples
                     self.insert_or_update_chunk_entry(SampleToChunkEntry {
@@ -293,8 +290,10 @@ impl SampleToChunkAtom {
 
                     // insert a new chunk after the current one,
                     // whose offset is the existing offset + size of removed samples
-                    self.insert_chunks
-                        .push((entry.chunk_index + 1, sample_indices_to_remove.clone()));
+                    self.insert_chunk_offset(
+                        entry.chunk_index + 1,
+                        sample_indices_to_remove.clone(),
+                    );
 
                     // insert or update entry for the current chunk
                     self.insert_or_update_chunk_entry(SampleToChunkEntry {
@@ -327,15 +326,62 @@ impl SampleToChunkAtom {
                 }
             }
 
+            fn adjusted_chunk_index(&self, chunk_index: usize) -> usize {
+                chunk_index + *self.num_inserted_chunks - *self.num_removed_chunks
+            }
+
             fn insert_or_update_chunk_entry(&mut self, mut entry: SampleToChunkEntry) {
-                entry.first_chunk -= *self.num_removed_chunks as u32;
-                entry.first_chunk += *self.num_inserted_chunks as u32;
+                entry.first_chunk = self.adjusted_chunk_index(entry.first_chunk as usize) as u32;
                 match self.next_entries.last_mut() {
                     Some(prev_entry) if prev_entry.first_chunk == entry.first_chunk => {
                         *prev_entry = entry
                     }
                     _ => {
                         self.next_entries.push(entry);
+                    }
+                }
+            }
+
+            /// increase chunk offset by the size of a removed sample range
+            fn shift_chunk_offset_right(
+                &mut self,
+                chunk_index: usize,
+                removed_sample_indices: Range<usize>,
+            ) {
+                self.chunk_ops
+                    .push(ChunkOffsetOperationUnresolved::ShiftRight {
+                        chunk_index_unadjusted: chunk_index,
+                        chunk_index: self.adjusted_chunk_index(chunk_index),
+                        sample_indices: removed_sample_indices,
+                    });
+            }
+
+            fn insert_chunk_offset(
+                &mut self,
+                chunk_index: usize,
+                removed_sample_indices: Range<usize>,
+            ) {
+                self.chunk_ops.push(ChunkOffsetOperationUnresolved::Insert {
+                    chunk_index_unadjusted: chunk_index,
+                    chunk_index: self.adjusted_chunk_index(chunk_index),
+                    sample_indices: removed_sample_indices,
+                });
+            }
+
+            fn remove_chunk_offset(&mut self, chunk_index: usize) {
+                let chunk_index = self.adjusted_chunk_index(chunk_index);
+                match self.chunk_ops.last_mut() {
+                    Some(ChunkOffsetOperationUnresolved::Remove(prev_op))
+                        if prev_op.start == chunk_index =>
+                    {
+                        // either merge with the previous remove range
+                        prev_op.end += 1;
+                    }
+                    _ => {
+                        // or insert a new remove range
+                        self.chunk_ops.push(ChunkOffsetOperationUnresolved::Remove(
+                            chunk_index..chunk_index + 1,
+                        ));
                     }
                 }
             }
@@ -350,9 +396,7 @@ impl SampleToChunkAtom {
                 let mut ctx = Context {
                     sample_indices_to_remove: &sample_indices_to_remove,
 
-                    removed_chunk_indices: &mut removed_chunk_indices,
-                    insert_chunks: &mut insert_chunks,
-                    adjust_chunks: &mut adjust_chunks,
+                    chunk_ops: &mut chunk_ops,
 
                     num_removed_chunks: &mut num_removed_chunks,
                     num_inserted_chunks: &mut num_inserted_chunks,
@@ -367,9 +411,7 @@ impl SampleToChunkAtom {
         ));
         self.entries.shrink_to_fit();
 
-        vec![ChunkOffsetOperationUnresolved::Remove(
-            removed_chunk_indices,
-        )]
+        chunk_ops
     }
 }
 
@@ -672,13 +714,18 @@ mod tests {
         // TODO: add assertions for all the ops
         let actual_removed_chunk_indices = actual_chunk_offset_ops
             .iter()
-            .find_map(|op| match op {
+            .filter_map(|op| match op {
                 ChunkOffsetOperationUnresolved::Remove(chunk_offsets) => Some(chunk_offsets),
                 _ => None,
             })
-            .expect("there should be removed chunk indices")
-            .iter()
             .cloned()
+            // chunk ops take into account previous operations having been applied
+            // adjust ranges to be in terms of input chunk indices (easier to reason about in the test case)
+            .scan(0usize, |n_removed, range| {
+                let range = (range.start + *n_removed)..(range.end + *n_removed);
+                *n_removed += range.len();
+                Some(range)
+            })
             .collect::<Vec<_>>();
 
         assert_eq!(
