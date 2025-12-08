@@ -1,8 +1,4 @@
-use std::{
-    fmt::Debug,
-    ops::{Range, RangeBounds},
-    time::Duration,
-};
+use std::{fmt::Debug, ops::RangeBounds, time::Duration};
 
 use bon::bon;
 
@@ -123,6 +119,8 @@ impl<'a> MoovAtomRefMut<'a> {
 impl<'a> MoovAtomRefMut<'a> {
     /// Trim duration from tracks.
     ///
+    /// NOTE: This is meant to be applied to the input metadata.
+    ///
     /// See also [`Self::retain_duration`].
     #[builder(finish_fn(name = "trim"), builder_type = TrimDuration)]
     pub fn trim_duration(
@@ -145,6 +143,8 @@ impl<'a> MoovAtomRefMut<'a> {
 
     /// Retains given duration range, trimming everything before and after.
     ///
+    /// NOTE: This is meant to be applied to the input metadata.
+    ///
     /// See also [`Self::trim_duration`].
     #[builder(finish_fn(name = "retain"), builder_type = RetainDuration)]
     pub fn retain_duration(
@@ -156,7 +156,7 @@ impl<'a> MoovAtomRefMut<'a> {
         let trim_ranges = vec![
             (
                 Bound::Unbounded,
-                Bound::Included(from_offset.unwrap_or_default()),
+                Bound::Excluded(from_offset.unwrap_or_default()),
             ),
             (
                 Bound::Included(from_offset.unwrap_or_default() + duration),
@@ -200,7 +200,7 @@ impl<'a> MoovAtomRefMut<'a> {
 #[bon]
 impl<'a, 'b, S: trim_duration::State> TrimDuration<'a, 'b, S> {
     #[builder(finish_fn(name = "trim"), builder_type = TrimDurationRanges)]
-    pub fn ranges<R>(
+    fn ranges<R>(
         self,
         #[builder(start_fn)] ranges: impl IntoIterator<Item = R>,
     ) -> &'b mut MoovAtomRefMut<'a>
