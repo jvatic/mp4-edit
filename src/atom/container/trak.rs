@@ -1,12 +1,13 @@
 use std::{
     fmt::{self, Debug},
-    ops::RangeBounds,
+    ops::{Range, RangeBounds},
     time::Duration,
 };
 
 use crate::{
     atom::{
         atom_ref::{AtomRef, AtomRefMut},
+        elst::EditEntry,
         stsd::{
             AudioSampleEntry, BtrtExtension, DecoderSpecificInfo, EsdsExtension, SampleEntry,
             SampleEntryData, SampleEntryType, StsdExtension,
@@ -238,16 +239,23 @@ impl<'a> TrakAtomRefMut<'a> {
     {
         let mut mdia = self.media();
         let media_timescale = u64::from(mdia.header().timescale);
+        let media_duration = mdia.header().duration;
         let mut minf = mdia.media_information();
         let mut stbl = minf.sample_table();
 
+        // Step 1: Scale and convert trim ranges
         let scaled_ranges = trim_ranges
             .iter()
             .cloned()
-            .map(|range| scaled_duration_range(range, media_timescale))
+            .map(|range| {
+                convert_range(
+                    media_duration,
+                    scaled_duration_range(range, media_timescale),
+                )
+            })
             .collect::<Vec<_>>();
 
-        // Step 1: Determine which samples to remove based on time
+        // Step 2: Determine which samples to remove based on time
         let (remaining_duration, sample_indices_to_remove) =
             stbl.time_to_sample().trim_duration(&scaled_ranges);
 
@@ -280,6 +288,32 @@ impl<'a> TrakAtomRefMut<'a> {
         self.header()
             .update_duration(movie_timescale, |_| remaining_duration);
 
+        // Step 7: Replace any edit list entries with a no-op one
+        if matches!(self.as_ref().edit_list_container().edit_list(), Some(_)) {
+            self.edit_list_container()
+                .edit_list()
+                .replace_entries(vec![EditEntry::builder()
+                    .movie_timescale(movie_timescale)
+                    .segment_duration(remaining_duration)
+                    .build()]);
+        }
+
         remaining_duration
     }
 }
+
+fn convert_range(media_time: u64, range: impl RangeBounds<u64>) -> Range<u64> {
+    use std::ops::Bound;
+    let start = match range.start_bound() {
+        Bound::Included(start) => *start,
+        Bound::Excluded(start) => *start + 1,
+        Bound::Unbounded => 0,
+    };
+    let end = match range.end_bound() {
+        Bound::Included(end) => *end + 1,
+        Bound::Excluded(end) => *end,
+        Bound::Unbounded => media_time,
+    };
+    start..end
+}
+
