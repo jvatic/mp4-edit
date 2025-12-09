@@ -1,11 +1,12 @@
 /*!
- * This example demonstrates copying an MP4 file. When using a seekable input, it moves metadata to the start of the file for fast-start (streaming) opimization. Using a non-seekable input requires the file to already be fast-start.
+ * This example demonstrates copying and/or trimming an MP4 file. When using a seekable input, it moves metadata to the start of the file for fast-start (streaming) opimization. Using a non-seekable input requires the file to already be fast-start.
  */
 
 use anyhow::{anyhow, Context};
+use clap::Parser as ClapParser;
 use futures_util::io::{BufReader, BufWriter};
 use indicatif::ProgressBar;
-use std::env;
+use std::time::Duration;
 use tokio::{
     fs,
     io::{self},
@@ -15,20 +16,61 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use mp4_edit::{
     atom::FourCC,
     parser::{ReadCapability, MDAT},
-    Mp4Writer, Parser,
+    Mp4Writer,
 };
+
+#[derive(clap::Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Path to the input mp4, use `-` for stdin
+    input_mp4: String,
+
+    /// Path to the output mp4, use `-` for stdout
+    output_mp4: String,
+
+    #[command(subcommand)]
+    command: Option<SubCommand>,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum SubCommand {
+    Trim(TrimArgs),
+    Retain(RetainArgs),
+}
+
+/// Trim the start and/or end of the mp4
+#[derive(clap::Args, Debug)]
+#[group(required = true, multiple = true)]
+struct TrimArgs {
+    /// Duration to trim from the start (e.g. 10s)
+    #[arg(short, long, value_parser = humantime::parse_duration)]
+    start: Option<Duration>,
+
+    /// Duration to trim from the end (e.g. 1m20s)
+    #[arg(short, long, value_parser = humantime::parse_duration)]
+    end: Option<Duration>,
+}
+
+/// Retain a clip of the mp4
+#[derive(clap::Args, Debug)]
+#[group(required = true, multiple = true)]
+struct RetainArgs {
+    /// Position clip starts at (e.g. 1h10m32s)
+    #[arg(short = 'o', long, value_parser = humantime::parse_duration)]
+    from_offset: Option<Duration>,
+
+    /// Duration of clip to retain (e.g. 30m)
+    #[arg(short, long, value_parser = humantime::parse_duration)]
+    duration: Duration,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 3 {
-        eprintln!("Usage: {} <input_mp4> <output_mp4>", args[0]);
-        eprintln!("  Use '-' for stdin/stdout");
-        std::process::exit(1);
-    }
+    let args = Args::parse();
 
-    let input_name = &args[1];
-    let output_name = &args[2];
+    let input_name = &args.input_mp4;
+    let output_name = &args.output_mp4;
+    let sub_command = args.command;
 
     eprintln!("Copying {} into {}", input_name, output_name);
 
@@ -37,25 +79,25 @@ async fn main() -> anyhow::Result<()> {
 
         let input = io::stdin().compat();
         let input_reader = BufReader::new(input);
-        let parser = Parser::new(input_reader);
+        let parser = mp4_edit::parser::Parser::new(input_reader);
         let metadata = parser
             .parse_metadata()
             .await
             .context("failed to parse metadata from stdin")?;
 
-        process_mp4_copy(metadata, output_name).await?;
+        process_mp4_copy(metadata, output_name, sub_command).await?;
     } else {
         eprintln!("parsing file as seekable");
 
         let file = fs::File::open(input_name).await?;
         let input_reader = file.compat();
-        let parser = Parser::new_seekable(input_reader);
+        let parser = mp4_edit::parser::Parser::new_seekable(input_reader);
         let metadata = parser
             .parse_metadata()
             .await
             .context("failed to parse metadata from input file")?;
 
-        process_mp4_copy(metadata, output_name).await?;
+        process_mp4_copy(metadata, output_name, sub_command).await?;
     }
 
     Ok(())
@@ -64,15 +106,16 @@ async fn main() -> anyhow::Result<()> {
 async fn process_mp4_copy<R, C>(
     metadata: mp4_edit::parser::MdatParser<R, C>,
     output_name: &str,
+    sub_command: Option<SubCommand>,
 ) -> anyhow::Result<()>
 where
     C: ReadCapability,
     R: futures_util::io::AsyncRead + Unpin + Send,
 {
     if output_name == "-" {
-        process_mp4_copy_to_stdout(metadata).await?;
+        process_mp4_copy_to_stdout(metadata, sub_command).await?;
     } else {
-        process_mp4_copy_to_file(metadata, output_name).await?;
+        process_mp4_copy_to_file(metadata, output_name, sub_command).await?;
     }
     Ok(())
 }
@@ -80,6 +123,7 @@ where
 async fn process_mp4_copy_to_file<R, C>(
     metadata: mp4_edit::parser::MdatParser<R, C>,
     output_name: &str,
+    sub_command: Option<SubCommand>,
 ) -> anyhow::Result<()>
 where
     C: ReadCapability,
@@ -92,12 +136,13 @@ where
         .compat_write();
     let output = BufWriter::new(output);
     let writer = Mp4Writer::new(output);
-    process_mp4_copy_inner(metadata, writer).await?;
+    process_mp4_copy_inner(metadata, writer, sub_command).await?;
     Ok(())
 }
 
 async fn process_mp4_copy_to_stdout<R, C>(
     metadata: mp4_edit::parser::MdatParser<R, C>,
+    sub_command: Option<SubCommand>,
 ) -> anyhow::Result<()>
 where
     C: ReadCapability,
@@ -107,13 +152,14 @@ where
     let output = io::stdout().compat_write();
     let output = BufWriter::new(output);
     let writer = Mp4Writer::new(output);
-    process_mp4_copy_inner(metadata, writer).await?;
+    process_mp4_copy_inner(metadata, writer, sub_command).await?;
     Ok(())
 }
 
 async fn process_mp4_copy_inner<R, C, W>(
     metadata: mp4_edit::parser::MdatParser<R, C>,
     mut mp4_writer: Mp4Writer<W>,
+    sub_command: Option<SubCommand>,
 ) -> anyhow::Result<()>
 where
     C: ReadCapability,
@@ -121,6 +167,30 @@ where
     W: futures_util::io::AsyncWrite + Unpin + Send,
 {
     let mut input_metadata = metadata;
+
+    if let Some(sub_command) = sub_command {
+        match sub_command {
+            SubCommand::Trim(args) => {
+                if let Some(start) = args.start {
+                    eprintln!("trimming {} from start", humantime::format_duration(start));
+                }
+                if let Some(end) = args.end {
+                    eprintln!("trimming {} from end", humantime::format_duration(end));
+                }
+                trim_duration(&mut input_metadata, args)?;
+            }
+            SubCommand::Retain(args) => {
+                eprintln!(
+                    "retaining {} to {}",
+                    humantime::format_duration(args.from_offset.unwrap_or_default()),
+                    humantime::format_duration(
+                        args.from_offset.unwrap_or_default() + args.duration
+                    )
+                );
+                retain_duration(&mut input_metadata, args)?;
+            }
+        }
+    }
 
     let mut metadata = input_metadata.clone();
 
@@ -132,7 +202,7 @@ where
     let new_metadata_size = metadata.metadata_size();
     let mdat_content_offset = new_metadata_size + 8;
 
-    let progress_bar = ProgressBar::new((new_metadata_size + mdat_size) as u64);
+    let progress_bar = ProgressBar::new((mdat_content_offset + mdat_size) as u64);
 
     // Write metadata atoms (all neccesary changes have been made already)
     for (i, atom) in metadata.atoms_iter().enumerate() {
@@ -187,5 +257,28 @@ where
         "mdat header has incorrect size"
     );
 
+    Ok(())
+}
+
+fn trim_duration(metadata: &mut mp4_edit::parser::Metadata, args: TrimArgs) -> anyhow::Result<()> {
+    metadata
+        .moov_mut()
+        .trim_duration()
+        .maybe_from_start(args.start)
+        .maybe_from_end(args.end)
+        .trim();
+    Ok(())
+}
+
+fn retain_duration(
+    metadata: &mut mp4_edit::parser::Metadata,
+    args: RetainArgs,
+) -> anyhow::Result<()> {
+    metadata
+        .moov_mut()
+        .retain_duration()
+        .maybe_from_offset(args.from_offset)
+        .duration(args.duration)
+        .retain();
     Ok(())
 }
