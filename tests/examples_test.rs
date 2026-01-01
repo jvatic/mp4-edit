@@ -4,7 +4,6 @@ use anyhow::{bail, Context};
 use bon::Builder;
 use escargot::CargoBuild;
 use tempfile::NamedTempFile;
-use tokio::io::Stdin;
 
 #[derive(Builder)]
 struct ExampleTestCase {
@@ -122,10 +121,7 @@ fn test_example(test_case: ExampleTestCase) {
 
     let output_path = output_file.path();
     let output_file = File::open(&output_path).expect("error opening output file");
-    match assert_file_hash(
-        output_file,
-        "db8470b4fbf813056aaf452b8ccb3e8ed4443a2f8cfeeeb795ccaae995a939c6",
-    ) {
+    match assert_file_hash(output_file, test_case.expected_hash) {
         Ok(()) => {}
         Err(err) => {
             let mut inspect_path = PathBuf::from(test_case.input);
