@@ -1,7 +1,7 @@
 use derive_more::Deref;
 use std::fmt;
 
-#[derive(Clone, Copy, Deref, PartialEq, Eq)]
+#[derive(Default, Clone, Copy, Deref, PartialEq, Eq)]
 pub struct FourCC(pub(crate) [u8; 4]);
 
 impl FourCC {
@@ -42,12 +42,17 @@ impl PartialEq<[u8; 4]> for FourCC {
 
 impl fmt::Display for FourCC {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}",
-            std::str::from_utf8(&self.0)
-                .map_or_else(|_| convert_mac_roman_to_utf8(&self.0), ToOwned::to_owned)
-        )
+        let fourcc = std::str::from_utf8(&self.0)
+            .map_or_else(|_| convert_mac_roman_to_utf8(&self.0), ToOwned::to_owned);
+        if fourcc
+            .trim_matches(|c| !char::is_ascii_alphanumeric(&c))
+            .is_empty()
+        {
+            // show bytes when not valid
+            fmt::Debug::fmt(&self.0, f)
+        } else {
+            write!(f, "{fourcc}")
+        }
     }
 }
 
