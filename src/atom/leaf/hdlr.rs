@@ -31,12 +31,12 @@ pub enum HandlerType {
     Mdir,
     Subtitle,
     Timecode,
-    Unknown([u8; 4]),
+    Unknown(FourCC),
 }
 
 impl Default for HandlerType {
     fn default() -> Self {
-        Self::Unknown([0u8; 4])
+        Self::Unknown(FourCC([0u8; 4]))
     }
 }
 
@@ -51,7 +51,7 @@ impl HandlerType {
             HANDLER_MDIR => HandlerType::Mdir,
             HANDLER_SUBTITLE => HandlerType::Subtitle,
             HANDLER_TIMECODE => HandlerType::Timecode,
-            _ => HandlerType::Unknown(*bytes),
+            _ => HandlerType::Unknown(FourCC::new(bytes)),
         }
     }
 
@@ -65,7 +65,7 @@ impl HandlerType {
             HandlerType::Mdir => *HANDLER_MDIR,
             HandlerType::Subtitle => *HANDLER_SUBTITLE,
             HandlerType::Timecode => *HANDLER_TIMECODE,
-            HandlerType::Unknown(bytes) => *bytes,
+            HandlerType::Unknown(fourcc) => fourcc.into_bytes(),
         }
     }
 
@@ -100,13 +100,13 @@ pub struct HandlerReferenceAtom {
     #[builder(default = [0u8; 3])]
     pub flags: [u8; 3],
     /// Component type (pre-defined, usually 0)
-    #[builder(default = [0u8; 4])]
-    pub component_type: [u8; 4],
+    #[builder(default = FourCC([0u8; 4]))]
+    pub component_type: FourCC,
     /// Handler type (4CC code indicating the type of media handler)
     pub handler_type: HandlerType,
     /// Component manufacturer (usually 0)
-    #[builder(default = [0u8; 4])]
-    pub component_manufacturer: [u8; 4],
+    #[builder(default = FourCC([0u8; 4]))]
+    pub component_manufacturer: FourCC,
     /// Component flags (usually 0)
     #[builder(default = 0)]
     pub component_flags: u32,
@@ -199,6 +199,8 @@ impl SerializeAtom for HandlerReferenceAtom {
 }
 
 mod serializer {
+    use crate::FourCC;
+
     use super::{HandlerName, HandlerReferenceAtom, HandlerType};
 
     pub fn serialize_hdlr_atom(atom: HandlerReferenceAtom) -> Vec<u8> {
@@ -225,7 +227,7 @@ mod serializer {
         flags.to_vec()
     }
 
-    fn component_type(component_type: [u8; 4]) -> Vec<u8> {
+    fn component_type(component_type: FourCC) -> Vec<u8> {
         component_type.to_vec()
     }
 
@@ -233,7 +235,7 @@ mod serializer {
         handler_type.to_bytes().to_vec()
     }
 
-    fn component_manufacturer(manufacturer: [u8; 4]) -> Vec<u8> {
+    fn component_manufacturer(manufacturer: FourCC) -> Vec<u8> {
         manufacturer.to_vec()
     }
 
@@ -282,7 +284,10 @@ mod parser {
     };
 
     use super::{HandlerName, HandlerReferenceAtom, HandlerType};
-    use crate::atom::util::parser::{byte_array, flags3, stream, version, Stream};
+    use crate::{
+        atom::util::parser::{byte_array, flags3, fourcc, stream, version, Stream},
+        FourCC,
+    };
 
     pub fn parse_hdlr_data(input: &[u8]) -> Result<HandlerReferenceAtom, crate::ParseError> {
         parse_hdlr_data_inner
@@ -308,10 +313,10 @@ mod parser {
         .parse_next(input)
     }
 
-    fn component_type(input: &mut Stream<'_>) -> ModalResult<[u8; 4]> {
+    fn component_type(input: &mut Stream<'_>) -> ModalResult<FourCC> {
         trace(
             "component_type",
-            byte_array.context(StrContext::Label("component_type")),
+            fourcc.context(StrContext::Label("component_type")),
         )
         .parse_next(input)
     }
@@ -326,10 +331,10 @@ mod parser {
         .parse_next(input)
     }
 
-    fn component_manufacturer(input: &mut Stream<'_>) -> ModalResult<[u8; 4]> {
+    fn component_manufacturer(input: &mut Stream<'_>) -> ModalResult<FourCC> {
         trace(
             "component_manufacturer",
-            byte_array.context(StrContext::Label("component_manufacturer")),
+            fourcc.context(StrContext::Label("component_manufacturer")),
         )
         .parse_next(input)
     }
@@ -401,6 +406,7 @@ mod parser {
     mod tests {
 
         use super::*;
+        use crate::FourCC;
 
         #[test]
         fn test_handler_type_from_bytes() {
@@ -410,7 +416,7 @@ mod parser {
             assert_eq!(HandlerType::from_bytes(b"meta"), HandlerType::Meta);
             assert_eq!(
                 HandlerType::from_bytes(b"abcd"),
-                HandlerType::Unknown(*b"abcd")
+                HandlerType::Unknown(FourCC::new(b"abcd"))
             );
         }
 
@@ -421,7 +427,7 @@ mod parser {
             assert_eq!(video_handler.as_str(), "Video");
             assert_eq!(video_handler.to_bytes(), *b"vide");
 
-            let unknown_handler = HandlerType::Unknown(*b"test");
+            let unknown_handler = HandlerType::Unknown(FourCC::new(b"test"));
             assert!(!unknown_handler.is_media_handler());
             assert_eq!(unknown_handler.as_str(), "Unknown");
             assert_eq!(unknown_handler.to_bytes(), *b"test");
