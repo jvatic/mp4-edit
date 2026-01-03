@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     atom::{
-        atom_ref::{AtomRef, AtomRefMut},
+        atom_ref::{unwrap_atom_data, AtomRef, AtomRefMut},
         elst::EditEntry,
         stsd::{
             AudioSampleEntry, BtrtExtension, DecoderSpecificInfo, EsdsExtension, SampleEntry,
@@ -18,10 +18,10 @@ use crate::{
         EdtsAtomRef, EdtsAtomRefMut, MdiaAtomRef, MdiaAtomRefMut, TrackHeaderAtom,
         TrackReferenceAtom, EDTS, MDIA,
     },
-    unwrap_atom_data, Atom, AtomData,
+    Atom, AtomData, FourCC,
 };
 
-pub const TRAK: &[u8; 4] = b"trak";
+pub const TRAK: FourCC = FourCC::new(b"trak");
 
 #[derive(Clone, Copy)]
 pub struct TrakAtomRef<'a>(AtomRef<'a>);

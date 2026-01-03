@@ -1,25 +1,21 @@
 use anyhow::anyhow;
 use bon::bon;
 use derive_more::{Deref, DerefMut};
-use futures_io::AsyncRead;
-use std::{
-    fmt,
-    ops::{Deref, Range},
-};
+use std::{fmt, ops::Range};
 
 use crate::{
     atom::{
         stsz::RemovedSampleSizes,
-        util::{read_to_end, DebugList, DebugUpperHex},
+        util::{DebugList, DebugUpperHex},
         FourCC,
     },
-    parser::ParseAtom,
+    parser::ParseAtomData,
     writer::SerializeAtom,
     ParseError,
 };
 
-pub const STCO: &[u8; 4] = b"stco";
-pub const CO64: &[u8; 4] = b"co64";
+pub const STCO: FourCC = FourCC::new(b"stco");
+pub const CO64: FourCC = FourCC::new(b"co64");
 
 #[derive(Default, Clone, Deref, DerefMut, PartialEq, Eq)]
 pub struct ChunkOffsets(Vec<u64>);
@@ -194,17 +190,16 @@ impl<S: chunk_offset_atom_builder::State> ChunkOffsetAtomBuilder<S> {
     }
 }
 
-impl ParseAtom for ChunkOffsetAtom {
-    async fn parse<R: AsyncRead + Unpin + Send>(
-        atom_type: FourCC,
-        reader: R,
-    ) -> Result<Self, ParseError> {
-        let data = read_to_end(reader).await?;
-        match atom_type.deref() {
-            STCO => parser::parse_stco_data(&data),
-            CO64 => parser::parse_co64_data(&data),
-            _ => return Err(ParseError::new_unexpected_atom(atom_type, STCO)),
-        }
+impl ParseAtomData for ChunkOffsetAtom {
+    fn parse_atom_data(atom_type: FourCC, input: &[u8]) -> Result<Self, ParseError> {
+        crate::atom::util::parser::assert_atom_type!(atom_type, STCO, CO64);
+        use crate::atom::util::parser::stream;
+        use winnow::Parser;
+        Ok(match atom_type {
+            STCO => parser::parse_stco_data.parse(stream(input))?,
+            CO64 => parser::parse_co64_data.parse(stream(input))?,
+            _ => unreachable!(),
+        })
     }
 }
 
@@ -212,9 +207,9 @@ impl SerializeAtom for ChunkOffsetAtom {
     fn atom_type(&self) -> FourCC {
         // Use the appropriate atom type based on is_64bit
         if self.is_64bit {
-            FourCC(*CO64)
+            CO64
         } else {
-            FourCC(*STCO)
+            STCO
         }
     }
 
@@ -257,22 +252,18 @@ mod parser {
         binary::{be_u32, be_u64},
         combinator::{empty, repeat, seq, trace},
         error::{ContextError, ErrMode, StrContext},
-        Parser,
+        ModalResult, Parser,
     };
 
     use super::{ChunkOffsetAtom, ChunkOffsets};
-    use crate::atom::util::parser::{byte_array, stream, version, Stream};
+    use crate::atom::util::parser::{byte_array, version, Stream};
 
-    pub fn parse_stco_data(input: &[u8]) -> Result<ChunkOffsetAtom, crate::ParseError> {
-        parse_stco_co64_data_inner(false)
-            .parse(stream(input))
-            .map_err(crate::ParseError::from_winnow)
+    pub fn parse_stco_data(input: &mut Stream<'_>) -> ModalResult<ChunkOffsetAtom> {
+        parse_stco_co64_data_inner(false).parse_next(input)
     }
 
-    pub fn parse_co64_data(input: &[u8]) -> Result<ChunkOffsetAtom, crate::ParseError> {
-        parse_stco_co64_data_inner(true)
-            .parse(stream(input))
-            .map_err(crate::ParseError::from_winnow)
+    pub fn parse_co64_data(input: &mut Stream<'_>) -> ModalResult<ChunkOffsetAtom> {
+        parse_stco_co64_data_inner(true).parse_next(input)
     }
 
     fn parse_stco_co64_data_inner<'i>(
@@ -317,12 +308,12 @@ mod parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atom::test_utils::test_atom_roundtrip_sync;
+    use crate::atom::test_utils::test_atom_roundtrip;
 
     /// Test round-trip for all available stco/co64 test data files
     #[test]
     fn test_stco_co64_roundtrip() {
-        test_atom_roundtrip_sync::<ChunkOffsetAtom>(STCO);
-        test_atom_roundtrip_sync::<ChunkOffsetAtom>(CO64);
+        test_atom_roundtrip::<ChunkOffsetAtom>(STCO);
+        test_atom_roundtrip::<ChunkOffsetAtom>(CO64);
     }
 }

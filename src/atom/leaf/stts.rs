@@ -1,7 +1,6 @@
 use bon::{bon, Builder};
 use derive_more::{Deref, DerefMut};
 
-use futures_io::AsyncRead;
 use rangemap::RangeSet;
 use std::{
     fmt::{self, Debug},
@@ -9,16 +8,13 @@ use std::{
 };
 
 use crate::{
-    atom::{
-        util::{read_to_end, DebugList},
-        FourCC,
-    },
-    parser::ParseAtom,
+    atom::{util::DebugList, FourCC},
+    parser::ParseAtomData,
     writer::SerializeAtom,
     ParseError,
 };
 
-pub const STTS: &[u8; 4] = b"stts";
+pub const STTS: FourCC = FourCC::new(b"stts");
 
 #[derive(Default, Clone, Deref, DerefMut)]
 pub struct TimeToSampleEntries(Vec<TimeToSampleEntry>);
@@ -299,22 +295,18 @@ impl From<Vec<TimeToSampleEntry>> for TimeToSampleAtom {
     }
 }
 
-impl ParseAtom for TimeToSampleAtom {
-    async fn parse<R: AsyncRead + Unpin + Send>(
-        atom_type: FourCC,
-        reader: R,
-    ) -> Result<Self, ParseError> {
-        if atom_type != STTS {
-            return Err(ParseError::new_unexpected_atom(atom_type, STTS));
-        }
-        let data = read_to_end(reader).await?;
-        parser::parse_stts_data(&data)
+impl ParseAtomData for TimeToSampleAtom {
+    fn parse_atom_data(atom_type: FourCC, input: &[u8]) -> Result<Self, ParseError> {
+        crate::atom::util::parser::assert_atom_type!(atom_type, STTS);
+        use crate::atom::util::parser::stream;
+        use winnow::Parser;
+        Ok(parser::parse_stts_data.parse(stream(input))?)
     }
 }
 
 impl SerializeAtom for TimeToSampleAtom {
     fn atom_type(&self) -> FourCC {
-        FourCC(*STTS)
+        STTS
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
@@ -354,15 +346,9 @@ mod parser {
     };
 
     use super::{TimeToSampleAtom, TimeToSampleEntries, TimeToSampleEntry};
-    use crate::atom::util::parser::{flags3, stream, version, Stream};
+    use crate::atom::util::parser::{flags3, version, Stream};
 
-    pub fn parse_stts_data(input: &[u8]) -> Result<TimeToSampleAtom, crate::ParseError> {
-        parse_stts_data_inner
-            .parse(stream(input))
-            .map_err(crate::ParseError::from_winnow)
-    }
-
-    fn parse_stts_data_inner(input: &mut Stream<'_>) -> ModalResult<TimeToSampleAtom> {
+    pub fn parse_stts_data(input: &mut Stream<'_>) -> ModalResult<TimeToSampleAtom> {
         trace(
             "stts",
             seq!(TimeToSampleAtom {
@@ -395,12 +381,12 @@ mod tests {
     use std::ops::Bound;
 
     use super::*;
-    use crate::atom::test_utils::test_atom_roundtrip_sync;
+    use crate::atom::test_utils::test_atom_roundtrip;
 
     /// Test round-trip for all available stts test data files
     #[test]
     fn test_stts_roundtrip() {
-        test_atom_roundtrip_sync::<TimeToSampleAtom>(STTS);
+        test_atom_roundtrip::<TimeToSampleAtom>(STTS);
     }
 
     struct TrimDurationTestCase {

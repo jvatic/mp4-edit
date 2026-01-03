@@ -1,15 +1,9 @@
 use derive_more::Display;
-use futures_io::AsyncRead;
 
 pub use crate::atom::stsd::extension::{
     BtrtExtension, DecoderSpecificInfo, EsdsExtension, StsdExtension,
 };
-use crate::{
-    atom::{util::read_to_end, FourCC},
-    parser::ParseAtom,
-    writer::SerializeAtom,
-    ParseError,
-};
+use crate::{atom::FourCC, parser::ParseAtomData, writer::SerializeAtom, ParseError};
 
 mod audio;
 mod extension;
@@ -18,7 +12,7 @@ mod text;
 pub use audio::*;
 pub use text::*;
 
-pub const STSD: &[u8; 4] = b"stsd";
+pub const STSD: FourCC = FourCC::new(b"stsd");
 
 pub const SAMPLE_ENTRY_MP4A: FourCC = FourCC::new(b"mp4a"); // AAC audio
 pub const SAMPLE_ENTRY_AAVD: FourCC = FourCC::new(b"aavd"); // Audible Audio
@@ -125,22 +119,18 @@ impl SampleDescriptionTableAtom {
     }
 }
 
-impl ParseAtom for SampleDescriptionTableAtom {
-    async fn parse<R: AsyncRead + Unpin + Send>(
-        atom_type: FourCC,
-        reader: R,
-    ) -> Result<Self, ParseError> {
-        if atom_type != STSD {
-            return Err(ParseError::new_unexpected_atom(atom_type, STSD));
-        }
-        let data = read_to_end(reader).await?;
-        parser::parse_stsd_data(&data)
+impl ParseAtomData for SampleDescriptionTableAtom {
+    fn parse_atom_data(atom_type: FourCC, input: &[u8]) -> Result<Self, ParseError> {
+        crate::atom::util::parser::assert_atom_type!(atom_type, STSD);
+        use crate::atom::util::parser::stream;
+        use winnow::Parser;
+        Ok(parser::parse_stsd_data.parse(stream(input))?)
     }
 }
 
 impl SerializeAtom for SampleDescriptionTableAtom {
     fn atom_type(&self) -> FourCC {
-        FourCC::new(STSD)
+        STSD
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
@@ -205,19 +195,11 @@ mod parser {
         SampleDescriptionTableAtom, SampleEntry, SampleEntryData, SampleEntryType,
     };
     use crate::atom::util::parser::{
-        byte_array, combinators::inclusive_length_and_then, flags3, fourcc, rest_vec, stream,
-        version, Stream,
+        byte_array, combinators::inclusive_length_and_then, flags3, fourcc, rest_vec, version,
+        Stream,
     };
 
-    pub fn parse_stsd_data(input: &[u8]) -> Result<SampleDescriptionTableAtom, crate::ParseError> {
-        parse_stsd_data_inner
-            .parse(stream(input))
-            .map_err(crate::ParseError::from_winnow)
-    }
-
-    pub fn parse_stsd_data_inner(
-        input: &mut Stream<'_>,
-    ) -> ModalResult<SampleDescriptionTableAtom> {
+    pub fn parse_stsd_data(input: &mut Stream<'_>) -> ModalResult<SampleDescriptionTableAtom> {
         seq!(SampleDescriptionTableAtom {
             version: version.verify(|v| *v == 0),
             flags: flags3,
@@ -257,13 +239,13 @@ mod parser {
 
 #[cfg(test)]
 mod tests {
-    use crate::atom::test_utils::test_atom_roundtrip_sync;
+    use crate::atom::test_utils::test_atom_roundtrip;
 
     use super::*;
 
     /// Test round-trip for all available stsd test data files
     #[test]
     fn test_stsd_roundtrip() {
-        test_atom_roundtrip_sync::<SampleDescriptionTableAtom>(STSD);
+        test_atom_roundtrip::<SampleDescriptionTableAtom>(STSD);
     }
 }

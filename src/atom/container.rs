@@ -22,15 +22,17 @@ pub use stbl::*;
 pub use trak::*;
 pub use udta::*;
 
-pub const MFRA: &[u8; 4] = b"mfra";
-pub const DINF: &[u8; 4] = b"dinf";
-pub const MOOF: &[u8; 4] = b"moof";
-pub const TRAF: &[u8; 4] = b"traf";
-pub const SINF: &[u8; 4] = b"sinf";
-pub const SCHI: &[u8; 4] = b"schi";
+use crate::FourCC;
+
+pub const MFRA: FourCC = FourCC::new(b"mfra");
+pub const DINF: FourCC = FourCC::new(b"dinf");
+pub const MOOF: FourCC = FourCC::new(b"moof");
+pub const TRAF: FourCC = FourCC::new(b"traf");
+pub const SINF: FourCC = FourCC::new(b"sinf");
+pub const SCHI: FourCC = FourCC::new(b"schi");
 
 /// Determines whether a given atom type (fourcc) should be treated as a container for other atoms.
-pub fn is_container_atom(atom_type: &[u8; 4]) -> bool {
+pub fn is_container_atom(atom_type: FourCC) -> bool {
     // Common container types in MP4
     matches!(
         atom_type,

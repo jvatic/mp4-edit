@@ -1,25 +1,19 @@
 use bon::Builder;
 use core::fmt;
-use futures_io::AsyncRead;
 
-use crate::{
-    atom::{util::read_to_end, FourCC},
-    parser::ParseAtom,
-    writer::SerializeAtom,
-    ParseError,
-};
+use crate::{atom::FourCC, parser::ParseAtomData, writer::SerializeAtom, ParseError};
 
-pub const HDLR: &[u8; 4] = b"hdlr";
+pub const HDLR: FourCC = FourCC::new(b"hdlr");
 
 // Common handler types
-pub const HANDLER_VIDEO: &[u8; 4] = b"vide";
-pub const HANDLER_AUDIO: &[u8; 4] = b"soun";
-pub const HANDLER_HINT: &[u8; 4] = b"hint";
-pub const HANDLER_META: &[u8; 4] = b"meta";
-pub const HANDLER_TEXT: &[u8; 4] = b"text";
-pub const HANDLER_MDIR: &[u8; 4] = b"mdir";
-pub const HANDLER_SUBTITLE: &[u8; 4] = b"subt";
-pub const HANDLER_TIMECODE: &[u8; 4] = b"tmcd";
+pub const HANDLER_VIDEO: FourCC = FourCC::new(b"vide");
+pub const HANDLER_AUDIO: FourCC = FourCC::new(b"soun");
+pub const HANDLER_HINT: FourCC = FourCC::new(b"hint");
+pub const HANDLER_META: FourCC = FourCC::new(b"meta");
+pub const HANDLER_TEXT: FourCC = FourCC::new(b"text");
+pub const HANDLER_MDIR: FourCC = FourCC::new(b"mdir");
+pub const HANDLER_SUBTITLE: FourCC = FourCC::new(b"subt");
+pub const HANDLER_TIMECODE: FourCC = FourCC::new(b"tmcd");
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HandlerType {
@@ -42,7 +36,7 @@ impl Default for HandlerType {
 
 impl HandlerType {
     pub fn from_bytes(bytes: &[u8; 4]) -> Self {
-        match bytes {
+        match FourCC::new(bytes) {
             HANDLER_VIDEO => HandlerType::Video,
             HANDLER_AUDIO => HandlerType::Audio,
             HANDLER_HINT => HandlerType::Hint,
@@ -175,22 +169,18 @@ impl HandlerName {
     }
 }
 
-impl ParseAtom for HandlerReferenceAtom {
-    async fn parse<R: AsyncRead + Unpin + Send>(
-        atom_type: FourCC,
-        reader: R,
-    ) -> Result<Self, ParseError> {
-        if atom_type != HDLR {
-            return Err(ParseError::new_unexpected_atom(atom_type, HDLR));
-        }
-        let data = read_to_end(reader).await?;
-        parser::parse_hdlr_data(&data)
+impl ParseAtomData for HandlerReferenceAtom {
+    fn parse_atom_data(atom_type: FourCC, input: &[u8]) -> Result<Self, ParseError> {
+        crate::atom::util::parser::assert_atom_type!(atom_type, HDLR);
+        use crate::atom::util::parser::stream;
+        use winnow::Parser;
+        Ok(parser::parse_hdlr_data.parse(stream(input))?)
     }
 }
 
 impl SerializeAtom for HandlerReferenceAtom {
     fn atom_type(&self) -> FourCC {
-        FourCC(*HDLR)
+        HDLR
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
@@ -285,17 +275,11 @@ mod parser {
 
     use super::{HandlerName, HandlerReferenceAtom, HandlerType};
     use crate::{
-        atom::util::parser::{byte_array, flags3, fourcc, stream, version, Stream},
+        atom::util::parser::{byte_array, flags3, fourcc, version, Stream},
         FourCC,
     };
 
-    pub fn parse_hdlr_data(input: &[u8]) -> Result<HandlerReferenceAtom, crate::ParseError> {
-        parse_hdlr_data_inner
-            .parse(stream(input))
-            .map_err(crate::ParseError::from_winnow)
-    }
-
-    fn parse_hdlr_data_inner(input: &mut Stream<'_>) -> ModalResult<HandlerReferenceAtom> {
+    pub fn parse_hdlr_data(input: &mut Stream<'_>) -> ModalResult<HandlerReferenceAtom> {
         trace(
             "hdlr",
             seq!(HandlerReferenceAtom {
@@ -406,7 +390,7 @@ mod parser {
     mod tests {
 
         use super::*;
-        use crate::FourCC;
+        use crate::{atom::util::parser::stream, FourCC};
 
         #[test]
         fn test_handler_type_from_bytes() {
@@ -477,11 +461,11 @@ mod parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atom::test_utils::test_atom_roundtrip_sync;
+    use crate::atom::test_utils::test_atom_roundtrip;
 
     /// Test round-trip for all available hdlr test data files
     #[test]
     fn test_hdlr_roundtrip() {
-        test_atom_roundtrip_sync::<HandlerReferenceAtom>(HDLR);
+        test_atom_roundtrip::<HandlerReferenceAtom>(HDLR);
     }
 }

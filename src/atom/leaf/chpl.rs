@@ -1,19 +1,15 @@
 use bon::bon;
 use derive_more::Deref;
-use futures_io::AsyncRead;
 use std::{fmt, time::Duration};
 
 use crate::{
-    atom::{
-        util::{read_to_end, DebugList},
-        FourCC,
-    },
-    parser::ParseAtom,
+    atom::{util::DebugList, FourCC},
+    parser::ParseAtomData,
     writer::SerializeAtom,
     ParseError,
 };
 
-pub const CHPL: &[u8; 4] = b"chpl";
+pub const CHPL: FourCC = FourCC::new(b"chpl");
 
 #[derive(Default, Clone, Deref)]
 pub struct ChapterEntries(Vec<ChapterEntry>);
@@ -98,22 +94,18 @@ impl ChapterListAtom {
     }
 }
 
-impl ParseAtom for ChapterListAtom {
-    async fn parse<R: AsyncRead + Unpin + Send>(
-        atom_type: FourCC,
-        reader: R,
-    ) -> Result<Self, ParseError> {
-        if atom_type != CHPL {
-            return Err(ParseError::new_unexpected_atom(atom_type, CHPL));
-        }
-        let data = read_to_end(reader).await?;
-        parser::parse_chpl_data(&data)
+impl ParseAtomData for ChapterListAtom {
+    fn parse_atom_data(atom_type: FourCC, input: &[u8]) -> Result<Self, ParseError> {
+        crate::atom::util::parser::assert_atom_type!(atom_type, CHPL);
+        use crate::atom::util::parser::stream;
+        use winnow::Parser;
+        Ok(parser::parse_chpl_data.parse(stream(input))?)
     }
 }
 
 impl SerializeAtom for ChapterListAtom {
     fn atom_type(&self) -> FourCC {
-        FourCC(*CHPL)
+        CHPL
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
@@ -196,16 +188,10 @@ mod parser {
     use super::ChapterListAtom;
     use crate::atom::{
         chpl::{ChapterEntries, ChapterEntry},
-        util::parser::{byte_array, stream, version, Stream},
+        util::parser::{byte_array, version, Stream},
     };
 
-    pub fn parse_chpl_data(input: &[u8]) -> Result<ChapterListAtom, crate::ParseError> {
-        parse_chpl_data_inner
-            .parse(stream(input))
-            .map_err(crate::ParseError::from_winnow)
-    }
-
-    fn parse_chpl_data_inner(input: &mut Stream<'_>) -> ModalResult<ChapterListAtom> {
+    pub fn parse_chpl_data(input: &mut Stream<'_>) -> ModalResult<ChapterListAtom> {
         trace(
             "chpl",
             seq!(ChapterListAtom {
@@ -252,11 +238,11 @@ mod parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atom::test_utils::test_atom_roundtrip_sync;
+    use crate::atom::test_utils::test_atom_roundtrip;
 
     /// Test round-trip for all available chpl test data files
     #[test]
     fn test_chpl_roundtrip() {
-        test_atom_roundtrip_sync::<ChapterListAtom>(CHPL);
+        test_atom_roundtrip::<ChapterListAtom>(CHPL);
     }
 }

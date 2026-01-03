@@ -1,10 +1,9 @@
 //! Test utilities for atom round-trip testing
 
-use crate::atom::FourCC;
-use crate::parser::ParseAtom;
+use crate::atom::{util::parser::stream, FourCC};
+use crate::parser::ParseAtomData;
 use crate::writer::SerializeAtom;
 use anyhow::{Context, Result};
-use futures_util::io::Cursor;
 use std::fs;
 
 pub mod test_file {
@@ -203,9 +202,9 @@ pub mod test_file {
 ///
 /// test_atom_roundtrip::<ItemListAtom>(ILST).unwrap();
 /// ```
-pub async fn test_atom_roundtrip<T>(atom_type_bytes: &[u8; 4]) -> Result<()>
+pub(crate) fn test_atom_roundtrip_inner<T>(atom_type_bytes: &[u8; 4]) -> Result<()>
 where
-    T: ParseAtom + SerializeAtom + Send + Clone + std::fmt::Debug,
+    T: ParseAtomData + SerializeAtom + Send + Clone + std::fmt::Debug,
 {
     let atom_type_str = std::str::from_utf8(atom_type_bytes)
         .unwrap_or_else(|_| panic!("Invalid atom type bytes: {:?}", atom_type_bytes));
@@ -225,19 +224,16 @@ where
 
     for tc in test_cases {
         println!("Testing: {}", tc);
-        test_atom_roundtrip_single::<T>(atom_type_bytes, tc).await?;
+        test_atom_roundtrip_single::<T>(atom_type_bytes, tc)?;
     }
 
     Ok(())
 }
 
 /// Tests a single file for round-trip consistency
-async fn test_atom_roundtrip_single<T>(
-    atom_type_bytes: &[u8; 4],
-    tc: test_file::TestCase,
-) -> Result<()>
+fn test_atom_roundtrip_single<T>(atom_type_bytes: &[u8; 4], tc: test_file::TestCase) -> Result<()>
 where
-    T: ParseAtom + SerializeAtom + Send + Clone + std::fmt::Debug,
+    T: ParseAtomData + SerializeAtom + Send + Clone + std::fmt::Debug,
 {
     let input_data =
         fs::read(tc.input_file()).unwrap_or_else(|_| panic!("Failed to read test file: {}", tc));
@@ -270,16 +266,15 @@ where
 
     // Parse the atom data
     let fourcc = FourCC::from(*atom_type_bytes);
-    let cursor = Cursor::new(input_data);
-    let parsed_atom = T::parse(fourcc, cursor)
-        .await
+    let mut input = stream(input_data);
+    let parsed_atom = T::parse_atom_data(fourcc, &mut input)
         .unwrap_or_else(|e| panic!("Failed to parse atom from {}: {:#?}", tc, e));
 
     // Serialize the atom back to bytes
     let re_encoded = parsed_atom.clone().into_body_bytes();
 
-    let cursor = Cursor::new(re_encoded.clone());
-    match T::parse(fourcc, cursor).await {
+    let mut input = stream(&re_encoded);
+    match T::parse_atom_data(fourcc, &mut input) {
         Ok(_) => {}
         Err(_) => {
             println!("{parsed_atom:#?}");
@@ -434,7 +429,7 @@ pub fn assert_bytes_equal(actual: &[u8], expected: &[u8]) {
     )
 }
 
-/// Synchronous version of the round-trip test for use in `#[test]` functions
+/// Round-trip test for use in `#[test]` functions
 ///
 /// # Arguments
 /// * `atom_type_bytes` - The 4-byte atom type identifier
@@ -444,18 +439,17 @@ pub fn assert_bytes_equal(actual: &[u8], expected: &[u8]) {
 ///
 /// # Example
 /// ```
-/// use mp4_edit::atom::test_utils::test_atom_roundtrip_sync;
+/// use mp4_edit::atom::test_utils::test_atom_roundtrip;
 /// use mp4_edit::atom::ilst::{ItemListAtom, ILST};
 ///
 /// fn test_ilst_roundtrip() {
-///     test_atom_roundtrip_sync::<ItemListAtom>(ILST);
+///     test_atom_roundtrip::<ItemListAtom>(ILST);
 /// }
 /// ```
-pub fn test_atom_roundtrip_sync<T>(atom_type_bytes: &[u8; 4])
+pub(crate) fn test_atom_roundtrip<T>(atom_type: impl Into<FourCC>)
 where
-    T: ParseAtom + SerializeAtom + Send + Clone + std::fmt::Debug,
+    T: ParseAtomData + SerializeAtom + Send + Clone + std::fmt::Debug,
 {
-    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-    rt.block_on(async { test_atom_roundtrip::<T>(atom_type_bytes).await })
-        .expect("Round-trip test failed");
+    let atom_type: FourCC = atom_type.into();
+    test_atom_roundtrip_inner::<T>(atom_type.as_bytes()).expect("Round-trip test failed");
 }

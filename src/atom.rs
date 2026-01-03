@@ -15,9 +15,7 @@ pub mod leaf;
 use bon::bon;
 
 use crate::{
-    parser::{ParseAtom, ParseErrorKind},
-    writer::SerializeAtom,
-    ParseError,
+    atom::util::parser::rest_vec, parser::ParseAtomData, writer::SerializeAtom, ParseError,
 };
 
 pub use self::{container::*, fourcc::*, leaf::*};
@@ -43,22 +41,12 @@ impl RawData {
     }
 }
 
-impl ParseAtom for RawData {
-    async fn parse<R: futures_io::AsyncRead + Unpin + Send>(
-        atom_type: FourCC,
-        mut reader: R,
-    ) -> Result<Self, ParseError> {
-        use futures_util::AsyncReadExt;
-        let mut buffer = Vec::new();
-        reader
-            .read_to_end(&mut buffer)
-            .await
-            .map_err(|err| ParseError {
-                kind: ParseErrorKind::Io,
-                location: None,
-                source: Some(Box::new(err)),
-            })?;
-        Ok(RawData::new(atom_type, buffer).into())
+impl ParseAtomData for RawData {
+    fn parse_atom_data(atom_type: FourCC, input: &[u8]) -> Result<Self, ParseError> {
+        use crate::atom::util::parser::stream;
+        use winnow::Parser;
+        let data = rest_vec.parse(stream(input))?;
+        Ok(RawData::new(atom_type, data).into())
     }
 }
 
@@ -196,14 +184,13 @@ macro_rules! define_atom_data {
             }
         )+
 
-        impl ParseAtom for $enum {
-            async fn parse<R: futures_io::AsyncRead + Unpin + Send>(
+        impl ParseAtomData for $enum {
+            fn parse_atom_data(
                 atom_type: FourCC,
-                reader: R,
+                input: &[u8],
             ) -> Result<Self, ParseError> {
-                use std::ops::Deref;
-                match atom_type.deref() {
-                    $($pattern => $struct::parse(atom_type, reader).await.map($enum::from), )+
+                match atom_type {
+                    $($pattern => $struct::parse_atom_data(atom_type, input).map($enum::from), )+
                 }
             }
         }

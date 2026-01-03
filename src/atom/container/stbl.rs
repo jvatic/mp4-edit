@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
-use crate::atom::atom_ref;
-use crate::unwrap_atom_data;
+use crate::atom::atom_ref::{self, unwrap_atom_data};
+use crate::FourCC;
 use crate::{
     atom::{
         stco_co64::{ChunkOffsetAtom, STCO},
@@ -13,7 +13,7 @@ use crate::{
     Atom, AtomData,
 };
 
-pub const STBL: &[u8; 4] = b"stbl";
+pub const STBL: FourCC = FourCC::new(b"stbl");
 
 #[derive(Debug)]
 pub struct StblAtomRef<'a>(pub(crate) atom_ref::AtomRef<'a>);

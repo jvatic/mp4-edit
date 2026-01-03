@@ -5,16 +5,15 @@
 use anyhow::anyhow;
 use derive_more::Display;
 use futures_io::{AsyncRead, AsyncSeek};
-use futures_util::io::{AsyncReadExt, AsyncSeekExt, Cursor};
 use std::collections::VecDeque;
 use std::fmt::{self, Debug};
-use std::future::Future;
 use std::io::SeekFrom;
-use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use thiserror::Error;
 
+use crate::atom::util::parser::stream;
 use crate::chunk_offset_builder;
+pub use crate::reader::{Mp4Reader, NonSeekable, ReadCapability, Seekable};
 use crate::{
     atom::{
         atom_ref::{AtomRef, AtomRefMut},
@@ -34,17 +33,11 @@ use crate::{
 
 pub const MDAT: &[u8; 4] = b"mdat";
 
-/// Async trait for parsing atoms from an [`AsyncRead`] stream.
-///
-/// The reader must be bounded to the atom being parsed,
-/// i.e. [`AsyncReadExt::read_to_end`] always returns exactly the atom data.
+/// This trait is implemented on [`AtomData`] and the inner value of each of it's variants.
 ///
 /// Note that the [`AtomHeader`] has already been consumed, this trait is concerned with parsing the data.
-pub trait ParseAtom: Sized {
-    fn parse<R: AsyncRead + Unpin + Send>(
-        atom_type: FourCC,
-        reader: R,
-    ) -> impl Future<Output = Result<Self, ParseError>> + Send;
+pub(crate) trait ParseAtomData: Sized {
+    fn parse_atom_data(atom_type: FourCC, input: &[u8]) -> Result<Self, ParseError>;
 }
 
 #[derive(Debug, Error)]
@@ -87,19 +80,14 @@ pub enum ParseErrorKind {
 }
 
 impl ParseError {
-    pub(crate) fn new_unexpected_atom(atom_type: FourCC, expected: &[u8; 4]) -> Self {
-        let expected = FourCC::from(*expected);
-        Self {
-            kind: ParseErrorKind::UnexpectedAtom,
-            location: Some((0, 4)),
-            source: Some(anyhow!("expected {expected}, got {atom_type}").into_boxed_dyn_error()),
+    pub(crate) fn new_unexpected_atom_oneof(atom_type: FourCC, expected: Vec<FourCC>) -> Self {
+        if expected.len() == 1 {
+            return Self::new_unexpected_atom(atom_type, expected[0]);
         }
-    }
 
-    pub(crate) fn new_unexpected_atom_oneof(atom_type: FourCC, expected: Vec<&[u8; 4]>) -> Self {
         let expected = expected
             .into_iter()
-            .map(|expected| FourCC::from(*expected).to_string())
+            .map(|expected| expected.to_string())
             .collect::<Vec<_>>()
             .join(", ");
         Self {
@@ -108,6 +96,15 @@ impl ParseError {
             source: Some(
                 anyhow!("expected one of {expected}, got {atom_type}").into_boxed_dyn_error(),
             ),
+        }
+    }
+
+    fn new_unexpected_atom(atom_type: FourCC, expected: FourCC) -> Self {
+        let expected = FourCC::from(*expected);
+        Self {
+            kind: ParseErrorKind::UnexpectedAtom,
+            location: Some((0, 4)),
+            source: Some(anyhow!("expected {expected}, got {atom_type}").into_boxed_dyn_error()),
         }
     }
 
@@ -143,7 +140,7 @@ impl ParseError {
 
         Self {
             kind: crate::parser::ParseErrorKind::AtomParsing,
-            location: Some((error.offset(), error.offset())),
+            location: Some((error.offset(), 0)),
             source: match ctx_tree {
                 ctx if ctx.is_empty() => None,
                 ctx => Some(anyhow::format_err!("{}", ctx.join(" -> ")).into_boxed_dyn_error()),
@@ -152,102 +149,21 @@ impl ParseError {
     }
 }
 
-mod sealed {
-    pub trait Sealed {}
-}
-
-pub struct Seekable;
-pub struct NonSeekable;
-
-impl sealed::Sealed for Seekable {}
-impl sealed::Sealed for NonSeekable {}
-
-pub trait ReadCapability: sealed::Sealed {}
-
-impl ReadCapability for NonSeekable {}
-
-impl ReadCapability for Seekable {}
-
-pub struct Mp4Reader<R, C: ReadCapability> {
-    reader: R,
-    current_offset: usize,
-    peek_buffer: Vec<u8>,
-    _capability: PhantomData<C>,
-}
-
-impl<R: AsyncRead + Unpin + Send> Mp4Reader<R, NonSeekable> {
-    fn new(reader: R) -> Self {
-        Self {
-            reader,
-            current_offset: 0,
-            peek_buffer: Vec::new(),
-            _capability: PhantomData,
-        }
-    }
-}
-
-impl<R: AsyncRead + Unpin + Send, C: ReadCapability> Mp4Reader<R, C> {
-    async fn peek_exact(&mut self, buf: &mut [u8]) -> Result<(), ParseError> {
-        let size = buf.len();
-        if self.peek_buffer.len() < size {
-            let mut temp_buf = vec![0u8; size - self.peek_buffer.len()];
-            self.reader.read_exact(&mut temp_buf).await.map_err(|e| {
-                if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                    return ParseError {
-                        kind: ParseErrorKind::Eof,
-                        location: Some((self.current_offset, size)),
-                        source: Some(Box::new(e)),
-                    };
-                }
-                ParseError {
-                    kind: ParseErrorKind::Io,
-                    location: Some((self.current_offset, size)),
-                    source: Some(Box::new(e)),
-                }
-            })?;
-            self.peek_buffer.extend_from_slice(&temp_buf[..]);
-        }
-        buf.copy_from_slice(&self.peek_buffer[..size]);
-        Ok(())
-    }
-
-    async fn read_exact(&mut self, buf: &mut [u8]) -> Result<(), ParseError> {
-        self.peek_exact(buf).await?;
-        self.peek_buffer.drain(..buf.len());
-        self.current_offset += buf.len();
-        Ok(())
-    }
-
-    async fn read_data(&mut self, size: usize) -> Result<Vec<u8>, ParseError> {
-        let mut data = vec![0u8; size];
-        self.read_exact(&mut data).await?;
-        Ok(data)
-    }
-}
-
-impl<R: AsyncRead + AsyncSeek + Unpin + Send> Mp4Reader<R, Seekable> {
-    fn new(reader: R) -> Self {
-        Self {
-            reader,
-            current_offset: 0,
-            peek_buffer: Vec::new(),
-            _capability: PhantomData,
-        }
-    }
-
-    async fn seek(&mut self, pos: SeekFrom) -> Result<(), ParseError> {
-        match self.reader.seek(pos).await {
-            Ok(offset) => {
-                self.current_offset = offset as usize;
-                self.peek_buffer = Vec::new();
-                Ok(())
-            }
-            Err(err) => Err(ParseError {
-                kind: ParseErrorKind::Io,
-                location: None,
-                source: Some(Box::new(err)),
-            }),
-        }
+impl
+    From<
+        winnow::error::ParseError<
+            winnow::LocatingSlice<&winnow::Bytes>,
+            winnow::error::ContextError,
+        >,
+    > for ParseError
+{
+    fn from(
+        value: winnow::error::ParseError<
+            winnow::LocatingSlice<&winnow::Bytes>,
+            winnow::error::ContextError,
+        >,
+    ) -> Self {
+        ParseError::from_winnow(value)
     }
 }
 
@@ -343,9 +259,9 @@ impl<R: AsyncRead + Unpin + Send, C: ReadCapability> Parser<R, C> {
                 break;
             }
 
-            if is_container_atom(&header.atom_type) {
+            if is_container_atom(header.atom_type) {
                 // META containers have additional header data
-                let (size, data) = if header.atom_type.deref() == META {
+                let (size, data) = if header.atom_type == META {
                     // Handle META version and flags as RawData
                     let version_flags = self.reader.read_data(META_VERSION_FLAGS_SIZE).await?;
                     (
@@ -436,21 +352,20 @@ impl<R: AsyncRead + Unpin + Send, C: ReadCapability> Parser<R, C> {
 
     async fn parse_atom_data(&mut self, header: &AtomHeader) -> Result<AtomData, ParseError> {
         let content_data = self.reader.read_data(header.data_size).await?;
-        let cursor = Cursor::new(content_data);
+        let mut input = stream(&content_data);
 
-        AtomData::parse(header.atom_type, cursor)
-            .await
-            .map_err(|err| ParseError {
+        AtomData::parse_atom_data(header.atom_type, &mut input).map_err(|err| {
+            let (header_offset, _) = header.location();
+            let content_offset = header_offset + header.header_size;
+            ParseError {
                 kind: ParseErrorKind::AtomParsing,
                 location: Some(err.location.map_or_else(
-                    || header.location(),
-                    |(offset, size)| {
-                        let (header_offset, header_size) = header.location();
-                        (header_offset + offset, size.min(header_size))
-                    },
+                    || (content_offset, 0),
+                    |(offset, size)| (content_offset + offset, size),
                 )),
                 source: Some(anyhow::Error::from(err).context(header.atom_type).into()),
-            })
+            }
+        })
     }
 }
 
@@ -597,11 +512,11 @@ impl Metadata {
         }
     }
 
-    fn atom_position(&self, typ: &[u8; 4]) -> Option<usize> {
+    fn atom_position(&self, typ: FourCC) -> Option<usize> {
         self.atoms.iter().position(|a| a.header.atom_type == typ)
     }
 
-    fn find_atom(&self, typ: &[u8; 4]) -> AtomRef<'_> {
+    fn find_atom(&self, typ: FourCC) -> AtomRef<'_> {
         AtomRef(self.atoms.iter().find(|a| a.header.atom_type == typ))
     }
 

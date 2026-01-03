@@ -1,18 +1,18 @@
 use bon::Builder;
-use futures_io::AsyncRead;
+
 use std::time::Duration;
 
 use crate::{
     atom::{
-        util::{mp4_timestamp_now, read_to_end, scaled_duration, unscaled_duration},
+        util::{mp4_timestamp_now, scaled_duration, unscaled_duration},
         FourCC,
     },
-    parser::ParseAtom,
+    parser::ParseAtomData,
     writer::SerializeAtom,
     ParseError,
 };
 
-pub const MVHD: &[u8; 4] = b"mvhd";
+pub const MVHD: FourCC = FourCC::new(b"mvhd");
 
 #[derive(Debug, Clone, Builder)]
 pub struct MovieHeaderAtom {
@@ -81,22 +81,18 @@ impl MovieHeaderAtom {
     }
 }
 
-impl ParseAtom for MovieHeaderAtom {
-    async fn parse<R: AsyncRead + Unpin + Send>(
-        atom_type: FourCC,
-        reader: R,
-    ) -> Result<Self, ParseError> {
-        if atom_type != MVHD {
-            return Err(ParseError::new_unexpected_atom(atom_type, MVHD));
-        }
-        let data = read_to_end(reader).await?;
-        parser::parse_mvhd_data(&data)
+impl ParseAtomData for MovieHeaderAtom {
+    fn parse_atom_data(atom_type: FourCC, input: &[u8]) -> Result<Self, ParseError> {
+        crate::atom::util::parser::assert_atom_type!(atom_type, MVHD);
+        use crate::atom::util::parser::stream;
+        use winnow::Parser;
+        Ok(parser::parse_mvhd_data.parse(stream(input))?)
     }
 }
 
 impl SerializeAtom for MovieHeaderAtom {
     fn atom_type(&self) -> FourCC {
-        FourCC(*MVHD)
+        MVHD
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
@@ -161,17 +157,11 @@ mod parser {
 
     use super::MovieHeaderAtom;
     use crate::atom::util::parser::{
-        be_u32_as_u64, fixed_array, fixed_point_16x16, fixed_point_8x8, flags3, stream,
-        version_0_or_1, Stream,
+        be_u32_as_u64, fixed_array, fixed_point_16x16, fixed_point_8x8, flags3, version_0_or_1,
+        Stream,
     };
 
-    pub fn parse_mvhd_data(input: &[u8]) -> Result<MovieHeaderAtom, crate::ParseError> {
-        parse_mvhd_data_inner
-            .parse(stream(input))
-            .map_err(crate::ParseError::from_winnow)
-    }
-
-    fn parse_mvhd_data_inner(input: &mut Stream<'_>) -> ModalResult<MovieHeaderAtom> {
+    pub fn parse_mvhd_data(input: &mut Stream<'_>) -> ModalResult<MovieHeaderAtom> {
         let be_u32_or_u64 = |version: u8| {
             let be_u64_type_fix =
                 |input: &mut Stream<'_>| -> ModalResult<u64> { be_u64.parse_next(input) };
@@ -212,11 +202,11 @@ mod parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atom::test_utils::test_atom_roundtrip_sync;
+    use crate::atom::test_utils::test_atom_roundtrip;
 
     /// Test round-trip for all available mvhd test data files
     #[test]
     fn test_mvhd_roundtrip() {
-        test_atom_roundtrip_sync::<MovieHeaderAtom>(MVHD);
+        test_atom_roundtrip::<MovieHeaderAtom>(MVHD);
     }
 }

@@ -1,14 +1,13 @@
 use bon::Builder;
-use futures_io::AsyncRead;
 
 use crate::{
-    atom::{atom_ref, util::read_to_end, FourCC},
-    parser::ParseAtom,
+    atom::{atom_ref, FourCC},
+    parser::ParseAtomData,
     writer::SerializeAtom,
     AtomData, ParseError,
 };
 
-pub const FTYP: &[u8; 4] = b"ftyp";
+pub const FTYP: FourCC = FourCC::new(b"ftyp");
 
 #[derive(Debug, Clone, Copy)]
 pub struct FtypAtomRef<'a>(pub(crate) atom_ref::AtomRef<'a>);
@@ -67,16 +66,12 @@ impl Default for FileTypeAtom {
     }
 }
 
-impl ParseAtom for FileTypeAtom {
-    async fn parse<R: AsyncRead + Unpin + Send>(
-        atom_type: FourCC,
-        reader: R,
-    ) -> Result<Self, ParseError> {
-        if atom_type != FTYP {
-            return Err(ParseError::new_unexpected_atom(atom_type, FTYP));
-        }
-        let data = read_to_end(reader).await?;
-        parser::parse_ftyp_data(&data)
+impl ParseAtomData for FileTypeAtom {
+    fn parse_atom_data(atom_type: FourCC, input: &[u8]) -> Result<Self, ParseError> {
+        crate::atom::util::parser::assert_atom_type!(atom_type, FTYP);
+        use crate::atom::util::parser::stream;
+        use winnow::Parser;
+        Ok(parser::parse_ftyp_data.parse(stream(input))?)
     }
 }
 
@@ -89,15 +84,9 @@ mod parser {
     };
 
     use super::FileTypeAtom;
-    use crate::atom::util::parser::{fourcc, stream, Stream};
+    use crate::atom::util::parser::{fourcc, Stream};
 
-    pub fn parse_ftyp_data(input: &[u8]) -> Result<FileTypeAtom, crate::ParseError> {
-        parse_ftyp_data_inner
-            .parse(stream(input))
-            .map_err(crate::ParseError::from_winnow)
-    }
-
-    fn parse_ftyp_data_inner(input: &mut Stream<'_>) -> ModalResult<FileTypeAtom> {
+    pub fn parse_ftyp_data(input: &mut Stream<'_>) -> ModalResult<FileTypeAtom> {
         trace(
             "ftyp",
             seq!(FileTypeAtom {
@@ -115,7 +104,7 @@ mod parser {
 
 impl SerializeAtom for FileTypeAtom {
     fn atom_type(&self) -> FourCC {
-        FourCC(*FTYP)
+        FTYP
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
@@ -139,11 +128,11 @@ impl SerializeAtom for FileTypeAtom {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atom::test_utils::test_atom_roundtrip_sync;
+    use crate::atom::test_utils::test_atom_roundtrip;
 
     /// Test round-trip for all available ftyp test data files
     #[test]
     fn test_ftyp_roundtrip() {
-        test_atom_roundtrip_sync::<FileTypeAtom>(FTYP);
+        test_atom_roundtrip::<FileTypeAtom>(FTYP);
     }
 }

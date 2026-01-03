@@ -1,18 +1,17 @@
 use bon::Builder;
-use futures_io::AsyncRead;
 use std::{fmt, time::Duration};
 
 use crate::{
     atom::{
-        util::{mp4_timestamp_now, read_to_end, scaled_duration, unscaled_duration},
+        util::{mp4_timestamp_now, scaled_duration, unscaled_duration},
         FourCC,
     },
-    parser::ParseAtom,
+    parser::ParseAtomData,
     writer::SerializeAtom,
     ParseError,
 };
 
-pub const MDHD: &[u8; 4] = b"mdhd";
+pub const MDHD: FourCC = FourCC::new(b"mdhd");
 
 macro_rules! define_language_code_enum {
     ($( #[$meta:meta] )* $name:ident { $( $( #[$tag:meta] )* $variant:ident => $chars:literal ),+ $(,)? }) => {
@@ -135,22 +134,18 @@ impl MediaHeaderAtom {
     }
 }
 
-impl ParseAtom for MediaHeaderAtom {
-    async fn parse<R: AsyncRead + Unpin + Send>(
-        atom_type: FourCC,
-        reader: R,
-    ) -> Result<Self, ParseError> {
-        if atom_type != MDHD {
-            return Err(ParseError::new_unexpected_atom(atom_type, MDHD));
-        }
-        let data = read_to_end(reader).await?;
-        parser::parse_mdhd_data(&data)
+impl ParseAtomData for MediaHeaderAtom {
+    fn parse_atom_data(atom_type: FourCC, input: &[u8]) -> Result<Self, ParseError> {
+        crate::atom::util::parser::assert_atom_type!(atom_type, MDHD);
+        use crate::atom::util::parser::stream;
+        use winnow::Parser;
+        Ok(parser::parse_mdhd_data.parse(stream(input))?)
     }
 }
 
 impl SerializeAtom for MediaHeaderAtom {
     fn atom_type(&self) -> FourCC {
-        FourCC(*MDHD)
+        MDHD
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
@@ -202,15 +197,9 @@ mod parser {
     };
 
     use super::{LanguageCode, MediaHeaderAtom};
-    use crate::atom::util::parser::{be_u32_as_u64, flags3, stream, version, Stream};
+    use crate::atom::util::parser::{be_u32_as_u64, flags3, version, Stream};
 
-    pub fn parse_mdhd_data(input: &[u8]) -> Result<MediaHeaderAtom, crate::ParseError> {
-        parse_mdhd_data_inner
-            .parse(stream(input))
-            .map_err(crate::ParseError::from_winnow)
-    }
-
-    fn parse_mdhd_data_inner(input: &mut Stream<'_>) -> ModalResult<MediaHeaderAtom> {
+    pub fn parse_mdhd_data(input: &mut Stream<'_>) -> ModalResult<MediaHeaderAtom> {
         let be_u32_or_u64 = |version: u8| {
             let be_u64_type_fix =
                 |input: &mut Stream<'_>| -> ModalResult<u64> { be_u64.parse_next(input) };
@@ -246,11 +235,11 @@ mod parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atom::test_utils::test_atom_roundtrip_sync;
+    use crate::atom::test_utils::test_atom_roundtrip;
 
     /// Test round-trip for all available mdhd test data files
     #[test]
     fn test_mdhd_roundtrip() {
-        test_atom_roundtrip_sync::<MediaHeaderAtom>(MDHD);
+        test_atom_roundtrip::<MediaHeaderAtom>(MDHD);
     }
 }

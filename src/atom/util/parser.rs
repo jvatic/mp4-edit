@@ -10,6 +10,15 @@ use winnow::{
 
 use crate::{atom::util::ColorRgb, FourCC};
 
+macro_rules! assert_atom_type {
+    ($actual:ident, $( $expected:ident ),+ $(,)?) => {
+        if $( $actual != $expected )&&+ {
+            return Err(crate::parser::ParseError::new_unexpected_atom_oneof($actual, vec![$( $expected ),+]));
+        }
+    };
+}
+pub(crate) use assert_atom_type;
+
 pub type Stream<'i> = LocatingSlice<&'i Bytes>;
 
 pub fn stream(b: &[u8]) -> Stream<'_> {

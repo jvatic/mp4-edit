@@ -1,19 +1,15 @@
 use std::{ops::Range, time::Duration};
 
 use bon::bon;
-use futures_io::AsyncRead;
 
 use crate::{
-    atom::{
-        util::{read_to_end, scaled_duration, unscaled_duration},
-        FourCC,
-    },
-    parser::ParseAtom,
+    atom::{util::scaled_duration, FourCC},
+    parser::ParseAtomData,
     writer::SerializeAtom,
     ParseError,
 };
 
-pub const ELST: &[u8; 4] = b"elst";
+pub const ELST: FourCC = FourCC::new(b"elst");
 
 #[derive(Default, Debug, Clone)]
 pub struct EditListAtom {
@@ -120,22 +116,18 @@ impl EditEntry {
     }
 }
 
-impl ParseAtom for EditListAtom {
-    async fn parse<R: AsyncRead + Unpin + Send>(
-        atom_type: FourCC,
-        reader: R,
-    ) -> Result<Self, ParseError> {
-        if atom_type != ELST {
-            return Err(ParseError::new_unexpected_atom(atom_type, ELST));
-        }
-        let data = read_to_end(reader).await?;
-        parser::parse_elst_data(&data)
+impl ParseAtomData for EditListAtom {
+    fn parse_atom_data(atom_type: FourCC, input: &[u8]) -> Result<Self, ParseError> {
+        crate::atom::util::parser::assert_atom_type!(atom_type, ELST);
+        use crate::atom::util::parser::stream;
+        use winnow::Parser;
+        Ok(parser::parse_elst_data.parse(stream(input))?)
     }
 }
 
 impl SerializeAtom for EditListAtom {
     fn atom_type(&self) -> FourCC {
-        FourCC(*ELST)
+        ELST
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
@@ -226,16 +218,10 @@ mod parser {
     use super::EditListAtom;
     use crate::atom::{
         elst::EditEntry,
-        util::parser::{be_i32_as, be_u32_as, fixed_point_16x16, flags3, stream, version, Stream},
+        util::parser::{be_i32_as, be_u32_as, fixed_point_16x16, flags3, version, Stream},
     };
 
-    pub fn parse_elst_data(input: &[u8]) -> Result<EditListAtom, crate::ParseError> {
-        parse_elst_data_inner
-            .parse(stream(input))
-            .map_err(crate::ParseError::from_winnow)
-    }
-
-    fn parse_elst_data_inner(input: &mut Stream<'_>) -> ModalResult<EditListAtom> {
+    pub fn parse_elst_data(input: &mut Stream<'_>) -> ModalResult<EditListAtom> {
         trace(
             "elst",
             seq!(EditListAtom {
@@ -292,11 +278,11 @@ mod parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atom::test_utils::test_atom_roundtrip_sync;
+    use crate::atom::test_utils::test_atom_roundtrip;
 
     /// Test round-trip for all available elst test data files
     #[test]
     fn test_elst_roundtrip() {
-        test_atom_roundtrip_sync::<EditListAtom>(ELST);
+        test_atom_roundtrip::<EditListAtom>(ELST);
     }
 }

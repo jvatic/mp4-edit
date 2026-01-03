@@ -1,14 +1,8 @@
-use futures_io::AsyncRead;
 use std::fmt;
 
-use crate::{
-    atom::{util::read_to_end, FourCC},
-    parser::ParseAtom,
-    writer::SerializeAtom,
-    ParseError,
-};
+use crate::{atom::FourCC, parser::ParseAtomData, writer::SerializeAtom, ParseError};
 
-pub const TREF: &[u8; 4] = b"tref";
+pub const TREF: FourCC = FourCC::new(b"tref");
 
 /// A single track reference entry containing the reference type and target track IDs
 #[derive(Debug, Clone)]
@@ -79,22 +73,18 @@ impl fmt::Display for TrackReferenceAtom {
     }
 }
 
-impl ParseAtom for TrackReferenceAtom {
-    async fn parse<R: AsyncRead + Unpin + Send>(
-        atom_type: FourCC,
-        reader: R,
-    ) -> Result<Self, ParseError> {
-        if atom_type != TREF {
-            return Err(ParseError::new_unexpected_atom(atom_type, TREF));
-        }
-        let data = read_to_end(reader).await?;
-        parser::parse_tref_data(&data)
+impl ParseAtomData for TrackReferenceAtom {
+    fn parse_atom_data(atom_type: FourCC, input: &[u8]) -> Result<Self, ParseError> {
+        crate::atom::util::parser::assert_atom_type!(atom_type, TREF);
+        use crate::atom::util::parser::stream;
+        use winnow::Parser;
+        Ok(parser::parse_tref_data.parse(stream(input))?)
     }
 }
 
 impl SerializeAtom for TrackReferenceAtom {
     fn atom_type(&self) -> FourCC {
-        FourCC(*TREF)
+        TREF
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
@@ -135,17 +125,9 @@ mod parser {
     };
 
     use super::{TrackReference, TrackReferenceAtom};
-    use crate::atom::util::parser::{
-        combinators::inclusive_length_and_then, fourcc, stream, Stream,
-    };
+    use crate::atom::util::parser::{combinators::inclusive_length_and_then, fourcc, Stream};
 
-    pub fn parse_tref_data(input: &[u8]) -> Result<TrackReferenceAtom, crate::ParseError> {
-        parse_tref_data_inner
-            .parse(stream(input))
-            .map_err(crate::ParseError::from_winnow)
-    }
-
-    fn parse_tref_data_inner(input: &mut Stream<'_>) -> ModalResult<TrackReferenceAtom> {
+    pub fn parse_tref_data(input: &mut Stream<'_>) -> ModalResult<TrackReferenceAtom> {
         trace(
             "tref",
             seq!(TrackReferenceAtom {
@@ -174,11 +156,11 @@ mod parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atom::test_utils::test_atom_roundtrip_sync;
+    use crate::atom::test_utils::test_atom_roundtrip;
 
     /// Test round-trip for all available tref test data files
     #[test]
     fn test_tref_roundtrip() {
-        test_atom_roundtrip_sync::<TrackReferenceAtom>(TREF);
+        test_atom_roundtrip::<TrackReferenceAtom>(TREF);
     }
 }

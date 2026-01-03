@@ -1,9 +1,9 @@
 use crate::{
     atom::atom_ref::{AtomRef, AtomRefMut},
-    Atom,
+    Atom, FourCC,
 };
 
-pub const GMHD: &[u8; 4] = b"gmhd";
+pub const GMHD: FourCC = FourCC::new(b"gmhd");
 
 #[derive(Debug, Clone, Copy)]
 pub struct GmhdAtomRef<'a>(pub(crate) AtomRef<'a>);
