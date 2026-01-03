@@ -1,17 +1,12 @@
 use bon::bon;
 use core::fmt;
 use derive_more::Deref;
-use futures_io::AsyncRead;
 
 use crate::atom::util::{DebugList, DebugUpperHex};
 use crate::ParseError;
-use crate::{
-    atom::{util::read_to_end, FourCC},
-    parser::ParseAtom,
-    writer::SerializeAtom,
-};
+use crate::{atom::FourCC, parser::ParseAtomData, writer::SerializeAtom};
 
-pub const ILST: &[u8; 4] = b"ilst";
+pub const ILST: FourCC = FourCC::new(b"ilst");
 
 const DATA_TYPE_TEXT: u32 = 1;
 const DATA_TYPE_JPEG: u32 = 13;
@@ -104,22 +99,18 @@ pub struct ItemListAtom {
     pub items: Vec<MetadataItem>,
 }
 
-impl ParseAtom for ItemListAtom {
-    async fn parse<R: AsyncRead + Unpin + Send>(
-        atom_type: FourCC,
-        reader: R,
-    ) -> Result<Self, ParseError> {
-        if atom_type != ILST {
-            return Err(ParseError::new_unexpected_atom(atom_type, ILST));
-        }
-        let data = read_to_end(reader).await?;
-        parser::parse_ilst_data(&data)
+impl ParseAtomData for ItemListAtom {
+    fn parse_atom_data(atom_type: FourCC, input: &[u8]) -> Result<Self, ParseError> {
+        crate::atom::util::parser::assert_atom_type!(atom_type, ILST);
+        use crate::atom::util::parser::stream;
+        use winnow::Parser;
+        Ok(parser::parse_ilst_data.parse(stream(input))?)
     }
 }
 
 impl SerializeAtom for ItemListAtom {
     fn atom_type(&self) -> FourCC {
-        FourCC(*ILST)
+        ILST
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
@@ -199,16 +190,10 @@ mod parser {
 
     use super::{DataAtom, ItemListAtom, ListItemData, MetadataItem};
     use crate::atom::util::parser::{
-        atom_size, combinators::inclusive_length_and_then, fourcc, rest_vec, stream, Stream,
+        atom_size, combinators::inclusive_length_and_then, fourcc, rest_vec, Stream,
     };
 
-    pub fn parse_ilst_data(input: &[u8]) -> Result<ItemListAtom, crate::ParseError> {
-        parse_ilst_data_inner
-            .parse(stream(input))
-            .map_err(crate::ParseError::from_winnow)
-    }
-
-    fn parse_ilst_data_inner(input: &mut Stream<'_>) -> ModalResult<ItemListAtom> {
+    pub fn parse_ilst_data(input: &mut Stream<'_>) -> ModalResult<ItemListAtom> {
         trace(
             "ilst",
             seq!(ItemListAtom {
@@ -265,11 +250,11 @@ mod parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atom::test_utils::test_atom_roundtrip_sync;
+    use crate::atom::test_utils::test_atom_roundtrip;
 
     /// Test round-trip for all available ilst test data files
     #[test]
     fn test_ilst_roundtrip() {
-        test_atom_roundtrip_sync::<ItemListAtom>(ILST);
+        test_atom_roundtrip::<ItemListAtom>(ILST);
     }
 }

@@ -1,16 +1,10 @@
 use std::string::FromUtf8Error;
 
 use bon::Builder;
-use futures_io::AsyncRead;
 
-use crate::{
-    atom::{util::read_to_end, FourCC},
-    parser::ParseAtom,
-    writer::SerializeAtom,
-    ParseError,
-};
+use crate::{atom::FourCC, parser::ParseAtomData, writer::SerializeAtom, ParseError};
 
-pub const DREF: &[u8; 4] = b"dref";
+pub const DREF: FourCC = FourCC::new(b"dref");
 
 /// Data Reference Entry Types
 pub mod entry_types {
@@ -118,22 +112,18 @@ impl<S: data_reference_atom_builder::State> DataReferenceAtomBuilder<S> {
     }
 }
 
-impl ParseAtom for DataReferenceAtom {
-    async fn parse<R: AsyncRead + Unpin + Send>(
-        atom_type: FourCC,
-        reader: R,
-    ) -> Result<Self, ParseError> {
-        if atom_type != DREF {
-            return Err(ParseError::new_unexpected_atom(atom_type, DREF));
-        }
-        let data = read_to_end(reader).await?;
-        parser::parse_dref_data(&data)
+impl ParseAtomData for DataReferenceAtom {
+    fn parse_atom_data(atom_type: FourCC, input: &[u8]) -> Result<Self, ParseError> {
+        crate::atom::util::parser::assert_atom_type!(atom_type, DREF);
+        use crate::atom::util::parser::stream;
+        use winnow::Parser;
+        Ok(parser::parse_dref_data.parse(stream(input))?)
     }
 }
 
 impl SerializeAtom for DataReferenceAtom {
     fn atom_type(&self) -> FourCC {
-        FourCC(*DREF)
+        DREF
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
@@ -232,16 +222,10 @@ mod parser {
     use super::{DataReferenceAtom, DataReferenceEntry, DataReferenceEntryInner};
     use crate::atom::util::parser::{
         atom_size, be_u32_as_usize, combinators::inclusive_length_and_then, flags3, fourcc,
-        rest_vec, stream, version, Stream,
+        rest_vec, version, Stream,
     };
 
-    pub fn parse_dref_data(input: &[u8]) -> Result<DataReferenceAtom, crate::ParseError> {
-        parse_dref_data_inner
-            .parse(stream(input))
-            .map_err(crate::ParseError::from_winnow)
-    }
-
-    fn parse_dref_data_inner(input: &mut Stream<'_>) -> winnow::ModalResult<DataReferenceAtom> {
+    pub fn parse_dref_data(input: &mut Stream<'_>) -> winnow::ModalResult<DataReferenceAtom> {
         trace(
             "dref",
             (version, flags3, entries)
@@ -288,11 +272,11 @@ mod parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atom::test_utils::test_atom_roundtrip_sync;
+    use crate::atom::test_utils::test_atom_roundtrip;
 
     /// Test round-trip for all available dref test data files
     #[test]
     fn test_dref_roundtrip() {
-        test_atom_roundtrip_sync::<DataReferenceAtom>(DREF);
+        test_atom_roundtrip::<DataReferenceAtom>(DREF);
     }
 }

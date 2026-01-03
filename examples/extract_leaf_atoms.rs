@@ -12,33 +12,12 @@ use tokio_util::compat::TokioAsyncReadCompatExt;
 
 use mp4_edit::{
     atom::{
-        container,
+        is_container_atom,
         stsd::{self, StsdExtension},
         SampleDescriptionTableAtom,
     },
     Atom, AtomData, FourCC, Parser,
 };
-
-/// Check if an atom type is a container atom
-fn is_container_atom(atom_type: &[u8; 4]) -> bool {
-    matches!(
-        atom_type,
-        container::MOOV
-            | container::MFRA
-            | container::UDTA
-            | container::TRAK
-            | container::EDTS
-            | container::MDIA
-            | container::MINF
-            | container::DINF
-            | container::STBL
-            | container::MOOF
-            | container::TRAF
-            | container::SINF
-            | container::SCHI
-            | container::META
-    )
-}
 
 /// Extract leaf atoms from an MP4 file and write them to individual files
 async fn extract_leaf_atoms(input_path: &str, output_dir: &str) -> Result<()> {
@@ -75,7 +54,7 @@ async fn extract_leaf_atoms(input_path: &str, output_dir: &str) -> Result<()> {
         // Check if this is a leaf atom (no children)
         if atom.children.is_empty() {
             // Skip container atoms even if they have no children
-            if !is_container_atom(&atom.header.atom_type) {
+            if !is_container_atom(atom.header.atom_type) {
                 extract_single_atom(atom, &original_data, output_dir).await?;
                 leaf_count += 1;
                 total_size += atom.header.atom_size();

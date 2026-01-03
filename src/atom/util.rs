@@ -1,4 +1,3 @@
-mod async_sync_bridge;
 mod debug;
 pub mod parser;
 pub mod serializer;
@@ -6,7 +5,6 @@ mod time;
 
 use std::fmt;
 
-pub use async_sync_bridge::*;
 pub use debug::*;
 pub use time::*;
 

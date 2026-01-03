@@ -2,14 +2,14 @@ use std::fmt;
 
 use crate::{
     atom::{
-        atom_ref::{AtomRef, AtomRefMut},
+        atom_ref::{unwrap_atom_data, AtomRef, AtomRefMut},
         elst::ELST,
         EditListAtom,
     },
-    unwrap_atom_data, Atom, AtomData,
+    Atom, AtomData, FourCC,
 };
 
-pub const EDTS: &[u8; 4] = b"edts";
+pub const EDTS: FourCC = FourCC::new(b"edts");
 
 #[derive(Clone, Copy)]
 pub struct EdtsAtomRef<'a>(pub(crate) AtomRef<'a>);

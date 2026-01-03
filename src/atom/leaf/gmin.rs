@@ -1,16 +1,11 @@
-use futures_io::AsyncRead;
-
 use crate::{
-    atom::{
-        util::{read_to_end, ColorRgb},
-        FourCC,
-    },
-    parser::ParseAtom,
+    atom::{util::ColorRgb, FourCC},
+    parser::ParseAtomData,
     writer::SerializeAtom,
     ParseError,
 };
 
-pub const GMIN: &[u8; 4] = b"gmin";
+pub const GMIN: FourCC = FourCC::new(b"gmin");
 
 #[derive(Debug, Clone)]
 pub struct BaseMediaInfoAtom {
@@ -39,23 +34,18 @@ impl Default for BaseMediaInfoAtom {
     }
 }
 
-impl ParseAtom for BaseMediaInfoAtom {
-    async fn parse<R: AsyncRead + Unpin + Send>(
-        atom_type: FourCC,
-        reader: R,
-    ) -> Result<Self, ParseError> {
-        if atom_type != GMIN {
-            return Err(ParseError::new_unexpected_atom(atom_type, GMIN));
-        }
-
-        let data = read_to_end(reader).await?;
-        parser::parse_gmin_data(&data)
+impl ParseAtomData for BaseMediaInfoAtom {
+    fn parse_atom_data(atom_type: FourCC, input: &[u8]) -> Result<Self, ParseError> {
+        crate::atom::util::parser::assert_atom_type!(atom_type, GMIN);
+        use crate::atom::util::parser::stream;
+        use winnow::Parser;
+        Ok(parser::parse_gmin_data.parse(stream(input))?)
     }
 }
 
 impl SerializeAtom for BaseMediaInfoAtom {
     fn atom_type(&self) -> FourCC {
-        FourCC::new(GMIN)
+        GMIN
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
@@ -84,17 +74,11 @@ mod serializer {
 mod parser {
     use crate::atom::{
         gmin::BaseMediaInfoAtom,
-        util::parser::{byte_array, color_rgb, fixed_point_8x8, flags3, stream, version, Stream},
+        util::parser::{byte_array, color_rgb, fixed_point_8x8, flags3, version, Stream},
     };
     use winnow::{binary::be_u16, combinator::seq, error::StrContext, ModalResult, Parser};
 
-    pub fn parse_gmin_data(data: &[u8]) -> Result<BaseMediaInfoAtom, crate::ParseError> {
-        parse_gmin_data_inner
-            .parse(stream(data))
-            .map_err(crate::ParseError::from_winnow)
-    }
-
-    fn parse_gmin_data_inner(input: &mut Stream<'_>) -> ModalResult<BaseMediaInfoAtom> {
+    pub fn parse_gmin_data(input: &mut Stream<'_>) -> ModalResult<BaseMediaInfoAtom> {
         seq!(BaseMediaInfoAtom {
             version: version,
             flags: flags3,
@@ -110,11 +94,11 @@ mod parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atom::test_utils::test_atom_roundtrip_sync;
+    use crate::atom::test_utils::test_atom_roundtrip;
 
     /// Test round-trip for all available gmin test data files
     #[test]
     fn test_gmin_roundtrip() {
-        test_atom_roundtrip_sync::<BaseMediaInfoAtom>(GMIN);
+        test_atom_roundtrip::<BaseMediaInfoAtom>(GMIN);
     }
 }

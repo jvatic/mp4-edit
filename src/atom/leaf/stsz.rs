@@ -1,7 +1,6 @@
 use bon::bon;
 use derive_more::{Deref, DerefMut};
 use either::Either;
-use futures_io::AsyncRead;
 use rangemap::{RangeMap, RangeSet};
 use std::{
     fmt::{self},
@@ -9,16 +8,13 @@ use std::{
 };
 
 use crate::{
-    atom::{
-        util::{read_to_end, DebugList},
-        FourCC,
-    },
-    parser::ParseAtom,
+    atom::{util::DebugList, FourCC},
+    parser::ParseAtomData,
     writer::SerializeAtom,
     ParseError,
 };
 
-pub const STSZ: &[u8; 4] = b"stsz";
+pub const STSZ: FourCC = FourCC::new(b"stsz");
 
 #[derive(Clone, Default, Deref, DerefMut)]
 pub struct SampleEntrySizes(Vec<u32>);
@@ -225,16 +221,12 @@ impl<S: sample_size_atom_builder::State> SampleSizeAtomBuilder<S> {
     }
 }
 
-impl ParseAtom for SampleSizeAtom {
-    async fn parse<R: AsyncRead + Unpin + Send>(
-        atom_type: FourCC,
-        reader: R,
-    ) -> Result<Self, ParseError> {
-        if atom_type != STSZ {
-            return Err(ParseError::new_unexpected_atom(atom_type, STSZ));
-        }
-        let data = read_to_end(reader).await?;
-        parser::parse_stsz_data(&data)
+impl ParseAtomData for SampleSizeAtom {
+    fn parse_atom_data(atom_type: FourCC, input: &[u8]) -> Result<Self, ParseError> {
+        crate::atom::util::parser::assert_atom_type!(atom_type, STSZ);
+        use crate::atom::util::parser::stream;
+        use winnow::Parser;
+        Ok(parser::parse_stsz_data.parse(stream(input))?)
     }
 }
 
@@ -252,7 +244,7 @@ impl fmt::Display for SampleSizeAtom {
 
 impl SerializeAtom for SampleSizeAtom {
     fn atom_type(&self) -> FourCC {
-        FourCC(*STSZ)
+        STSZ
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
@@ -291,15 +283,9 @@ mod parser {
     };
 
     use super::{SampleEntrySizes, SampleSizeAtom};
-    use crate::atom::util::parser::{flags3, stream, version, Stream};
+    use crate::atom::util::parser::{flags3, version, Stream};
 
-    pub fn parse_stsz_data(input: &[u8]) -> Result<SampleSizeAtom, crate::ParseError> {
-        parse_stsz_data_inner
-            .parse(stream(input))
-            .map_err(crate::ParseError::from_winnow)
-    }
-
-    fn parse_stsz_data_inner(input: &mut Stream<'_>) -> ModalResult<SampleSizeAtom> {
+    pub fn parse_stsz_data(input: &mut Stream<'_>) -> ModalResult<SampleSizeAtom> {
         trace(
             "stsz",
             seq!(SampleSizeAtom {
@@ -320,11 +306,11 @@ mod parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atom::test_utils::test_atom_roundtrip_sync;
+    use crate::atom::test_utils::test_atom_roundtrip;
 
     /// Test round-trip for all available stsz test data files
     #[test]
     fn test_stsz_roundtrip() {
-        test_atom_roundtrip_sync::<SampleSizeAtom>(STSZ);
+        test_atom_roundtrip::<SampleSizeAtom>(STSZ);
     }
 }

@@ -1,18 +1,17 @@
 use bon::Builder;
-use futures_io::AsyncRead;
 use std::time::Duration;
 
 use crate::{
     atom::{
-        util::{mp4_timestamp_now, read_to_end, scaled_duration, unscaled_duration},
+        util::{mp4_timestamp_now, scaled_duration, unscaled_duration},
         FourCC,
     },
-    parser::ParseAtom,
+    parser::ParseAtomData,
     writer::SerializeAtom,
     ParseError,
 };
 
-pub const TKHD: &[u8; 4] = b"tkhd";
+pub const TKHD: FourCC = FourCC::new(b"tkhd");
 
 const IDENTITY_MATRIX: [i32; 9] = [0x00010000, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000];
 
@@ -69,22 +68,18 @@ impl TrackHeaderAtom {
     }
 }
 
-impl ParseAtom for TrackHeaderAtom {
-    async fn parse<R: AsyncRead + Unpin + Send>(
-        atom_type: FourCC,
-        reader: R,
-    ) -> Result<Self, ParseError> {
-        if atom_type != TKHD {
-            return Err(ParseError::new_unexpected_atom(atom_type, TKHD));
-        }
-        let data = read_to_end(reader).await?;
-        parser::parse_tkhd_data(&data)
+impl ParseAtomData for TrackHeaderAtom {
+    fn parse_atom_data(atom_type: FourCC, input: &[u8]) -> Result<Self, ParseError> {
+        crate::atom::util::parser::assert_atom_type!(atom_type, TKHD);
+        use crate::atom::util::parser::stream;
+        use winnow::Parser;
+        Ok(parser::parse_tkhd_data.parse(stream(input))?)
     }
 }
 
 impl SerializeAtom for TrackHeaderAtom {
     fn atom_type(&self) -> FourCC {
-        FourCC(*TKHD)
+        TKHD
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
@@ -157,17 +152,11 @@ mod parser {
         tkhd::IDENTITY_MATRIX,
         util::parser::{
             be_u32_as_u64, byte_array, fixed_array, fixed_point_16x16, fixed_point_8x8, flags3,
-            stream, version, Stream,
+            version, Stream,
         },
     };
 
-    pub fn parse_tkhd_data(input: &[u8]) -> Result<TrackHeaderAtom, crate::ParseError> {
-        parse_tkhd_data_inner
-            .parse(stream(input))
-            .map_err(crate::ParseError::from_winnow)
-    }
-
-    fn parse_tkhd_data_inner(input: &mut Stream<'_>) -> ModalResult<TrackHeaderAtom> {
+    pub fn parse_tkhd_data(input: &mut Stream<'_>) -> ModalResult<TrackHeaderAtom> {
         let be_u32_or_u64 = |version: u8| {
             let be_u64_type_fix =
                 |input: &mut Stream<'_>| -> ModalResult<u64> { be_u64.parse_next(input) };
@@ -230,11 +219,11 @@ mod parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atom::test_utils::test_atom_roundtrip_sync;
+    use crate::atom::test_utils::test_atom_roundtrip;
 
     /// Test round-trip for all available tkhd test data files
     #[test]
     fn test_tkhd_roundtrip() {
-        test_atom_roundtrip_sync::<TrackHeaderAtom>(TKHD);
+        test_atom_roundtrip::<TrackHeaderAtom>(TKHD);
     }
 }

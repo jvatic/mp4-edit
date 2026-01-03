@@ -1,6 +1,8 @@
 use std::io::Read;
 
-pub const META: &[u8; 4] = b"meta";
+use crate::FourCC;
+
+pub const META: FourCC = FourCC::new(b"meta");
 
 pub const META_VERSION_FLAGS_SIZE: usize = 4;
 

@@ -1,9 +1,14 @@
 use crate::{
-    atom::{atom_ref::AtomRefMut, chpl::CHPL, container::META, ChapterListAtom},
-    unwrap_atom_data, AtomData,
+    atom::{
+        atom_ref::{unwrap_atom_data, AtomRefMut},
+        chpl::CHPL,
+        container::META,
+        ChapterListAtom,
+    },
+    AtomData, FourCC,
 };
 
-pub const UDTA: &[u8; 4] = b"udta";
+pub const UDTA: FourCC = FourCC::new(b"udta");
 
 pub struct UserDataAtomRefMut<'a>(pub(crate) AtomRefMut<'a>);
 

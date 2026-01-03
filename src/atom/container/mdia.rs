@@ -1,14 +1,14 @@
 use crate::{
     atom::{
-        atom_ref::{AtomRef, AtomRefMut},
+        atom_ref::{unwrap_atom_data, AtomRef, AtomRefMut},
         hdlr::HDLR,
         mdhd::MDHD,
         HandlerReferenceAtom, MediaHeaderAtom, MinfAtomRef, MinfAtomRefMut, MINF,
     },
-    unwrap_atom_data, Atom, AtomData,
+    Atom, AtomData, FourCC,
 };
 
-pub const MDIA: &[u8; 4] = b"mdia";
+pub const MDIA: FourCC = FourCC::new(b"mdia");
 
 #[derive(Debug, Clone, Copy)]
 pub struct MdiaAtomRef<'a>(pub(crate) AtomRef<'a>);

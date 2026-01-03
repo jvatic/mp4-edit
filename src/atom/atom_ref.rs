@@ -8,7 +8,7 @@ use bon::bon;
 
 use crate::atom::AtomHeader;
 
-use crate::AtomData;
+use crate::{AtomData, FourCC};
 
 use crate::atom::Atom;
 
@@ -25,7 +25,6 @@ use crate::atom::Atom;
 ///     AtomData::TrackHeader,
 /// );
 /// ```
-#[macro_export]
 macro_rules! unwrap_atom_data {
     ($ref:expr, $variant:path $(,)?) => {{
         let atom = $ref.0;
@@ -39,6 +38,7 @@ macro_rules! unwrap_atom_data {
         }
     }};
 }
+pub(crate) use unwrap_atom_data;
 
 #[derive(Debug, Clone, Copy)]
 /// Wraps a shared [`Atom`] reference in an [`Option`] and provides methods for traversing it.
@@ -49,7 +49,7 @@ impl<'a> AtomRef<'a> {
         self.0
     }
 
-    pub fn find_child(&self, typ: &[u8; 4]) -> Option<&'a Atom> {
+    pub fn find_child(&self, typ: FourCC) -> Option<&'a Atom> {
         self.children().find(|atom| atom.header.atom_type == typ)
     }
 
@@ -57,12 +57,12 @@ impl<'a> AtomRef<'a> {
         crate::atom::iter::AtomIter::from_atom(self.0)
     }
 
-    pub fn child_position(&self, typ: &[u8; 4]) -> Option<usize> {
+    pub fn child_position(&self, typ: FourCC) -> Option<usize> {
         self.children()
             .position(|atom| atom.header.atom_type == typ)
     }
 
-    pub fn child_rposition(&self, typ: &[u8; 4]) -> Option<usize> {
+    pub fn child_rposition(&self, typ: FourCC) -> Option<usize> {
         self.children()
             .rposition(|atom| atom.header.atom_type == typ)
     }
@@ -89,7 +89,7 @@ impl<'a> AtomRefMut<'a> {
         AtomRefMut(&mut self.0.children[index])
     }
 
-    pub fn into_child(self, typ: &[u8; 4]) -> Option<&'a mut Atom> {
+    pub fn into_child(self, typ: FourCC) -> Option<&'a mut Atom> {
         self.into_children()
             .find(|atom| atom.header.atom_type == typ)
     }
@@ -113,9 +113,9 @@ impl<'a> AtomRefMut<'a> {
     #[builder]
     pub fn find_or_insert_child(
         &mut self,
-        #[builder(start_fn)] atom_type: &[u8; 4],
-        #[builder(default = Vec::new())] insert_before: Vec<&[u8; 4]>,
-        #[builder(default = Vec::new())] insert_after: Vec<&[u8; 4]>,
+        #[builder(start_fn)] atom_type: FourCC,
+        #[builder(default = Vec::new())] insert_before: Vec<FourCC>,
+        #[builder(default = Vec::new())] insert_after: Vec<FourCC>,
         insert_index: Option<usize>,
         insert_data: Option<AtomData>,
     ) -> AtomRefMut<'_> {
@@ -141,8 +141,8 @@ impl<'a> AtomRefMut<'a> {
     #[builder]
     pub fn get_insert_position(
         &self,
-        #[builder(default = Vec::new())] before: Vec<&[u8; 4]>,
-        #[builder(default = Vec::new())] after: Vec<&[u8; 4]>,
+        #[builder(default = Vec::new())] before: Vec<FourCC>,
+        #[builder(default = Vec::new())] after: Vec<FourCC>,
     ) -> usize {
         before
             .into_iter()

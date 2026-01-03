@@ -4,10 +4,10 @@ use crate::{
         smhd::SMHD,
         GmhdAtomRef, GmhdAtomRefMut, StblAtomRef, StblAtomRefMut, DINF, GMHD, STBL,
     },
-    Atom,
+    Atom, FourCC,
 };
 
-pub const MINF: &[u8; 4] = b"minf";
+pub const MINF: FourCC = FourCC::new(b"minf");
 
 #[derive(Debug, Clone, Copy)]
 pub struct MinfAtomRef<'a>(pub(crate) AtomRef<'a>);

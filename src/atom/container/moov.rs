@@ -4,13 +4,16 @@ use bon::bon;
 
 use crate::{
     atom::{
-        atom_ref, hdlr::HandlerType, mdhd::MDHD, mvhd::MVHD, AtomHeader, MovieHeaderAtom,
-        TrakAtomRef, TrakAtomRefMut, UserDataAtomRefMut, TRAK, UDTA,
+        atom_ref::{self, unwrap_atom_data},
+        hdlr::HandlerType,
+        mdhd::MDHD,
+        mvhd::MVHD,
+        AtomHeader, MovieHeaderAtom, TrakAtomRef, TrakAtomRefMut, UserDataAtomRefMut, TRAK, UDTA,
     },
-    unwrap_atom_data, Atom, AtomData,
+    Atom, AtomData, FourCC,
 };
 
-pub const MOOV: &[u8; 4] = b"moov";
+pub const MOOV: FourCC = FourCC::new(b"moov");
 
 #[derive(Debug, Clone, Copy)]
 pub struct MoovAtomRef<'a>(pub(crate) atom_ref::AtomRef<'a>);

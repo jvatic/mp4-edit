@@ -1,1 +1,3 @@
-pub const SGPD: &[u8; 4] = b"sgpd";
+use crate::FourCC;
+
+pub const SGPD: FourCC = FourCC::new(b"sgpd");

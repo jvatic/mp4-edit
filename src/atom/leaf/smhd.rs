@@ -1,13 +1,6 @@
-use futures_io::AsyncRead;
+use crate::{atom::FourCC, parser::ParseAtomData, writer::SerializeAtom, ParseError};
 
-use crate::{
-    atom::{util::read_to_end, FourCC},
-    parser::ParseAtom,
-    writer::SerializeAtom,
-    ParseError,
-};
-
-pub const SMHD: &[u8; 4] = b"smhd";
+pub const SMHD: FourCC = FourCC::new(b"smhd");
 
 #[derive(Debug, Clone, Default)]
 pub struct SoundMediaHeaderAtom {
@@ -22,22 +15,18 @@ pub struct SoundMediaHeaderAtom {
     pub reserved: [u8; 2],
 }
 
-impl ParseAtom for SoundMediaHeaderAtom {
-    async fn parse<R: AsyncRead + Unpin + Send>(
-        atom_type: FourCC,
-        reader: R,
-    ) -> Result<Self, ParseError> {
-        if atom_type != SMHD {
-            return Err(ParseError::new_unexpected_atom(atom_type, SMHD));
-        }
-        let data = read_to_end(reader).await?;
-        parser::parse_smhd_data(&data)
+impl ParseAtomData for SoundMediaHeaderAtom {
+    fn parse_atom_data(atom_type: FourCC, input: &[u8]) -> Result<Self, ParseError> {
+        crate::atom::util::parser::assert_atom_type!(atom_type, SMHD);
+        use crate::atom::util::parser::stream;
+        use winnow::Parser;
+        Ok(parser::parse_smhd_data.parse(stream(input))?)
     }
 }
 
 impl SerializeAtom for SoundMediaHeaderAtom {
     fn atom_type(&self) -> FourCC {
-        FourCC(*SMHD)
+        SMHD
     }
 
     fn into_body_bytes(self) -> Vec<u8> {
@@ -70,15 +59,9 @@ mod parser {
     };
 
     use super::SoundMediaHeaderAtom;
-    use crate::atom::util::parser::{byte_array, fixed_point_8x8, stream, version, Stream};
+    use crate::atom::util::parser::{byte_array, fixed_point_8x8, version, Stream};
 
-    pub fn parse_smhd_data(input: &[u8]) -> Result<SoundMediaHeaderAtom, crate::ParseError> {
-        parse_smhd_data_inner
-            .parse(stream(input))
-            .map_err(crate::ParseError::from_winnow)
-    }
-
-    fn parse_smhd_data_inner(input: &mut Stream<'_>) -> ModalResult<SoundMediaHeaderAtom> {
+    pub fn parse_smhd_data(input: &mut Stream<'_>) -> ModalResult<SoundMediaHeaderAtom> {
         trace(
             "smhd",
             seq!(SoundMediaHeaderAtom {
@@ -96,11 +79,11 @@ mod parser {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atom::test_utils::test_atom_roundtrip_sync;
+    use crate::atom::test_utils::test_atom_roundtrip;
 
     /// Test round-trip for all available smhd test data files
     #[test]
     fn test_smhd_roundtrip() {
-        test_atom_roundtrip_sync::<SoundMediaHeaderAtom>(SMHD);
+        test_atom_roundtrip::<SoundMediaHeaderAtom>(SMHD);
     }
 }

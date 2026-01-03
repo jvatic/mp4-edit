@@ -1,18 +1,17 @@
-use futures_io::AsyncRead;
 use std::fmt;
 
 use crate::{
     atom::{
-        util::{read_to_end, DebugList, DebugUpperHex},
+        util::{parser::rest_vec, DebugList, DebugUpperHex},
         FourCC,
     },
-    parser::ParseAtom,
+    parser::ParseAtomData,
     writer::SerializeAtom,
     ParseError,
 };
 
-pub const FREE: &[u8; 4] = b"free";
-pub const SKIP: &[u8; 4] = b"skip";
+pub const FREE: FourCC = FourCC::new(b"free");
+pub const SKIP: FourCC = FourCC::new(b"skip");
 
 #[derive(Clone)]
 pub struct FreeAtom {
@@ -37,19 +36,14 @@ impl fmt::Debug for FreeAtom {
     }
 }
 
-impl ParseAtom for FreeAtom {
-    async fn parse<R: AsyncRead + Unpin + Send>(
-        atom_type: FourCC,
-        reader: R,
-    ) -> Result<Self, ParseError> {
-        if atom_type != FREE && atom_type != SKIP {
-            return Err(ParseError::new_unexpected_atom_oneof(
-                atom_type,
-                vec![FREE, SKIP],
-            ));
-        }
+impl ParseAtomData for FreeAtom {
+    fn parse_atom_data(atom_type: FourCC, input: &[u8]) -> Result<Self, ParseError> {
+        crate::atom::util::parser::assert_atom_type!(atom_type, FREE, SKIP);
 
-        let data = read_to_end(reader).await?;
+        use crate::atom::util::parser::stream;
+        use winnow::Parser;
+
+        let data = rest_vec.parse(stream(input))?;
         Ok(FreeAtom {
             atom_type,
             data_size: data.len(),
@@ -75,11 +69,11 @@ impl SerializeAtom for FreeAtom {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atom::test_utils::test_atom_roundtrip_sync;
+    use crate::atom::test_utils::test_atom_roundtrip;
 
     /// Test round-trip for all available free test data files
     #[test]
     fn test_free_roundtrip() {
-        test_atom_roundtrip_sync::<FreeAtom>(FREE);
+        test_atom_roundtrip::<FreeAtom>(FREE);
     }
 }

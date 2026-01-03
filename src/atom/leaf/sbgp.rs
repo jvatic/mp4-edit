@@ -1,1 +1,3 @@
-pub const SBGP: &[u8; 4] = b"sbgp";
+use crate::FourCC;
+
+pub const SBGP: FourCC = FourCC::new(b"sbgp");
