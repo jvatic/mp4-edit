@@ -106,7 +106,6 @@ fn test_example(test_case: ExampleTestCase) {
 
     let status = CargoBuild::new()
         .example(test_case.example)
-        .release()
         .run()
         .expect("error building example")
         .command()
