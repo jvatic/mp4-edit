@@ -100,8 +100,6 @@ impl ChunkOffsetOperationUnresolved {
                 .map(|s| *s as u64)
                 .sum::<u64>();
 
-            dbg!(chunk_index, prev_offset, delta);
-
             Ok::<u64, anyhow::Error>(prev_offset + delta)
         };
 
