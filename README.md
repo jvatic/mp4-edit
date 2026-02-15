@@ -52,6 +52,8 @@ Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT](
 Please open an issue if you have a feature request or a bug report. I'm happy to accept changes in line with the goals
 of this crate (editing mp4 bytes).
 
+When opening a pull request, please make a best effort to use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
+
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this crate by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
 
 [^lossless]: The output will use the most efficient size headers possible, doesn't maintain non-standard reserved field values. Other than that, all data should be the same unless explicitly changed.
