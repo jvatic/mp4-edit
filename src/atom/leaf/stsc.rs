@@ -66,7 +66,7 @@ struct ExpandedSampleToChunkEntryIter<'a> {
 #[cfg(feature = "experimental-trim")]
 impl<'a> ExpandedSampleToChunkEntryIter<'a> {
     fn new(total_chunks: usize, entries: &'a Vec<SampleToChunkEntry>) -> Self {
-        let iter = entries.into_iter().peekable();
+        let iter = entries.iter().peekable();
         Self {
             total_chunks,
             next_sample_index: 0,
@@ -401,7 +401,7 @@ impl SampleToChunkAtom {
             Vec::with_capacity(prev_len + (num_sample_ranges_to_remove * 4)),
             |mut next_entries, entry| {
                 let mut ctx = Context {
-                    sample_indices_to_remove: &sample_indices_to_remove,
+                    sample_indices_to_remove: sample_indices_to_remove,
 
                     chunk_ops: &mut chunk_ops,
 

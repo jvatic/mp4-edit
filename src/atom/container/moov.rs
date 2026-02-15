@@ -198,7 +198,7 @@ impl<'a> MoovAtomRefMut<'a> {
                     .map(|hdlr| hdlr.handler_type.clone());
                 let remaining_duration = trak.trim_duration(movie_timescale, trim_ranges);
                 if let Some(HandlerType::Audio) = handler_type {
-                    if matches!(remaining_audio_duration, None) {
+                    if remaining_audio_duration.is_none() {
                         remaining_audio_duration = Some(remaining_duration);
                     }
                 }
