@@ -1,4 +1,4 @@
-use std::{ops::Range, time::Duration};
+use std::time::Duration;
 
 use bon::bon;
 
@@ -32,23 +32,6 @@ impl EditListAtom {
     pub fn replace_entries(&mut self, entries: impl Into<Vec<EditEntry>>) -> &mut Self {
         self.entries = entries.into();
         self
-    }
-
-    /// converts edit list entries into a series of trim ranges
-    pub(crate) fn trim_ranges(
-        &self,
-        movie_timescale: u64,
-    ) -> impl Iterator<Item = Range<Duration>> + '_ {
-        self.entries
-            .iter()
-            .scan(movie_timescale, |movie_timescale, entry| {
-                let duration = unscaled_duration(entry.segment_duration, *movie_timescale);
-                match entry.media_time {
-                    -1 => todo!("trim range"),
-                    _ => todo!("don't trim anything"),
-                }
-                todo!()
-            })
     }
 }
 
