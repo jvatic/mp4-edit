@@ -49,6 +49,18 @@ impl<'a> MoovAtomRef<'a> {
             )
         })
     }
+
+    /// Calculates the next track id based on existing track ids.
+    ///
+    /// The returned id will be the greater of `len(tracks)+1` or `max(tracks(id))+1`.
+    pub fn next_track_id(&self) -> u32 {
+        self.children()
+            .filter(|a| a.header.atom_type == TRAK)
+            .map(TrakAtomRef::new)
+            .fold(1, |id, trak| {
+                (trak.track_id().unwrap_or_default() + 1).max(id)
+            })
+    }
 }
 
 #[derive(Debug)]
