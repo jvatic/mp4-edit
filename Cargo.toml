@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 keywords = ["mp4", "parser"]
 license = "MIT OR Apache-2.0"
+exclude = ["test-data", "test-data-review"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
