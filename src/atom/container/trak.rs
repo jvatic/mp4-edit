@@ -292,7 +292,7 @@ impl<'a> TrakAtomRefMut<'a> {
             .update_duration(movie_timescale, |_| remaining_duration);
 
         // Step 8: Replace any edit list entries with a no-op one
-        if matches!(self.as_ref().edit_list_container().edit_list(), Some(_)) {
+        if self.as_ref().edit_list_container().edit_list().is_some() {
             self.edit_list_container()
                 .edit_list()
                 .replace_entries(vec![EditEntry::builder()

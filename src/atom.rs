@@ -46,7 +46,7 @@ impl ParseAtomData for RawData {
         use crate::atom::util::parser::stream;
         use winnow::Parser;
         let data = rest_vec.parse(stream(input))?;
-        Ok(RawData::new(atom_type, data).into())
+        Ok(RawData::new(atom_type, data))
     }
 }
 

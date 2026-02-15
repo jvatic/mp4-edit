@@ -29,7 +29,7 @@ pub fn fourcc(input: &mut Stream<'_>) -> winnow::ModalResult<FourCC> {
     trace(
         "fourcc",
         (byte_array)
-            .map(|buf| FourCC(buf))
+            .map(FourCC)
             .context(StrContext::Label("fourcc")),
     )
     .parse_next(input)

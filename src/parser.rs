@@ -352,9 +352,9 @@ impl<R: AsyncRead + Unpin + Send, C: ReadCapability> Parser<R, C> {
 
     async fn parse_atom_data(&mut self, header: &AtomHeader) -> Result<AtomData, ParseError> {
         let content_data = self.reader.read_data(header.data_size).await?;
-        let mut input = stream(&content_data);
+        let input = stream(&content_data);
 
-        AtomData::parse_atom_data(header.atom_type, &mut input).map_err(|err| {
+        AtomData::parse_atom_data(header.atom_type, &input).map_err(|err| {
             let (header_offset, _) = header.location();
             let content_offset = header_offset + header.header_size;
             ParseError {

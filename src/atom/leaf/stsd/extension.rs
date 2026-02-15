@@ -283,7 +283,7 @@ pub(super) mod parser {
                         parse_btrt_box.map(StsdExtension::Btrt).parse_next(input)?
                     }
                     _ => StsdExtension::Unknown {
-                        fourcc: fourcc,
+                        fourcc,
                         data: rest_vec.parse_next(input)?,
                     },
                 })
