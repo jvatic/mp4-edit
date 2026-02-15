@@ -34,7 +34,9 @@ struct Args {
 
 #[derive(clap::Subcommand, Debug)]
 enum SubCommand {
+    #[cfg(feature = "experimental-trim")]
     Trim(TrimArgs),
+    #[cfg(feature = "experimental-trim")]
     Retain(RetainArgs),
 }
 
@@ -170,6 +172,7 @@ where
 
     if let Some(sub_command) = sub_command {
         match sub_command {
+            #[cfg(feature = "experimental-trim")]
             SubCommand::Trim(args) => {
                 if let Some(start) = args.start {
                     eprintln!("trimming {} from start", humantime::format_duration(start));
@@ -179,6 +182,7 @@ where
                 }
                 trim_duration(&mut input_metadata, args)?;
             }
+            #[cfg(feature = "experimental-trim")]
             SubCommand::Retain(args) => {
                 eprintln!(
                     "retaining {} to {}",
@@ -260,6 +264,7 @@ where
     Ok(())
 }
 
+#[cfg(feature = "experimental-trim")]
 fn trim_duration(metadata: &mut mp4_edit::parser::Metadata, args: TrimArgs) -> anyhow::Result<()> {
     metadata
         .moov_mut()
@@ -270,6 +275,7 @@ fn trim_duration(metadata: &mut mp4_edit::parser::Metadata, args: TrimArgs) -> a
     Ok(())
 }
 
+#[cfg(feature = "experimental-trim")]
 fn retain_duration(
     metadata: &mut mp4_edit::parser::Metadata,
     args: RetainArgs,

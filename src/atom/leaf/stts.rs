@@ -81,6 +81,7 @@ impl TimeToSampleAtom {
     /// This method panics if the trim ranges overlap.
     ///
     /// WARNING: failing to update other atoms appropriately will cause file corruption.
+    #[cfg(feature = "experimental-trim")]
     pub(crate) fn trim_duration<R>(&mut self, trim_ranges: &[R]) -> (u64, RangeSet<usize>)
     where
         R: RangeBounds<u64> + Debug,
@@ -156,6 +157,9 @@ impl TimeToSampleAtom {
                         end => current_sample_index + end as usize - 1,
                     };
 
+                // TODO(fix): when trimming a duration of 0, end_index can end up less than start_index
+                assert!(trim_sample_end_index > trim_sample_start_index);
+
                 let num_samples_to_remove = trim_sample_end_index + 1 - trim_sample_start_index;
                 if num_samples_to_remove == entry.sample_count as usize {
                     if entry.sample_count > 1 {
@@ -216,6 +220,7 @@ impl TimeToSampleAtom {
     }
 }
 
+#[cfg(feature = "experimental-trim")]
 fn entry_trim_duration<'a, R>(
     entry_range: &Range<u64>,
     trim_range: &'a R,
@@ -259,6 +264,7 @@ where
     None
 }
 
+#[cfg(feature = "experimental-trim")]
 fn convert_range(reference_range: &Range<u64>, range: &impl RangeBounds<u64>) -> Range<u64> {
     let start = match range.start_bound() {
         Bound::Included(start) => *start,
@@ -378,8 +384,6 @@ mod parser {
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Bound;
-
     use super::*;
     use crate::atom::test_utils::test_atom_roundtrip;
 
@@ -388,6 +392,14 @@ mod tests {
     fn test_stts_roundtrip() {
         test_atom_roundtrip::<TimeToSampleAtom>(STTS);
     }
+}
+
+#[cfg(feature = "experimental-trim")]
+#[cfg(test)]
+mod trim_tests {
+    use std::ops::Bound;
+
+    use super::*;
 
     struct TrimDurationTestCase {
         trim_duration: Vec<(Bound<u64>, Bound<u64>)>,
