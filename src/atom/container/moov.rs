@@ -130,6 +130,7 @@ impl<'a> MoovAtomRefMut<'a> {
     }
 }
 
+#[cfg(feature = "experimental-trim")]
 #[bon]
 impl<'a> MoovAtomRefMut<'a> {
     /// Trim duration from tracks.
@@ -212,6 +213,7 @@ impl<'a> MoovAtomRefMut<'a> {
     }
 }
 
+#[cfg(feature = "experimental-trim")]
 #[bon]
 impl<'a, 'b, S: trim_duration::State> TrimDuration<'a, 'b, S> {
     #[builder(finish_fn(name = "trim"), builder_type = TrimDurationRanges)]
@@ -246,8 +248,9 @@ impl<'a> MoovAtomRefMut<'a> {
     }
 }
 
+#[cfg(feature = "experimental-trim")]
 #[cfg(test)]
-mod tests {
+mod trim_tests {
     use std::ops::Bound;
     use std::time::Duration;
 
@@ -260,7 +263,9 @@ mod tests {
             hdlr::{HandlerReferenceAtom, HandlerType},
             mvhd::{MovieHeaderAtom, MVHD},
             stsc::SampleToChunkEntry,
-            trak::tests::{create_test_track, create_test_track_builder, CreateTestTrackBuilder},
+            trak::trim_tests::{
+                create_test_track, create_test_track_builder, CreateTestTrackBuilder,
+            },
             util::scaled_duration,
             Atom, AtomHeader,
         },

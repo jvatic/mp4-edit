@@ -1,14 +1,20 @@
 use bon::{bon, Builder};
 use derive_more::{Deref, DerefMut};
 
-use rangemap::RangeSet;
-use std::{fmt, iter::Peekable, ops::Range, slice};
+use std::fmt;
 
 use crate::{
-    atom::{stco_co64::ChunkOffsetOperationUnresolved, util::DebugList, FourCC},
+    atom::{util::DebugList, FourCC},
     parser::ParseAtomData,
     writer::SerializeAtom,
     ParseError,
+};
+
+#[cfg(feature = "experimental-trim")]
+use {
+    crate::atom::stco_co64::ChunkOffsetOperationUnresolved,
+    rangemap::RangeSet,
+    std::{iter::Peekable, ops::Range, slice},
 };
 
 pub const STSC: FourCC = FourCC::new(b"stsc");
@@ -21,6 +27,7 @@ impl SampleToChunkEntries {
         &self.0
     }
 
+    #[cfg(feature = "experimental-trim")]
     fn expanded_iter(&self, total_chunks: usize) -> ExpandedSampleToChunkEntryIter<'_> {
         ExpandedSampleToChunkEntryIter::new(total_chunks, &self.0)
     }
@@ -39,6 +46,7 @@ impl fmt::Debug for SampleToChunkEntries {
 }
 
 #[derive(Debug, Clone)]
+#[cfg(feature = "experimental-trim")]
 struct ExpandedSampleToChunkEntry {
     pub chunk_index: usize,
     pub sample_indices: Range<usize>,
@@ -47,6 +55,7 @@ struct ExpandedSampleToChunkEntry {
 }
 
 /// Iterates over [`SampleToChunkEntry`]s expanded to a single entry per chunk.
+#[cfg(feature = "experimental-trim")]
 struct ExpandedSampleToChunkEntryIter<'a> {
     total_chunks: usize,
     next_sample_index: usize,
@@ -54,6 +63,7 @@ struct ExpandedSampleToChunkEntryIter<'a> {
     iter: Peekable<slice::Iter<'a, SampleToChunkEntry>>,
 }
 
+#[cfg(feature = "experimental-trim")]
 impl<'a> ExpandedSampleToChunkEntryIter<'a> {
     fn new(total_chunks: usize, entries: &'a Vec<SampleToChunkEntry>) -> Self {
         let iter = entries.into_iter().peekable();
@@ -66,6 +76,7 @@ impl<'a> ExpandedSampleToChunkEntryIter<'a> {
     }
 }
 
+#[cfg(feature = "experimental-trim")]
 impl<'a> Iterator for ExpandedSampleToChunkEntryIter<'a> {
     type Item = ExpandedSampleToChunkEntry;
 
@@ -152,6 +163,7 @@ impl SampleToChunkAtom {
     ///
     /// `sample_indices_to_remove` must contain contiguous sample indices as a single range,
     /// multiple ranges must not overlap.
+    #[cfg(feature = "experimental-trim")]
     pub(crate) fn remove_sample_indices(
         &mut self,
         sample_indices_to_remove: &RangeSet<usize>,
@@ -410,6 +422,7 @@ impl SampleToChunkAtom {
     }
 }
 
+#[cfg(feature = "experimental-trim")]
 fn entry_samples_to_remove(
     entry_sample_indices: &Range<usize>,
     sample_indices_to_remove: &RangeSet<usize>,
@@ -558,6 +571,12 @@ mod tests {
     fn test_stsc_roundtrip() {
         test_atom_roundtrip::<SampleToChunkAtom>(STSC);
     }
+}
+
+#[cfg(feature = "experimental-trim")]
+#[cfg(test)]
+mod trim_tests {
+    use super::*;
 
     struct EntrySamplesToRemoveTestCase {
         entry_start_sample_index: usize,
@@ -757,6 +776,7 @@ mod tests {
         };
     }
 
+    // TODO: test inserted and adjusted chunk offsets in addition to removed offsets
     mod test_remove_sample_indices {
         use super::*;
 

@@ -102,6 +102,7 @@ impl RemovedSampleSizes {
 }
 
 impl SampleSizeAtom {
+    #[cfg(feature = "experimental-trim")]
     pub(crate) fn remove_sample_indices(
         &mut self,
         indices_to_remove: &RangeSet<usize>,

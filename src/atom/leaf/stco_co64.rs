@@ -1,11 +1,9 @@
-use anyhow::anyhow;
 use bon::bon;
 use derive_more::{Deref, DerefMut};
-use std::{fmt, ops::Range};
+use std::fmt;
 
 use crate::{
     atom::{
-        stsz::RemovedSampleSizes,
         util::{DebugList, DebugUpperHex},
         FourCC,
     },
@@ -13,6 +11,9 @@ use crate::{
     writer::SerializeAtom,
     ParseError,
 };
+
+#[cfg(feature = "experimental-trim")]
+use {crate::atom::stsz::RemovedSampleSizes, anyhow::anyhow, std::ops::Range};
 
 pub const STCO: FourCC = FourCC::new(b"stco");
 pub const CO64: FourCC = FourCC::new(b"co64");
@@ -61,6 +62,7 @@ pub struct ChunkOffsetAtom {
     pub is_64bit: bool,
 }
 
+#[cfg(feature = "experimental-trim")]
 #[derive(Debug)]
 pub(crate) enum ChunkOffsetOperationUnresolved {
     Remove(Range<usize>),
@@ -82,6 +84,7 @@ pub(crate) enum ChunkOffsetOperationUnresolved {
     },
 }
 
+#[cfg(feature = "experimental-trim")]
 impl ChunkOffsetOperationUnresolved {
     pub fn resolve(
         self,
@@ -125,6 +128,7 @@ impl ChunkOffsetOperationUnresolved {
     }
 }
 
+#[cfg(feature = "experimental-trim")]
 #[derive(Debug)]
 pub(crate) enum ChunkOffsetOperation {
     Remove(Range<usize>),
@@ -155,6 +159,7 @@ impl ChunkOffsetAtom {
     }
 
     /// Applies a list of operations
+    #[cfg(feature = "experimental-trim")]
     pub(crate) fn apply_operations(&mut self, ops: Vec<ChunkOffsetOperation>) {
         for op in ops {
             match op {

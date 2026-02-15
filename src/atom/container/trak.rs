@@ -231,7 +231,10 @@ impl<'a> TrakAtomRefMut<'a> {
             unreachable!("STSD constructed with invalid data")
         }
     }
+}
 
+#[cfg(feature = "experimental-trim")]
+impl<'a> TrakAtomRefMut<'a> {
     /// trims given duration range, excluding partially matched samples, and returns the remaining duration
     pub(crate) fn trim_duration<R>(&mut self, movie_timescale: u64, trim_ranges: &[R]) -> Duration
     where
@@ -302,6 +305,7 @@ impl<'a> TrakAtomRefMut<'a> {
     }
 }
 
+#[cfg(feature = "experimental-trim")]
 fn convert_range(media_time: u64, range: impl RangeBounds<u64>) -> Range<u64> {
     use std::ops::Bound;
     let start = match range.start_bound() {
@@ -317,8 +321,9 @@ fn convert_range(media_time: u64, range: impl RangeBounds<u64>) -> Range<u64> {
     start..end
 }
 
+#[cfg(feature = "experimental-trim")]
 #[cfg(test)]
-pub(crate) mod tests {
+pub(crate) mod trim_tests {
     use std::{ops::Bound, time::Duration};
 
     use bon::Builder;
@@ -695,6 +700,10 @@ pub(crate) mod tests {
         use super::*;
 
         test_trim_duration!(
+            // TODO: test that when the middle of a chunk is trimmed, it's split into two chunks
+            // TODO: test that trimming the start of a chunk adjusts the chunk's offset forward (to the left) to compensate
+            // (trimming the end of a chunk doesn't require an adjustment)
+            // TODO: test that the edit list applies the remainder when the trim range doesn't divide cleanly to a sample range (i.e. when trying to trim within a sample's boundaries)
             trim_start_11_seconds {
                 @track(
                     duration: Duration::from_secs(100),
