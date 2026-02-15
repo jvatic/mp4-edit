@@ -28,13 +28,9 @@ jobs:
           # Also create version without 'v' prefix for cargo
           VERSION_NUMBER="${VERSION#v}"
           echo "version_number=$VERSION_NUMBER" >> $GITHUB_OUTPUT
-          # Extract crate version
-          CRATE_VERSION=$(grep "^version" Cargo.toml | head -1 | cut -d'"' -f2)
-          echo "crate_version=$CRATE_VERSION" >> $GITHUB_ENV
           echo "Using ref: $REF"
           echo "Using version: $VERSION"
           echo "Using version number: $VERSION_NUMBER"
-          echo "Using crate version: $CRATE_VERSION"
 
   verify-version:
     name: Verify version matches tag
@@ -49,7 +45,7 @@ jobs:
       - name: Verify Cargo.toml version matches tag
         run: |
           TAG_VERSION="${{ needs.setup.outputs.version_number }}"
-          CRATE_VERSION="${{ needs.setup.outputs.crate_version }}"
+          CRATE_VERSION=$(grep "^version" Cargo.toml | head -1 | cut -d'"' -f2)
 
           echo "Tag version: $TAG_VERSION"
           echo "Cargo.toml version: $CRATE_VERSION"
@@ -135,14 +131,17 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Get Cargo version for checking
+        run: |
+          CRATE_VERSION=$(grep "^version" Cargo.toml | head -1 | cut -d'"' -f2)
+          echo "CRATE_VERSION=$CRATE_VERSION" >> $GITHUB_ENV
+
       - name: Authenticate with crates.io
         uses: rust-lang/crates-io-auth-action@v1
         id: auth
 
       - name: Publish to crates.io
         run: |
-          CRATE_VERSION="${{ needs.setup.outputs.crate_version }}"
-
           # Try to publish, but don't fail if the version already exists
           OUTPUT=$(cargo publish --verbose 2>&1) && echo "$OUTPUT" || {
             EXIT_CODE=$?
