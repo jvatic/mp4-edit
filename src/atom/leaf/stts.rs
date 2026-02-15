@@ -158,7 +158,7 @@ impl TimeToSampleAtom {
                     };
 
                 // TODO(fix): when trimming a duration of 0, end_index can end up less than start_index
-                assert!(trim_sample_end_index > trim_sample_start_index);
+                assert!(trim_sample_end_index >= trim_sample_start_index);
 
                 let num_samples_to_remove = trim_sample_end_index + 1 - trim_sample_start_index;
                 if num_samples_to_remove == entry.sample_count as usize {
