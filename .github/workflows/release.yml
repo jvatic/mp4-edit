@@ -1,0 +1,160 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  setup:
+    name: Setup
+    runs-on: ubuntu-latest
+    outputs:
+      ref: ${{ steps.get-ref.outputs.ref }}
+      version: ${{ steps.get-ref.outputs.version }}
+      version_number: ${{ steps.get-ref.outputs.version_number }}
+    steps:
+      - name: Determine ref and version
+        id: get-ref
+        run: |
+          REF="${{ github.ref }}"
+          echo "ref=$REF" >> $GITHUB_OUTPUT
+          # Extract version from ref (remove refs/tags/ prefix if present)
+          VERSION="${REF#refs/tags/}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          # Also create version without 'v' prefix for cargo
+          VERSION_NUMBER="${VERSION#v}"
+          echo "version_number=$VERSION_NUMBER" >> $GITHUB_OUTPUT
+          # Extract crate version
+          CRATE_VERSION=$(grep "^version" Cargo.toml | head -1 | cut -d'"' -f2)
+          echo "crate_version=$CRATE_VERSION" >> $GITHUB_ENV
+          echo "Using ref: $REF"
+          echo "Using version: $VERSION"
+          echo "Using version number: $VERSION_NUMBER"
+          echo "Using crate version: $CRATE_VERSION"
+
+  verify-version:
+    name: Verify version matches tag
+    needs: setup
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.setup.outputs.ref }}
+
+      - name: Verify Cargo.toml version matches tag
+        run: |
+          TAG_VERSION="${{ needs.setup.outputs.version_number }}"
+          CRATE_VERSION="${{ needs.setup.outputs.crate_version }}"
+
+          echo "Tag version: $TAG_VERSION"
+          echo "Cargo.toml version: $CRATE_VERSION"
+
+          if [ "$TAG_VERSION" != "$CRATE_VERSION" ]; then
+            echo "Error: Tag version ($TAG_VERSION) doesn't match Cargo.toml version ($CRATE_VERSION)"
+            echo "Please ensure the version in Cargo.toml matches the tag you're trying to release."
+            exit 1
+          fi
+          echo "✅ Version check passed!"
+
+  test:
+    name: Run tests
+    needs: [setup, verify-version]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.setup.outputs.ref }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run tests
+        run: cargo test --all-features --verbose
+
+      - name: Run clippy
+        run: cargo clippy --all-features -- -D warnings
+
+  create-release:
+    name: Create GitHub Release
+    needs: [setup, verify-version, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.setup.outputs.ref }}
+          fetch-depth: 0 # Fetch all history for git-cliff
+
+      - name: Generate changelog
+        id: git-cliff
+        uses: orhun/git-cliff-action@v4
+        with:
+          config: cliff.toml
+          args: --current --strip all
+        env:
+          OUTPUT: CHANGELOG.md
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.setup.outputs.version }}
+          name: Release ${{ needs.setup.outputs.version }}
+          body: |
+            ## Changes in ${{ needs.setup.outputs.version }}
+
+            ${{ steps.git-cliff.outputs.content }}
+
+            ### Installation
+
+            #### From crates.io
+            ```bash
+            cargo add mp4-edit@${{ needs.setup.outputs.version_number }}
+            ```
+
+  publish-crate:
+    name: Publish to crates.io
+    needs: [setup, create-release]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      id-token: write # Required for OIDC token exchange with crates.io
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.setup.outputs.ref }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Authenticate with crates.io
+        uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
+      - name: Publish to crates.io
+        run: |
+          CRATE_VERSION="${{ needs.setup.outputs.crate_version }}"
+
+          # Try to publish, but don't fail if the version already exists
+          OUTPUT=$(cargo publish --verbose 2>&1) && echo "$OUTPUT" || {
+            EXIT_CODE=$?
+            echo "$OUTPUT"
+            # Check if it failed because the version already exists
+            if echo "$OUTPUT" | grep -q "already exists on crates.io"; then
+              echo "✅ Version $CRATE_VERSION already published on crates.io, skipping..."
+              exit 0
+            fi
+            # If it failed for another reason, exit with the original error code
+            echo "Error: Publishing failed with error code $EXIT_CODE"
+            exit $EXIT_CODE
+          }
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
