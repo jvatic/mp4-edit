@@ -12,6 +12,8 @@ jobs:
   setup:
     name: Setup
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       ref: ${{ steps.get-ref.outputs.ref }}
       version: ${{ steps.get-ref.outputs.version }}
@@ -36,6 +38,8 @@ jobs:
     name: Verify version matches tag
     needs: setup
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
@@ -61,6 +65,8 @@ jobs:
     name: Run tests
     needs: [setup, verify-version]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
