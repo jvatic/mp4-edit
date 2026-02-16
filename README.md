@@ -1,6 +1,13 @@
 mp4-edit
 ========
 
+[![Build Status]][GitHub Actions]
+[![Crate]][crates.io]
+[![Documentation]][docs.rs]
+[![Dependency Status]][deps.rs]
+[![Downloads]][crates.io]
+[![License]](LICENSE-MIT)
+
 This crate provides tools for lossless editing of MP4 files, with a focus on audiobooks.
 
 ## Status
@@ -56,6 +63,8 @@ When opening a pull request, please make a best effort to use [Conventional Comm
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this crate by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
 
+[//]: # (footnotes)
+
 [^lossless]: The output will use the most efficient size headers possible, doesn't maintain non-standard reserved field values. Other than that, all data should be the same unless explicitly changed.
 
 [^trimming]: Limitations apply; Trimming is a work in progress and is currently only supported for a single audio track. The edit list is not taken into consideration. It _should_ be possible to expand this support, with the help of edit lists, to include all track types on multi-track files (see https://github.com/jvatic/mp4-edit/issues/1).
@@ -63,3 +72,17 @@ Unless you explicitly state otherwise, any contribution intentionally submitted 
 [^interleaving]: While re-ordering chunks is not yet supported, new tracks may be added that interleave with existing ones, and any original interleaving is maintained. You are responsible for ensuring data is added in the correct locations via the `ChunkParser`. Higher level abstractions may be added later.
 
 [^async]: The main API works with async IO, but each atom parser is itself sync.
+
+[//]: # (badges)
+
+[Build Status]: https://github.com/jvatic/mp4-edit/actions/workflows/rust.yml/badge.svg?branch=main
+[Crate]: https://img.shields.io/crates/v/mp4-edit
+[Documentation]: https://docs.rs/mp4-edit/badge.svg
+[Dependency Status]: https://deps.rs/repo/github/jvatic/mp4-edit/status.svg
+[Downloads]: https://img.shields.io/crates/d/mp4-edit
+[License]: https://img.shields.io/crates/l/mp4-edit
+
+[GitHub Actions]: https://github.com/jvatic/mp4-edit/actions?query=branch:main
+[crates.io]: https://crates.io/crates/mp4-edit
+[docs.rs]: https://docs.rs/mp4-edit
+[deps.rs]: https://deps.rs/repo/github/jvatic/mp4-edit
