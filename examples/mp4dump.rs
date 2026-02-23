@@ -2,202 +2,189 @@
  * This example demonstrates inspecting the atom structure of an mp4 file.
  */
 
+use anyhow::Result;
+use colored::{ColoredString, Colorize};
 use std::env;
-use tokio::{
-    fs,
-    io::{self},
-};
+use terminal_size::terminal_size;
+use tokio::fs;
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
-use mp4_edit::{
-    atom::{meta, AtomHeader},
-    parser::Metadata,
-    Atom, AtomData, Parser,
-};
-
-/// Format file size in human-readable format
-fn format_size(size: usize) -> String {
-    const UNITS: &[&str] = &["B", "KB", "MB", "GB"];
-    let mut size = size as f64;
-    let mut unit_index = 0;
-
-    while size >= 1024.0 && unit_index < UNITS.len() - 1 {
-        size /= 1024.0;
-        unit_index += 1;
-    }
-
-    if unit_index == 0 {
-        format!("{} {}", size as u64, UNITS[unit_index])
-    } else {
-        format!("{:.1} {}", size, UNITS[unit_index])
-    }
-}
-
-/// Get a summary of atom data
-fn get_atom_summary(atom: &Atom) -> String {
-    match &atom.data {
-        Some(AtomData::RawData(data)) if atom.header.atom_type == b"meta" => {
-            meta::MetaHeader::from_bytes(data.as_slice())
-                .map(|meta| format!("{meta:?}"))
-                .unwrap_or_else(|_| format!("{data:?}"))
-        }
-        Some(data) => format!("{data:?}"),
-        None => "".to_string(),
-    }
-}
-
-/// Print atom with proper formatting and indentation
-fn print_atom(atom: &Atom, indent: usize) {
-    let indent_str = if indent > 0 {
-        format!("{:<width$}", "", width = indent)
-    } else {
-        String::new()
-    };
-
-    let atom_display = format!("{}{}", indent_str, atom.header.atom_type);
-    let size_display = format_size(atom.header.atom_size());
-    let offset_display = format!(
-        "0x{:08x}..=0x{:08x}",
-        atom.header.offset,
-        atom.header.offset + atom.header.atom_size() - 1
-    );
-    let summary = get_atom_summary(atom);
-
-    // Color coding based on atom type
-    let atom_color = match atom.header.atom_type.to_string().as_str() {
-        "ftyp" | "styp" => "\x1b[1;32m",          // Green for file type
-        "moov" | "trak" | "mdia" => "\x1b[1;34m", // Blue for containers
-        "mvhd" | "tkhd" | "mdhd" => "\x1b[1;35m", // Magenta for headers
-        "stbl" | "stts" | "stsc" | "stsz" | "stco" | "co64" => "\x1b[1;31m", // Red for sample tables
-        _ => "\x1b[0m",                                                      // Default
-    };
-
-    println!("\x1b[1;36m│\x1b[0m {}{:<20}\x1b[0m │ \x1b[2m{:<23}\x1b[0m │ \x1b[1m{:<10}\x1b[0m │ \x1b[2m{:<30}\x1b[0m",
-        atom_color, atom_display, offset_display, size_display, summary);
-}
-
-/// Print table header
-fn print_table_header() {
-    println!("\n\x1b[1;36m╭─ MP4 Atom Structure ──────────────────────────────────────────────────────────────\x1b[0m");
-    println!("\x1b[1;36m│\x1b[0m");
-    println!(
-        "\x1b[1;36m│\x1b[0m \x1b[1;33m{:<20} │ {:<23} │ {:<10} │ {:<30}\x1b[0m",
-        "Atom Type", "Offset Range", "Size", "Summary"
-    );
-    println!(
-        "\x1b[1;36m│\x1b[0m \x1b[2m{:─<20}─┼─{:─<23}─┼─{:─<10}─┼─{:─<30}\x1b[0m",
-        "", "", "", ""
-    );
-}
-
-/// Print table footer
-fn print_table_footer() {
-    println!("\x1b[1;36m│\x1b[0m");
-    println!("\x1b[1;36m╰────────────────────────────────────────────────────────────────────────────────────\x1b[0m\n");
-}
-
-/// Process atom recursively, handling data extraction and printing
-fn process_atom(atom: &Atom, indent: usize, atom_count: &mut usize) {
-    print_atom(atom, indent);
-    *atom_count += 1;
-
-    // Process children recursively
-    for child in &atom.children {
-        process_atom(child, indent + 1, atom_count);
-    }
-}
-
-async fn print_atoms(metadata: Metadata, mdat_header: Option<AtomHeader>) -> anyhow::Result<usize> {
-    let mut atom_count = 0;
-    let mut first_atom = true;
-
-    let mut track_bitrate = Vec::with_capacity(1);
-    for trak in metadata.moov().into_tracks_iter() {
-        let num_bits = trak
-            .media()
-            .media_information()
-            .sample_table()
-            .sample_size()
-            .map(|s| s.entry_sizes.iter().sum::<u32>())
-            .unwrap_or_default()
-            .saturating_mul(8);
-
-        let duration_secds = trak
-            .media()
-            .header()
-            .map(|mdhd| (mdhd.duration as f64) / (mdhd.timescale as f64))
-            .unwrap_or_default();
-
-        let bitrate = (num_bits as f64) / duration_secds;
-        println!(
-            "trak({track_id}) bitrate: {bitrate}",
-            track_id = trak.header().map(|tkhd| tkhd.track_id).unwrap_or_default()
-        );
-        track_bitrate.push(bitrate.round() as u32);
-    }
-
-    for atom in metadata.atoms_iter() {
-        if first_atom {
-            print_table_header();
-            first_atom = false;
-        }
-
-        process_atom(atom, 0, &mut atom_count);
-    }
-
-    if let Some(mdat_header) = mdat_header {
-        let mdat_atom = Atom {
-            header: mdat_header,
-            data: None,
-            children: Vec::new(),
-        };
-        process_atom(&mdat_atom, 0, &mut atom_count);
-    }
-
-    if !first_atom {
-        print_table_footer();
-    }
-
-    Ok(atom_count)
-}
+use mp4_edit::{Atom, Parser};
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         eprintln!("Usage: {} <mp4_filename>", args[0]);
         std::process::exit(1);
     }
 
-    let input_name = args[1].as_str();
-    println!("\x1b[1;32m🎬 Analyzing MP4 file: {}\x1b[0m", input_name);
+    // Open <mp4_filename> and parse it's metadata
+    let input_path = args[1].as_str();
+    let file = fs::File::open(input_path).await?;
+    let parser = Parser::new_seekable(file.compat());
+    let metadata = parser.parse_metadata().await?;
+    let mdat_header = metadata.mdat_header().cloned();
 
-    let atom_count = if input_name == "-" {
-        eprintln!("parsing as readonly");
-        let input = Box::new(io::stdin());
-        let parser = Parser::new(input.compat());
-        let metadata = parser.parse_metadata().await?;
-        let mdat_header = metadata.mdat_header().cloned();
-        print_atoms(metadata.into_metadata(), mdat_header).await?
-    } else {
-        eprintln!("parsing as seekable");
-        let file = fs::File::open(input_name).await?;
-        let parser = Parser::new_seekable(file.compat());
-        let metadata = parser.parse_metadata().await?;
-        let mdat_header = metadata.mdat_header().cloned();
-        print_atoms(metadata.into_metadata(), mdat_header).await?
+    // Get the terminal width
+    let width = match terminal_size() {
+        Some((terminal_size::Width(width), _)) => width as usize - 2,
+        _ => 100,
     };
 
-    // Print summary statistics
-    println!("\x1b[1;33m📊 Summary:\x1b[0m");
-    println!("   Total atoms: \x1b[1m{}\x1b[0m", atom_count);
-    if args[1].as_str() != "-" {
-        let file_size = fs::metadata(&args[1]).await?.len();
+    // Print mp4 metadata
+    let table = Mp4Table::new(width);
+    table.print_header();
+    table.print_atoms(metadata.atoms_iter(), 0);
+    if let Some(mdat_header) = mdat_header {
+        let atom = Atom::builder().header(mdat_header).build();
+        table.print_atoms(std::iter::once(&atom), 0);
+    };
+    table.print_footer();
+
+    Ok(())
+}
+
+struct Mp4Table {
+    width: usize,
+}
+
+impl Mp4Table {
+    pub fn new(width: usize) -> Self {
+        Self { width }
+    }
+
+    pub fn print_header(&self) {
         println!(
-            "   File size: \x1b[1m{}\x1b[0m",
-            format_size(file_size as usize)
+            "{}",
+            format!("{:─<width$}", "╭─ MP4 Atom Structure ", width = self.width).dimmed()
+        );
+        println!("{}", "│".dimmed());
+        self.print_row("Atom Type", "Offset Range", "Size", "Data", 0);
+        self.print_divider_row();
+    }
+
+    /// Recursively print each [Atom] and it's children.
+    pub fn print_atoms<'a>(&self, atoms: impl Iterator<Item = &'a Atom>, indent: usize) {
+        atoms.for_each(|atom| {
+            self.print_atom(atom, indent);
+            self.print_atoms(atom.children.iter(), indent + 1);
+        });
+    }
+
+    pub fn print_footer(&self) {
+        println!("{}", "│".dimmed());
+        println!(
+            "{}",
+            format!("{:—<width$}", "╰─", width = self.width).dimmed()
         );
     }
 
-    Ok(())
+    fn print_atom(&self, atom: &Atom, indent: usize) {
+        let offset_range = format!(
+            "0x{:08x}..=0x{:08x}",
+            atom.header.offset,
+            atom.header.offset + atom.header.atom_size() - 1
+        );
+        let size = format_size(atom.header.atom_size());
+        let data = match &atom.data {
+            Some(data) => format!("{data:?}"),
+            None => "".to_string(),
+        };
+        self.print_row(
+            self.atom_type_colored(atom),
+            offset_range,
+            size,
+            data.dimmed(),
+            indent,
+        );
+    }
+
+    fn atom_type_colored(&self, atom: &Atom) -> ColoredString {
+        let atom_type = atom.header.atom_type.as_str();
+        if !atom.children.is_empty() {
+            return atom_type.cyan();
+        }
+        if atom_type.ends_with("hd") {
+            return atom_type.blue();
+        }
+        match atom_type {
+            "ftyp" | "free" | "wide" | "ilst" | "dref" => atom_type.yellow(),
+            _ => atom_type.purple(),
+        }
+    }
+
+    /// Calculate column widths based on terminal size.
+    fn col_widths(&self) -> [usize; 4] {
+        let atom_type_width = (self.width / 5).max(20).min(30);
+        let offset_range_width = 23;
+        let size_width = (self.width / 15).max(10).min(15);
+        let data_width = self
+            .width
+            .saturating_sub(atom_type_width + offset_range_width + size_width)
+            .max(30);
+
+        let n_pipes = 4;
+        let padding = (n_pipes * 2) - 1;
+        let data_width = data_width - n_pipes - padding;
+
+        [atom_type_width, offset_range_width, size_width, data_width]
+    }
+
+    fn print_row(
+        &self,
+        atom_type: impl Into<ColoredString>,
+        offset_range: impl Into<ColoredString>,
+        size: impl Into<ColoredString>,
+        data: impl Into<ColoredString>,
+        indent: usize,
+    ) {
+        let [atom_type_width, offset_range_width, size_width, data_width] = self.col_widths();
+
+        let mut atom_type = atom_type.into();
+        let mut offset_range = offset_range.into();
+        let mut size = size.into();
+        let mut data = data.into();
+
+        atom_type.input = match indent {
+            0 => format!("{}", atom_type.input),
+            indent => format!("{:indent$}{}", "", atom_type.input),
+        };
+        atom_type.input = format!("{: <atom_type_width$}", atom_type.input);
+        offset_range.input = format!("{: <offset_range_width$}", offset_range.input);
+        size.input = format!("{: <size_width$}", size.input);
+        data.input = format!("{: <data_width$}", data.input);
+
+        let pipe = "│".dimmed();
+        println!("{pipe} {atom_type} {pipe} {offset_range} {pipe} {size} {pipe} {data}");
+    }
+
+    fn print_divider_row(&self) {
+        let cols = self
+            .col_widths()
+            .into_iter()
+            .map(|col_width| format!("{:—<col_width$}", ""))
+            .collect::<Vec<_>>()
+            .join(" │ ");
+
+        println!("{}", format!("│ {cols}").dimmed());
+    }
+}
+
+fn format_size(size: usize) -> String {
+    const DIVISOR: f64 = 1024.0;
+    let mut size = size as f64;
+    let (size, unit) = std::iter::once(size)
+        .chain(std::iter::from_fn(|| {
+            if size < DIVISOR {
+                return None;
+            }
+            size /= DIVISOR;
+            Some(size)
+        }))
+        .zip(["B", "KB", "MB", "GB"].into_iter())
+        .last()
+        .unwrap();
+
+    format!("{:.1} {}", size, unit)
 }
