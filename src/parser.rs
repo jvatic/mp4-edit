@@ -413,6 +413,10 @@ impl<R, C: ReadCapability> MdatParser<R, C> {
         self.meta
     }
 
+    pub fn into_inner(self) -> (Metadata, Option<Mp4Reader<R, C>>) {
+        (self.meta, self.reader)
+    }
+
     pub fn mdat_header(&self) -> Option<&AtomHeader> {
         self.mdat.as_ref()
     }
