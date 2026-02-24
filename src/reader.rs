@@ -29,6 +29,12 @@ pub struct Mp4Reader<R, C: ReadCapability> {
     _capability: PhantomData<C>,
 }
 
+impl<R, C: ReadCapability> Mp4Reader<R, C> {
+    pub fn into_inner(self) -> (Vec<u8>, R) {
+        (self.peek_buffer, self.reader)
+    }
+}
+
 impl<R: AsyncRead + Unpin + Send> Mp4Reader<R, NonSeekable> {
     pub fn new(reader: R) -> Self {
         Self {
