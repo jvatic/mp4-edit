@@ -716,7 +716,7 @@ impl<'a, R: AsyncRead + Unpin + Send, C: ReadCapability> ChunkParser<'a, R, C> {
                     kind: ParseErrorKind::InsufficientData,
                     location: None,
                     source: Some(
-                        anyhow!("no samples indicies in chunk at index {chunk_idx}")
+                        anyhow!("no samples indices in chunk at index {chunk_idx}")
                             .into_boxed_dyn_error(),
                     ),
                 })?;
