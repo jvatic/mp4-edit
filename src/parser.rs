@@ -723,7 +723,7 @@ impl<'a, R: AsyncRead + Unpin + Send, C: ReadCapability> ChunkParser<'a, R, C> {
 
         // Calculate total chunk size
         let chunk_size = chunk_info.chunk_size;
-        let chunk_sample_sizes = chunk_info.sample_sizes.clone();
+        let chunk_sample_sizes = chunk_info.sample_sizes;
 
         // Read the chunk data
         let data = self.reader.read_data(chunk_size as usize).await?;
