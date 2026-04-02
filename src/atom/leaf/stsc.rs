@@ -156,11 +156,6 @@ impl SampleToChunkAtom {
     /// Removes sample indices from the sample-to-chunk mapping table,
     /// and returns the indices (starting from zero) of any chunks which are now empty (and should be removed)
     ///
-    /// TODO: return a list of operations to apply to chunk offsets
-    /// - [x] Remove(RangeSet of chunk indices to remove)
-    /// - [ ] Insert(chunk index, sample index range) (will need to be cross referenced with sample_sizes)
-    /// - [ ] ShiftLeft(chunk index, sample index range) (ditto '')
-    ///
     /// `sample_indices_to_remove` must contain contiguous sample indices as a single range,
     /// multiple ranges must not overlap.
     #[cfg(feature = "experimental-trim")]
