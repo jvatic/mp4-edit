@@ -11,6 +11,7 @@ use std::io::SeekFrom;
 use std::ops::{Deref, DerefMut};
 use thiserror::Error;
 
+use crate::atom::stsz::SampleSizes;
 use crate::atom::util::parser::stream;
 use crate::chunk_offset_builder;
 pub use crate::reader::{Mp4Reader, NonSeekable, ReadCapability, Seekable};
@@ -467,7 +468,7 @@ impl<R, C: ReadCapability> MdatParser<R, C> {
                 parser.tracks.push(trak);
                 parser.chunk_offsets.push(stco);
                 parser.sample_to_chunk.push(stsc.entries.inner());
-                parser.sample_sizes.push(stsz.entry_sizes.inner());
+                parser.sample_sizes.push(stsz.sample_sizes());
                 parser.time_to_sample.push(stts.entries.inner());
                 parser
                     .chunk_info
@@ -650,7 +651,7 @@ pub struct ChunkParser<'a, R, C: ReadCapability> {
     /// [`SampleToChunkEntry`]s for each track
     sample_to_chunk: Vec<&'a [SampleToChunkEntry]>,
     /// Sample sizes for each track
-    sample_sizes: Vec<&'a [u32]>,
+    sample_sizes: Vec<SampleSizes<'a>>,
     /// [`TimeToSampleEntry`]s for each track
     time_to_sample: Vec<&'a [TimeToSampleEntry]>,
     /// [`ChunkInfo`]s for each track
@@ -702,28 +703,22 @@ impl<'a, R: AsyncRead + Unpin + Send, C: ReadCapability> ChunkParser<'a, R, C> {
     async fn read_chunk(
         &mut self,
         track_idx: usize,
-        chunk_idx: usize,
+        _chunk_idx: usize,
         chunk_info: ChunkInfo,
     ) -> Result<Chunk<'a>, ParseError> {
         let time_to_sample = self.time_to_sample[track_idx];
 
-        let sample_start_idx =
-            chunk_info
-                .sample_indices
-                .first()
-                .copied()
-                .ok_or_else(|| ParseError {
-                    kind: ParseErrorKind::InsufficientData,
-                    location: None,
-                    source: Some(
-                        anyhow!("no samples indices in chunk at index {chunk_idx}")
-                            .into_boxed_dyn_error(),
-                    ),
-                })?;
-
         // Calculate total chunk size
         let chunk_size = chunk_info.chunk_size;
-        let chunk_sample_sizes = chunk_info.sample_sizes;
+        let chunk_sample_sizes = match self.sample_sizes[track_idx] {
+            SampleSizes::Uniform(size) => vec![*size; chunk_info.n_samples],
+            SampleSizes::Varied(sizes) => sizes
+                .iter()
+                .copied()
+                .skip(chunk_info.first_sample_index)
+                .take(chunk_info.n_samples)
+                .collect(),
+        };
 
         // Read the chunk data
         let data = self.reader.read_data(chunk_size as usize).await?;
@@ -734,8 +729,8 @@ impl<'a, R: AsyncRead + Unpin + Send, C: ReadCapability> ChunkParser<'a, R, C> {
             .flat_map(|entry| {
                 std::iter::repeat_n(entry.sample_duration, entry.sample_count as usize)
             })
-            .skip(sample_start_idx)
-            .take(chunk_sample_sizes.len())
+            .skip(chunk_info.first_sample_index)
+            .take(chunk_info.n_samples)
             .collect();
         assert_eq!(chunk_sample_sizes.len(), sample_durations.len());
 

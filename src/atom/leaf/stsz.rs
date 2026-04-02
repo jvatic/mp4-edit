@@ -54,6 +54,12 @@ impl SampleEntrySizes {
     }
 }
 
+#[derive(Debug)]
+pub enum SampleSizes<'a> {
+    Uniform(&'a u32),
+    Varied(&'a [u32]),
+}
+
 /// Sample Size Atom (stsz) - ISO/IEC 14496-12
 /// This atom contains the sample count and a table giving the size in bytes of each sample.
 /// Samples within the media may have different sizes, up to the limit of a 32-bit integer.
@@ -136,15 +142,6 @@ impl SampleSizeAtom {
 
         removed_sizes
     }
-
-    /// Returns `sample_count` if it's set, otherwise `entry_sizes.len()`
-    pub fn sample_count(&self) -> usize {
-        if self.sample_count > 0 {
-            self.sample_count as usize
-        } else {
-            self.entry_sizes.len()
-        }
-    }
 }
 
 #[bon]
@@ -172,19 +169,34 @@ impl SampleSizeAtom {
         }
     }
 
+    /// Returns `sample_count` if it's set, otherwise `entry_sizes.len()`
+    pub fn sample_count(&self) -> usize {
+        if self.sample_count > 0 {
+            self.sample_count as usize
+        } else {
+            self.entry_sizes.len()
+        }
+    }
+
+    /// Returns either [`Self::sample_size`] if non-zero or [`Self::entry_sizes`]
+    pub fn sample_sizes(&self) -> SampleSizes<'_> {
+        if self.sample_size == 0 {
+            SampleSizes::Varied(&self.entry_sizes)
+        } else {
+            SampleSizes::Uniform(&self.sample_size)
+        }
+    }
+
     /// Returns an iterator over _all_ sample sizes.
     ///
-    /// If `sample_size != 0` this will repeat that value
-    /// `sample_count` times; otherwise it will yield
-    /// the values from `entry_sizes`.
-    pub fn sample_sizes(&self) -> impl Iterator<Item = &u32> + '_ {
-        if self.sample_size != 0 {
-            Either::Left(std::iter::repeat_n(
-                &self.sample_size,
-                self.sample_count as usize,
-            ))
-        } else {
-            Either::Right(self.entry_sizes.iter())
+    /// In the case of a uniform size, it will repeat that value [`Self::sample_count`] times;
+    /// Otherwise it will iterate over [`Self::entry_sizes`].
+    pub fn sample_size_iter(&self) -> impl Iterator<Item = &u32> + '_ {
+        match self.sample_sizes() {
+            SampleSizes::Uniform(size) => {
+                Either::Left(std::iter::repeat_n(size, self.sample_count as usize))
+            }
+            SampleSizes::Varied(sizes) => Either::Right(sizes.iter()),
         }
     }
 }

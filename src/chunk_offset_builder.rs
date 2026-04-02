@@ -7,8 +7,8 @@ pub struct ChunkInfo {
     pub track_index: usize,
     pub chunk_number: u32,
     pub chunk_size: u64,
-    pub sample_indices: Vec<usize>,
-    pub sample_sizes: Vec<u32>,
+    pub first_sample_index: usize,
+    pub n_samples: usize,
 }
 
 #[derive(Debug)]
@@ -57,34 +57,24 @@ impl<'a> ChunkOffsetBuilderTrack<'a> {
                     Some((entry.first_chunk..next_first_chunk).scan(
                         (track_index, start_sample_index),
                         |(track_index, sample_index), chunk_num| {
-                            let (sample_indices, sample_sizes, chunk_size) = self
+                            let first_sample_index = *sample_index as usize;
+                            let chunk_size = self
                                 .stsz
-                                .sample_sizes()
-                                .enumerate()
+                                .sample_size_iter()
                                 .skip(*sample_index as usize)
                                 .take(entry.samples_per_chunk as usize)
-                                .fold(
-                                    (
-                                        Vec::with_capacity(entry.samples_per_chunk as usize),
-                                        Vec::with_capacity(entry.samples_per_chunk as usize),
-                                        0u64,
-                                    ),
-                                    |(mut sample_indices, mut sample_sizes, mut chunk_size),
-                                     (i, size)| {
-                                        sample_indices.push(i);
-                                        sample_sizes.push(*size);
-                                        chunk_size += u64::from(*size);
-                                        (sample_indices, sample_sizes, chunk_size)
-                                    },
-                                );
+                                .fold(0u64, |mut chunk_size, size| {
+                                    chunk_size += u64::from(*size);
+                                    chunk_size
+                                });
                             *sample_index += entry.samples_per_chunk;
 
                             Some(ChunkInfo {
                                 track_index: *track_index,
                                 chunk_number: chunk_num,
                                 chunk_size,
-                                sample_indices,
-                                sample_sizes,
+                                first_sample_index,
+                                n_samples: entry.samples_per_chunk as usize,
                             })
                         },
                     ))
@@ -309,17 +299,17 @@ mod tests {
         // Chunk 1: 2 samples (0, 1)
         assert_eq!(chunk_info[0].chunk_number, 1);
         assert_eq!(chunk_info[0].chunk_size, 300); // 100 + 200
-        assert_eq!(chunk_info[0].sample_indices, vec![0, 1]);
+        assert_eq!(chunk_info[0].first_sample_index, 0);
 
         // Chunk 2: 2 samples (2, 3)
         assert_eq!(chunk_info[1].chunk_number, 2);
         assert_eq!(chunk_info[1].chunk_size, 700); // 300 + 400
-        assert_eq!(chunk_info[1].sample_indices, vec![2, 3]);
+        assert_eq!(chunk_info[1].first_sample_index, 2);
 
         // Chunk 3: 1 sample (4)
         assert_eq!(chunk_info[2].chunk_number, 3);
         assert_eq!(chunk_info[2].chunk_size, 500); // 500
-        assert_eq!(chunk_info[2].sample_indices, vec![4]);
+        assert_eq!(chunk_info[2].first_sample_index, 4);
     }
 
     #[test]
@@ -408,31 +398,31 @@ mod tests {
         assert_eq!(chunk_info[0].track_index, 0);
         assert_eq!(chunk_info[0].chunk_number, 1);
         assert_eq!(chunk_info[0].chunk_size, 300); // 100 + 200
-        assert_eq!(chunk_info[0].sample_indices, vec![0, 1]);
+        assert_eq!(chunk_info[0].first_sample_index, 0);
 
         // Track 2, Chunk 1: sample 0 (track_index=1)
         assert_eq!(chunk_info[1].track_index, 1);
         assert_eq!(chunk_info[1].chunk_number, 1);
         assert_eq!(chunk_info[1].chunk_size, 300); // 300
-        assert_eq!(chunk_info[1].sample_indices, vec![0]);
+        assert_eq!(chunk_info[1].first_sample_index, 0);
 
         // Track 1, Chunk 2: samples 2,3 (track_index=0)
         assert_eq!(chunk_info[2].track_index, 0);
         assert_eq!(chunk_info[2].chunk_number, 2);
         assert_eq!(chunk_info[2].chunk_size, 400); // 150 + 250
-        assert_eq!(chunk_info[2].sample_indices, vec![2, 3]);
+        assert_eq!(chunk_info[2].first_sample_index, 2);
 
         // Track 2, Chunk 2: sample 1 (track_index=1)
         assert_eq!(chunk_info[3].track_index, 1);
         assert_eq!(chunk_info[3].chunk_number, 2);
         assert_eq!(chunk_info[3].chunk_size, 400); // 400
-        assert_eq!(chunk_info[3].sample_indices, vec![1]);
+        assert_eq!(chunk_info[3].first_sample_index, 1);
 
         // Track 2, Chunk 3: sample 2 (track_index=1)
         assert_eq!(chunk_info[4].track_index, 1);
         assert_eq!(chunk_info[4].chunk_number, 3);
         assert_eq!(chunk_info[4].chunk_size, 500); // 500
-        assert_eq!(chunk_info[4].sample_indices, vec![2]);
+        assert_eq!(chunk_info[4].first_sample_index, 2);
 
         // Test chunk offsets are calculated correctly with interleaving
         let (offsets, meta) = builder.build_chunk_offsets(0);
