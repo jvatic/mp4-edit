@@ -769,7 +769,7 @@ pub struct Chunk<'a> {
     pub trak: TrakAtomRef<'a>,
     /// Slice of sample sizes within this chunk
     pub sample_sizes: Vec<u32>,
-    /// Timescale duration of each sample indexed reletive to `sample_sizes`
+    /// Timescale duration of each sample indexed relative to `sample_sizes`
     pub sample_durations: Vec<u32>,
     /// Bytes in the chunk
     pub data: Vec<u8>,
