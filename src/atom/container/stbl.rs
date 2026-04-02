@@ -6,7 +6,7 @@ use crate::{
     atom::{
         stco_co64::{ChunkOffsetAtom, STCO},
         stsc::{SampleToChunkAtom, STSC},
-        stsd::{SampleDescriptionTableAtom, STSD},
+        stsd::{SampleDescriptionAtom, STSD},
         stsz::{SampleSizeAtom, STSZ},
         stts::{TimeToSampleAtom, STTS},
     },
@@ -24,10 +24,10 @@ impl<'a> StblAtomRef<'a> {
     }
 
     /// Finds the STSD atom
-    pub fn sample_description(&self) -> Option<&'a SampleDescriptionTableAtom> {
+    pub fn sample_description(&self) -> Option<&'a SampleDescriptionAtom> {
         let atom = self.0.find_child(STSD)?;
         match atom.data.as_ref()? {
-            AtomData::SampleDescriptionTable(data) => Some(data),
+            AtomData::SampleDescription(data) => Some(data),
             _ => None,
         }
     }
@@ -86,15 +86,15 @@ impl<'a> StblAtomRefMut<'a> {
     }
 
     /// Finds or inserts the STSD atom
-    pub fn sample_description(&mut self) -> &'_ mut SampleDescriptionTableAtom {
+    pub fn sample_description(&mut self) -> &'_ mut SampleDescriptionAtom {
         unwrap_atom_data!(
             self.0
                 .find_or_insert_child(STSD)
-                .insert_data(AtomData::SampleDescriptionTable(
-                    SampleDescriptionTableAtom::default(),
+                .insert_data(AtomData::SampleDescription(
+                    SampleDescriptionAtom::default(),
                 ))
                 .call(),
-            AtomData::SampleDescriptionTable,
+            AtomData::SampleDescription,
         )
     }
 

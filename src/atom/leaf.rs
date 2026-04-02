@@ -28,7 +28,7 @@ pub use self::{
     chpl::ChapterListAtom, dref::DataReferenceAtom, elst::EditListAtom, free::FreeAtom,
     ftyp::FileTypeAtom, gmin::BaseMediaInfoAtom, hdlr::HandlerReferenceAtom, ilst::ItemListAtom,
     mdhd::MediaHeaderAtom, mvhd::MovieHeaderAtom, smhd::SoundMediaHeaderAtom,
-    stco_co64::ChunkOffsetAtom, stsc::SampleToChunkAtom, stsd::SampleDescriptionTableAtom,
+    stco_co64::ChunkOffsetAtom, stsc::SampleToChunkAtom, stsd::SampleDescriptionAtom,
     stsz::SampleSizeAtom, stts::TimeToSampleAtom, text::TextMediaInfoAtom, tkhd::TrackHeaderAtom,
     tref::TrackReferenceAtom,
 };

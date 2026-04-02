@@ -15,7 +15,7 @@ use mp4_edit::{
     atom::{
         is_container_atom,
         stsd::{self, StsdExtension},
-        SampleDescriptionTableAtom,
+        SampleDescriptionAtom,
     },
     writer::SerializeAtom,
     Atom, AtomData, FourCC, Parser,
@@ -110,7 +110,7 @@ impl LeafAtomExtractor {
             .expect("error reading atom bytes");
 
         match atom.data {
-            Some(AtomData::SampleDescriptionTable(stsd)) => {
+            Some(AtomData::SampleDescription(stsd)) => {
                 self.extract_stsd_extensions(stsd)
                     .expect("error extracting stsd extensions");
             }
@@ -132,7 +132,7 @@ impl LeafAtomExtractor {
             .expect("error writing atom bytes");
     }
 
-    fn extract_stsd_extensions(&self, stsd: SampleDescriptionTableAtom) -> Result<()> {
+    fn extract_stsd_extensions(&self, stsd: SampleDescriptionAtom) -> Result<()> {
         let empty_list: Vec<StsdExtension> = Vec::with_capacity(0);
         let extensions = stsd
             .entries

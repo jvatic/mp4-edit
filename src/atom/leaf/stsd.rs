@@ -86,7 +86,7 @@ pub struct SampleEntry {
 }
 
 #[derive(Default, Debug, Clone)]
-pub struct SampleDescriptionTableAtom {
+pub struct SampleDescriptionAtom {
     /// Version of the stsd atom format (0)
     pub version: u8,
     /// Flags for the stsd atom (usually all zeros)
@@ -95,9 +95,9 @@ pub struct SampleDescriptionTableAtom {
     pub entries: Vec<SampleEntry>,
 }
 
-impl From<Vec<SampleEntry>> for SampleDescriptionTableAtom {
+impl From<Vec<SampleEntry>> for SampleDescriptionAtom {
     fn from(entries: Vec<SampleEntry>) -> Self {
-        SampleDescriptionTableAtom {
+        SampleDescriptionAtom {
             version: 0,
             flags: [0u8; 3],
             entries,
@@ -105,7 +105,7 @@ impl From<Vec<SampleEntry>> for SampleDescriptionTableAtom {
     }
 }
 
-impl SampleDescriptionTableAtom {
+impl SampleDescriptionAtom {
     pub fn find_or_create_entry<P, D>(&mut self, pred: P, default_fn: D) -> &mut SampleEntry
     where
         P: Fn(&SampleEntry) -> bool,
@@ -119,7 +119,7 @@ impl SampleDescriptionTableAtom {
     }
 }
 
-impl ParseAtomData for SampleDescriptionTableAtom {
+impl ParseAtomData for SampleDescriptionAtom {
     fn parse_atom_data(atom_type: FourCC, input: &[u8]) -> Result<Self, ParseError> {
         crate::atom::util::parser::assert_atom_type!(atom_type, STSD);
         use crate::atom::util::parser::stream;
@@ -128,7 +128,7 @@ impl ParseAtomData for SampleDescriptionTableAtom {
     }
 }
 
-impl SerializeAtom for SampleDescriptionTableAtom {
+impl SerializeAtom for SampleDescriptionAtom {
     fn atom_type(&self) -> FourCC {
         STSD
     }
@@ -141,11 +141,11 @@ impl SerializeAtom for SampleDescriptionTableAtom {
 mod serializer {
     use super::{
         audio::serializer::serialize_audio_sample_entry,
-        text::serializer::serialize_text_sample_entry, SampleDescriptionTableAtom, SampleEntryData,
+        text::serializer::serialize_text_sample_entry, SampleDescriptionAtom, SampleEntryData,
     };
     use crate::atom::util::serializer::{be_u32, prepend_size_inclusive, SizeU32};
 
-    pub fn serialize_stsd_atom(stsd: SampleDescriptionTableAtom) -> Vec<u8> {
+    pub fn serialize_stsd_atom(stsd: SampleDescriptionAtom) -> Vec<u8> {
         let mut data = Vec::new();
 
         data.push(stsd.version);
@@ -192,15 +192,15 @@ mod parser {
 
     use super::{
         audio::parser::parse_audio_sample_entry, text::parser::parse_text_sample_entry,
-        SampleDescriptionTableAtom, SampleEntry, SampleEntryData, SampleEntryType,
+        SampleDescriptionAtom, SampleEntry, SampleEntryData, SampleEntryType,
     };
     use crate::atom::util::parser::{
         byte_array, combinators::inclusive_length_and_then, flags3, fourcc, rest_vec, version,
         Stream,
     };
 
-    pub fn parse_stsd_data(input: &mut Stream<'_>) -> ModalResult<SampleDescriptionTableAtom> {
-        seq!(SampleDescriptionTableAtom {
+    pub fn parse_stsd_data(input: &mut Stream<'_>) -> ModalResult<SampleDescriptionAtom> {
+        seq!(SampleDescriptionAtom {
             version: version.verify(|v| *v == 0),
             flags: flags3,
             entries: length_repeat(be_u32, parse_sample_entry)
@@ -246,6 +246,6 @@ mod tests {
     /// Test round-trip for all available stsd test data files
     #[test]
     fn test_stsd_roundtrip() {
-        test_atom_roundtrip::<SampleDescriptionTableAtom>(STSD);
+        test_atom_roundtrip::<SampleDescriptionAtom>(STSD);
     }
 }

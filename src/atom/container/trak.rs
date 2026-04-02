@@ -337,7 +337,7 @@ pub(crate) mod trim_tests {
         smhd::{SoundMediaHeaderAtom, SMHD},
         stco_co64::{ChunkOffsetAtom, STCO},
         stsc::{SampleToChunkAtom, SampleToChunkEntry, STSC},
-        stsd::{SampleDescriptionTableAtom, STSD},
+        stsd::{SampleDescriptionAtom, STSD},
         stsz::{SampleSizeAtom, STSZ},
         stts::{TimeToSampleAtom, TimeToSampleEntry, STTS},
         text::TEXT,
@@ -558,7 +558,7 @@ pub(crate) mod trim_tests {
                 // Sample Description (stsd)
                 Atom::builder()
                     .header(AtomHeader::new(*STSD))
-                    .data(SampleDescriptionTableAtom::default())
+                    .data(SampleDescriptionAtom::default())
                     .build(),
                 // Time to Sample (stts)
                 Atom::builder()

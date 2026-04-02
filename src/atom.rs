@@ -227,7 +227,7 @@ define_atom_data!(
         text::TEXT => TextMediaInfo(TextMediaInfoAtom),
         ilst::ILST => ItemList(ItemListAtom),
         tkhd::TKHD => TrackHeader(TrackHeaderAtom),
-        stsd::STSD => SampleDescriptionTable(SampleDescriptionTableAtom),
+        stsd::STSD => SampleDescription(SampleDescriptionAtom),
         tref::TREF => TrackReference(TrackReferenceAtom),
         dref::DREF => DataReference(DataReferenceAtom),
         stsz::STSZ => SampleSize(SampleSizeAtom),

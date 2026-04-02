@@ -11,9 +11,7 @@ use crate::atom::{
     mdhd::{LanguageCode, MediaHeaderAtom},
     stco_co64::ChunkOffsetAtom,
     stsc::{SampleToChunkAtom, SampleToChunkEntry},
-    stsd::{
-        SampleDescriptionTableAtom, SampleEntry, SampleEntryData, SampleEntryType, TextSampleEntry,
-    },
+    stsd::{SampleDescriptionAtom, SampleEntry, SampleEntryData, SampleEntryType, TextSampleEntry},
     stsz::SampleSizeAtom,
     stts::{TimeToSampleAtom, TimeToSampleEntry},
     text::TEXT,
@@ -362,7 +360,7 @@ impl ChapterTrack {
             data: SampleEntryData::Text(TextSampleEntry::builder().font_name("Sarif").build()),
         };
 
-        let stsd = SampleDescriptionTableAtom::from(vec![text_sample_entry]);
+        let stsd = SampleDescriptionAtom::from(vec![text_sample_entry]);
 
         Atom::builder()
             .header(AtomHeader::new(stsd.atom_type()))
