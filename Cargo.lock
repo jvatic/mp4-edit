@@ -568,7 +568,6 @@ dependencies = [
  "hex",
  "humantime",
  "indicatif",
- "progress_bar",
  "rangemap",
  "seahash",
  "sha2",
@@ -659,15 +658,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "02b3e5e68a3a1a02aad3ec490a98007cbc13c37cbe84a3cd7b8e406d76e7f778"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "progress_bar"
-version = "1.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "955f6029e49ac8b5a692b0426ba78d8862edd4b2f98526920d1c7dc9d1edeef1"
-dependencies = [
- "log",
 ]
 
 [[package]]
