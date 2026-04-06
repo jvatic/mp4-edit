@@ -17,7 +17,7 @@ This crate provides tools for lossless editing of MP4 files, with a focus on aud
 
 ## Why yet another mp4 parser?
 
-The short answer is I needed one that could handle non-standard mp4s plus some other features I didn't see in existing crates, and this evolved out of my learning the file format. And why not? It's been fun! (See below for a list of alternatives.)
+The short answer is I needed one that could handle non-standard mp4s plus some other features I didn't see in existing crates, and this evolved out of my learning the file format. And why not? [It's been fun][backstory_blog_post]! (See below for a list of alternatives.)
 
 ## Usage
 
@@ -59,7 +59,7 @@ Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT](
 Please open an issue if you have a feature request or a bug report. I'm happy to accept changes in line with the goals
 of this crate (editing mp4 bytes).
 
-When opening a pull request, please make a best effort to use [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
+When opening a pull request, please make a best effort to use [Conventional Commits][conventional_commits].
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this crate by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
 
@@ -67,7 +67,7 @@ Unless you explicitly state otherwise, any contribution intentionally submitted 
 
 [^lossless]: The output will use the most efficient size headers possible, doesn't maintain non-standard reserved field values. Other than that, all data should be the same unless explicitly changed.
 
-[^trimming]: Limitations apply; Trimming is a work in progress and is currently only supported for a single audio track. The edit list is not taken into consideration. It _should_ be possible to expand this support, with the help of edit lists, to include all track types on multi-track files (see https://github.com/jvatic/mp4-edit/issues/1).
+[^trimming]: Limitations apply; Trimming is a work in progress and is currently only supported for a single audio track. The edit list is not taken into consideration. It _should_ be possible to expand this support, with the help of edit lists, to include all track types on multi-track files (see [#1][issue_1]).
 
 [^interleaving]: While re-ordering chunks is not yet supported, new tracks may be added that interleave with existing ones, and any original interleaving is maintained. You are responsible for ensuring data is added in the correct locations via the `ChunkParser`. Higher level abstractions may be added later.
 
@@ -86,3 +86,9 @@ Unless you explicitly state otherwise, any contribution intentionally submitted 
 [crates.io]: https://crates.io/crates/mp4-edit
 [docs.rs]: https://docs.rs/mp4-edit
 [deps.rs]: https://deps.rs/repo/github/jvatic/mp4-edit
+
+[//]: # (links)
+
+[backstory_blog_post]: https://www.jessestuart.ca/posts/2026-04-06-yet-another-mp4-parser/
+[conventional_commits]: https://www.conventionalcommits.org/en/v1.0.0/
+[issue_1]: https://github.com/jvatic/mp4-edit/issues/1
